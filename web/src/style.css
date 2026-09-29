@@ -328,6 +328,15 @@ body {
   line-height: 1;
 }
 
+.action-btn-icon {
+  width: 68%;
+  height: 68%;
+  object-fit: contain;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
 /* ---------- Key hints (desktop only) ---------- */
 
 .key-hints {

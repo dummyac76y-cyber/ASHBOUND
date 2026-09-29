@@ -1,3 +1,4 @@
+import { assetUrl } from './assetUrl'
 import { GameWorld } from './game/GameWorld'
 import { SpriteAnimationSystem } from './game/SpriteAnimationSystem'
 import { AnimationInspectorDialog } from './ui/AnimationInspectorDialog'
@@ -5,17 +6,8 @@ import { GameHud } from './ui/GameHud'
 import { KEY_HINTS, VirtualControls } from './ui/VirtualControls'
 import './style.css'
 
-/**
- * Asset base, derived from import.meta.env.BASE_URL so the build works from a
- * sub-path (GitHub Pages project sites, a CDN folder, a Capacitor webview).
- *
- * BASE_URL always ends in '/' — either './' for a relative build or '/' for one
- * served at the domain root. Append to it directly; stripping the slash would
- * turn './sprites' into a root-absolute '/sprites' and break sub-path hosting.
- */
-const ASSET_BASE = import.meta.env.BASE_URL
-const SPRITE_BASE = `${ASSET_BASE}sprites`
-const BACKGROUND_URL = `${ASSET_BASE}bg/arena_bg.png`
+const SPRITE_BASE = assetUrl('sprites')
+const BACKGROUND_URL = assetUrl('bg/arena_bg.png')
 
 async function loadImage(url: string): Promise<HTMLImageElement | null> {
   return new Promise((resolve) => {

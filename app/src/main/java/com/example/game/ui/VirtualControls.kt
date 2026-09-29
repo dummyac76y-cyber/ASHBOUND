@@ -1,7 +1,9 @@
 package com.example.game.ui
 
+import android.graphics.BitmapFactory
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -33,7 +35,11 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -206,6 +212,22 @@ fun VirtualJoystick(
     }
 }
 
+/**
+ * Loads a bitmap out of assets/, returning null when the asset is missing so a
+ * button can fall back to its text labels instead of rendering an empty circle.
+ */
+@Composable
+private fun rememberAssetIcon(assetPath: String): ImageBitmap? {
+    val context = LocalContext.current
+    return remember(assetPath) {
+        runCatching {
+            context.assets.open(assetPath).use { stream ->
+                BitmapFactory.decodeStream(stream)?.asImageBitmap()
+            }
+        }.getOrNull()
+    }
+}
+
 @Composable
 fun ActionButtonsCluster(
     onAttack: () -> Unit,
@@ -214,6 +236,8 @@ fun ActionButtonsCluster(
     onDash: () -> Unit,
     onJump: () -> Unit
 ) {
+    val attackIcon = rememberAssetIcon("ui/btn_attack.png")
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -259,8 +283,9 @@ fun ActionButtonsCluster(
                 label = "ATK",
                 sublabel = "SLASH",
                 baseColor = Color(0xFFD6364A),
-                size = 62,
                 testTag = "button_attack",
+                size = 62,
+                icon = attackIcon,
                 onClick = onAttack
             )
         }
@@ -274,6 +299,7 @@ fun ActionButton(
     baseColor: Color,
     testTag: String,
     size: Int = 54,
+    icon: ImageBitmap? = null,
     onClick: () -> Unit
 ) {
     Surface(
@@ -288,25 +314,34 @@ fun ActionButton(
         color = baseColor.copy(alpha = 0.85f),
         shadowElevation = 6.dp
     ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                text = label,
-                color = Color.White,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Black,
-                textAlign = TextAlign.Center
+        if (icon != null) {
+            Image(
+                bitmap = icon,
+                contentDescription = label,
+                modifier = Modifier.fillMaxSize(0.68f),
+                contentScale = ContentScale.Fit
             )
-            Text(
-                text = sublabel,
-                color = Color(0xCCFFFFFF),
-                fontSize = 8.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
+        } else {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = label,
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Black,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = sublabel,
+                    color = Color(0xCCFFFFFF),
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+            }
         }
     }
 }

@@ -136,6 +136,21 @@ Only `idle.png` and `walk.png` exist so far. `ATTACK`, `HEAVY_ATTACK`, `BLOCK`,
 render the idle art. Add `attack.png` etc. and point the matching entry in
 `DefaultAnimationConfigs` at them.
 
+### UI icons
+
+`app/src/main/assets/ui/` holds HUD artwork rather than sprite sheets, and the
+sync script copies the whole tree, so nested folders work as-is.
+
+| File | Used by |
+| --- | --- |
+| `ui/btn_attack.png` | Icon on the `ATK` / `SLASH` button, replacing its text labels |
+
+Both builds render the icon at 68% of the button's diameter, centred, with the
+button's own circular red background, shadow and press animation unchanged. If
+the asset is missing, the Compose loader returns `null` and the button falls
+back to its `ATK` / `SLASH` text rather than drawing an empty circle; the web
+build behaves the same way because the `<img>` simply fails to load.
+
 The arena backdrop lives in `res/drawable/` rather than `assets/` on Android, so the
 sync script copies it explicitly to `web/public/bg/arena_bg.png`. `GameWorld` looks up
 `img_arena_bg_hd` first and falls back to the legacy `img_arena_bg.jpg`.

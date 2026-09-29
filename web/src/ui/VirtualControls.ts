@@ -1,3 +1,5 @@
+import { assetUrl } from '../assetUrl'
+
 export interface ControlCallbacks {
   onMove: (horizontal: number) => void
   onAttack: () => void
@@ -82,7 +84,13 @@ class VirtualJoystick {
   }
 }
 
-/** Circular action button. `hold` buttons report press and release separately. */
+/** Icon shown on the attack button instead of the text labels. */
+const ATTACK_ICON_URL = assetUrl('ui/btn_attack.png')
+
+/**
+ * Circular action button. `hold` buttons report press and release separately.
+ * When `iconUrl` is supplied the artwork replaces the text labels.
+ */
 class ActionButton {
   readonly root: HTMLButtonElement
 
@@ -94,15 +102,28 @@ class ActionButton {
     size: number,
     onPress: () => void,
     onRelease?: () => void,
+    iconUrl?: string,
   ) {
     this.root = el('button', 'action-btn')
     this.root.type = 'button'
     this.root.dataset.testid = testTag
+    this.root.setAttribute('aria-label', label)
     this.root.style.setProperty('--btn-color', color)
     this.root.style.width = `${size}px`
     this.root.style.height = `${size}px`
-    this.root.append(el('span', 'action-btn-label', label))
-    this.root.append(el('span', 'action-btn-sub', sublabel))
+
+    if (iconUrl) {
+      const img = document.createElement('img')
+      img.className = 'action-btn-icon'
+      img.alt = ''
+      img.decoding = 'async'
+      img.draggable = false
+      img.src = iconUrl
+      this.root.append(img)
+    } else {
+      this.root.append(el('span', 'action-btn-label', label))
+      this.root.append(el('span', 'action-btn-sub', sublabel))
+    }
 
     this.root.addEventListener('pointerdown', (e) => {
       e.preventDefault()
@@ -161,7 +182,7 @@ export class VirtualControls {
       new ActionButton('BLOCK', 'GUARD', '#9e7a26', 'button_block', 54, callbacks.onBlockChange.bind(null, true), () =>
         callbacks.onBlockChange(false),
       ).root,
-      new ActionButton('ATK', 'SLASH', '#d6364a', 'button_attack', 62, callbacks.onAttack).root,
+      new ActionButton('ATK', 'SLASH', '#d6364a', 'button_attack', 62, callbacks.onAttack, undefined, ATTACK_ICON_URL).root,
     )
 
     cluster.append(topRow, midRow)
