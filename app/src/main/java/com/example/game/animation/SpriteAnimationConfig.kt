@@ -63,7 +63,9 @@ object DefaultAnimationConfigs {
             fps = 12,
             loop = true,
             priority = 1,
-            canBeCancelledByMovement = true
+            canBeCancelledByMovement = true,
+            // walk.png draws its character slightly smaller than idle.png does.
+            displayScale = 1.091f
         ),
         PlayerAction.ATTACK to AnimationConfig(
             action = PlayerAction.ATTACK,
@@ -97,7 +99,7 @@ object DefaultAnimationConfigs {
             // frame 14 and is still out through 19.
             columns = 5,
             cellSize = 256,
-            displayScale = 1.364f,
+            displayScale = 1.569f,
             hitFrames = listOf(14, 18)
         ),
         PlayerAction.BLOCK to AnimationConfig(
@@ -125,7 +127,9 @@ object DefaultAnimationConfigs {
             fps = 12,
             loop = false,
             priority = 1,
-            canBeCancelledByMovement = true
+            canBeCancelledByMovement = true,
+            // jump.png draws its character larger than idle.png does.
+            displayScale = 0.918f
         ),
         PlayerAction.HURT to AnimationConfig(
             action = PlayerAction.HURT,

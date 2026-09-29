@@ -125,7 +125,7 @@ export class SpriteAnimationSystem {
    * Rule: does NOT restart the animation if the action is already active,
    * unless explicitly forced by restartIfSame.
    */
-  playAction(newAction: PlayerAction, restartIfSame = false): boolean {
+  playAction(newAction: PlayerAction, restartIfSame = false, force = false): boolean {
     if (this.currentAction === newAction && !restartIfSame) {
       return false // Already playing, do not restart every frame!
     }
@@ -139,7 +139,7 @@ export class SpriteAnimationSystem {
     const currentConfig = this.activeConfigs.get(this.currentAction)
     const newConfig = this.activeConfigs.get(newAction)
 
-    if (!this.isFinished && !isLocomotion && currentConfig && newConfig) {
+    if (!force && !this.isFinished && !isLocomotion && currentConfig && newConfig) {
       if (newConfig.priority < currentConfig.priority) {
         return false
       }

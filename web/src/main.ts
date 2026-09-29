@@ -179,9 +179,16 @@ async function boot(): Promise<void> {
           paused = false
           lastFrameTime = 0
         },
-        /** Sets an action and pins a frame, for pixel-stable captures. */
-        setFrame(action: PlayerAction, frameIndex: number): void {
-          animations.playAction(action, true)
+        /**
+         * Sets an action and pins a frame, for pixel-stable captures.
+         *
+         * `force` bypasses the priority rule, which the rendered checks need: a
+         * running attack refuses to yield to a lower-priority action, so without
+         * it a sheet like idle.png could not be re-measured after an attack had
+         * been captured.
+         */
+        setFrame(action: PlayerAction, frameIndex: number, force = false): void {
+          animations.playAction(action, true, force)
           animations.currentFrameIndex = frameIndex
         },
         /** Pins the camera so the floor line can be checked at several offsets. */

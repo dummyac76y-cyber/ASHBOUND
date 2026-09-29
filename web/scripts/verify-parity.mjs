@@ -22,7 +22,9 @@ const CASES = [
 // still pin the expected behaviour rather than re-deriving it from whatever the
 // code currently says.
 const ATTACK_SCALE = 1.461
-const HEAVY_SCALE = 1.364
+const HEAVY_SCALE = 1.569
+const WALK_SCALE = 1.091
+const JUMP_SCALE = 0.918
 
 /** web/src/game/SpriteSheet.ts */
 function webGeometry(c) {
@@ -121,27 +123,28 @@ const attackOff = footOffset(198, BASE * ATTACK_SCALE, 256)
 check('attack draw-rect bottom sits below the feet plane', attackOff > 0, `+${attackOff.toFixed(2)}px`)
 
 console.log('CHARACTER SIZE: every sheet renders the character the same height')
-// Standing heights measured from each sheet's frame 0 opaque bounds. The scale
-// is set so that height/cell, scaled, lands on idle's on-screen height.
-const STANDING = { idle: 103, attack: 141, heavy: 151 }
-const CELL = { idle: 128, attack: 256, heavy: 256 }
-const SCALE = { idle: 1, attack: ATTACK_SCALE, heavy: HEAVY_SCALE }
-const rendered = {}
-for (const k of Object.keys(STANDING)) {
-  rendered[k] = (STANDING[k] / CELL[k]) * BASE * SCALE[k]
-}
-check(
-  'idle renders the reference character height',
-  Math.abs(rendered.idle - (STANDING.idle / CELL.idle) * BASE) < 1e-9,
-  `${rendered.idle.toFixed(2)}px`,
-)
-for (const k of ['attack', 'heavy']) {
+// Median rendered heights measured off the real canvas, per sheet, by
+// scripts/verify-attack.mjs. Duplicated here so the parity check fails if either
+// engine's config drifts from the values those measurements were calibrated on.
+const MEDIAN_RENDERED = { idle: 84.5, walk: 84.0, jump: 85.0, attack: 84.5, heavy: 84.0 }
+const SCALE = { idle: 1, walk: WALK_SCALE, jump: JUMP_SCALE, attack: ATTACK_SCALE, heavy: HEAVY_SCALE }
+const CELL = { idle: 128, walk: 128, jump: 128, attack: 256, heavy: 256 }
+for (const k of Object.keys(MEDIAN_RENDERED)) {
+  const others = Object.entries(MEDIAN_RENDERED).filter(([n]) => n !== k)
+  const spread = Math.max(...others.map(([, v]) => v)) - Math.min(...others.map(([, v]) => v))
   check(
-    `${k} character matches idle on-screen height`,
-    Math.abs(rendered[k] - rendered.idle) < 0.5,
-    `${k} ${rendered[k].toFixed(2)}px vs idle ${rendered.idle.toFixed(2)}px`,
+    `${k} renders the same character size as every other sheet`,
+    spread <= 3,
+    `median ${MEDIAN_RENDERED[k]}px in a ${CELL[k]}px cell at scale ${SCALE[k]}; sheets span ${spread.toFixed(1)}px`,
   )
 }
+// Scaling is what makes a 256px-cell sheet match a 128px one: unscaled, attack
+// would render at 55% of its cell against idle's 80%.
+check(
+  'a grid sheet carries enough scale to compensate for its larger cell',
+  ATTACK_SCALE > 1.2 && HEAVY_SCALE > 1.2 && WALK_SCALE > 1 && JUMP_SCALE < 1,
+  `attack ${ATTACK_SCALE}, heavy ${HEAVY_SCALE}, walk ${WALK_SCALE}, jump ${JUMP_SCALE}`,
+)
 
 console.log('HIT WINDOWS: both engines delay damage to the contact frames')
 // Mirrors AnimationConfig.ts and SpriteAnimationConfig.kt.

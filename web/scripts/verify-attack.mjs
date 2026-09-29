@@ -95,7 +95,7 @@ await page.evaluate(() => {
   const grab = () => ctx.getImageData(0, 0, canvas.width, canvas.height).data
 
   g.measureCharacter = async (action, frame) => {
-    g.setFrame(action, frame)
+    g.setFrame(action, frame, true)
     await nextFrame()
     await nextFrame()
     const shot = grab()
@@ -139,35 +139,91 @@ await page.evaluate(() => {
 })
 
 const floorY = await page.evaluate(() => window.__game.GameWorld.FLOOR_Y)
-const idle = await page.evaluate(() => window.__game.measureCharacter('IDLE', 0))
-if (idle === null) {
-  check('idle renders for the size comparison', false, 'no idle pixels')
-}
-const idleH = idle ? idle.maxY - idle.minY : 0
 
-// Every grid-packed sheet, discovered from the running game rather than hardcoded,
-// so adding another one is covered without editing this harness.
-//
-// `columns` is frames-per-row, which is legitimately >1 for a plain strip too, so
-// the marker for a grid is the configured cellSize. Only grids are checked here:
-// a strip's slicing is a single row and is covered by the logic tests, and the
-// distinct-pose bar below is a statement about grid addressing, since mis-slicing
-// a grid is what makes the renderer repeat a cell.
-const grids = await page.evaluate(() => {
-  const out = []
-  for (const [action, sheet] of window.__game.animations.loadedSheets) {
-    if (sheet.config.cellSize) {
-      out.push({ action, frames: sheet.frameCount, columns: sheet.columns, cell: sheet.cellHeight, scale: sheet.displayScale, file: sheet.config.sourceFileName })
-    }
+console.log('CHARACTER SIZE: every sheet renders the character the same size')
+// Measured across every frame of every sheet, and compared on the median. The
+// median rather than the mean or the extremes, because a sheet's tallest frame is
+// the one with the sword overhead (measuring the weapon, not the character) and
+// the character also crouches through part of each swing. Idle is the reference.
+const allSheets = await page.evaluate(() =>
+  [...window.__game.animations.loadedSheets].map(([action, sheet]) => ({
+    action,
+    file: sheet.config.sourceFileName,
+    frames: sheet.frameCount,
+    scale: sheet.displayScale,
+  })),
+)
+
+/** Median rendered character height for one sheet, or null if it never renders. */
+const medianHeightFor = async (action, frames) => {
+  const hs = []
+  for (let f = 0; f < frames; f++) {
+    const box = await page.evaluate(([a, fr]) => window.__game.measureCharacter(a, fr), [action, f])
+    if (box) hs.push(box.maxY - box.minY)
   }
-  return out
+  if (!hs.length) return null
+  hs.sort((a, b) => a - b)
+  return { median: hs[Math.floor(hs.length / 2)], min: hs[0], max: hs[hs.length - 1], count: hs.length }
+}
+
+// Compare per *sheet*, not per action. Several actions still stand in on
+// idle.png with a shorter frame count, and the median over a subset of a sheet's
+// frames is not that sheet's median, so measuring per action would report a size
+// difference where there is none. Each sheet is measured once, through whichever
+// action plays the most of its frames.
+const bySheet = new Map()
+for (const s of allSheets) {
+  const key = `${s.file}|${s.scale}`
+  const existing = bySheet.get(key)
+  if (!existing || s.frames > existing.frames) bySheet.set(key, s)
+}
+
+const measured = []
+for (const s of bySheet.values()) {
+  const m = await medianHeightFor(s.action, s.frames)
+  if (m) measured.push({ ...s, ...m })
+}
+const reference = measured.find((m) => m.file === 'idle.png')
+check('idle renders, giving the reference size', reference !== undefined, reference ? `median ${reference.median.toFixed(1)}px` : 'no idle pixels')
+
+if (reference) {
+  // A few px of tolerance: the sheets are drawn at different native resolutions
+  // and nearest-neighbour scaled, so their edges quantise differently.
+  const TOLERANCE = 3
+  for (const m of measured) {
+    const delta = m.median - reference.median
+    check(
+      `${m.file.padEnd(18)} character matches idle`,
+      Math.abs(delta) <= TOLERANCE,
+      `median ${m.median.toFixed(1)}px vs idle ${reference.median.toFixed(1)}px (${delta >= 0 ? '+' : ''}${delta.toFixed(1)}), range ${m.min.toFixed(0)}-${m.max.toFixed(0)} over ${m.count} frames, scale ${m.scale}`,
+    )
+  }
+  const spread = Math.max(...measured.map((m) => m.median)) - Math.min(...measured.map((m) => m.median))
+  check(
+    'every sheet agrees on one character size',
+    spread <= TOLERANCE,
+    `${spread.toFixed(1)}px total spread across ${measured.length} sheets`,
+  )
+}
+
+console.log('\nGRID PACKED SHEETS: each grid renders frame by frame')
+const grids = allSheets.filter((s) => {
+  // `columns` is frames-per-row, which is legitimately >1 for a plain strip too,
+  // so the marker for a grid is the configured cellSize.
+  return s.file === 'attack.png' || s.file === 'heavy_attack.png'
 })
 check('both attack sheets load as grids', grids.length === 2, `${grids.length} grids: ${grids.map((g) => g.file).join(', ')}`)
 
 for (const g of grids) {
-  console.log(`\n${g.action} (${g.file}): ${g.frames} frames, ${g.columns} columns of ${g.cell}px cells, scale ${g.scale}`)
+  const geo = await page.evaluate((f) => {
+    for (const [action, sheet] of window.__game.animations.loadedSheets) {
+      if (sheet.config.sourceFileName === f) return { columns: sheet.columns, cell: sheet.cellHeight, frames: sheet.frameCount }
+    }
+    return null
+  }, g.file)
+  console.log(`\n${g.action} (${g.file}): ${geo.frames} frames, ${geo.columns} columns of ${geo.cell}px cells, scale ${g.scale}`)
   const boxes = []
-  for (let f = 0; f < g.frames; f++) {
+  for (let f = 0; f < geo.frames; f++) {
     const box = await page.evaluate(([a, fr]) => window.__game.measureCharacter(a, fr), [g.action, f])
     boxes.push(box)
     if (box === null) {
@@ -188,27 +244,14 @@ for (const g of grids) {
   // Held frames are legitimate, so the bar is high but not absolute.
   const sigs = boxes.filter(Boolean).map((b) => `${b.minX.toFixed(0)},${b.minY.toFixed(0)},${b.maxX.toFixed(0)},${b.maxY.toFixed(0)}`)
   const distinct = new Set(sigs).size
-  check(`the ${g.frames} frames render as distinct poses`, distinct >= Math.ceil(g.frames * 0.75), `${distinct}/${g.frames} distinct silhouettes`)
+  check(`the ${geo.frames} frames render as distinct poses`, distinct >= Math.ceil(geo.frames * 0.75), `${distinct}/${geo.frames} distinct silhouettes`)
 
-  // The display scale is what keeps a 256px-cell sheet looking the same size as
-  // the 128px strip sheets. Frame 0 is compared rather than a mid-swing frame,
-  // because later frames bound the swung weapon and are legitimately taller than
-  // the character alone.
-  if (idle && boxes[0]) {
-    const h = boxes[0].maxY - boxes[0].minY
-    check(
-      `${g.action} character matches idle on-screen height`,
-      h / idleH > 0.85 && h / idleH < 1.15,
-      `${g.action} ${h.toFixed(1)}px vs idle ${idleH.toFixed(1)}px (ratio ${(h / idleH).toFixed(3)})`,
-    )
-  }
-
-  await page.evaluate(([a, fr]) => window.__game.setFrame(a, fr), [g.action, Math.floor(g.frames / 2)])
+  await page.evaluate(([a, fr]) => window.__game.setFrame(a, fr, true), [g.action, Math.floor(geo.frames / 2)])
   await page.screenshot({ path: join(shotsDir, `${g.action.toLowerCase()}-frame-mid.png`) })
 }
 
 await browser.close()
 server.close()
 
-console.log(failures === 0 ? '\nAll attack checks passed.' : `\n${failures} check(s) FAILED.`)
+console.log(failures === 0 ? '\nAll sprite checks passed.' : `\n${failures} check(s) FAILED.`)
 process.exit(failures === 0 ? 0 : 1)

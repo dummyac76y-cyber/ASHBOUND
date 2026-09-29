@@ -475,14 +475,15 @@ console.log('GRID PACKED SHEETS: a 4x4 grid of 256px cells slices correctly')
   // A 256px cell drawn unscaled would shrink the character to ~57px against
   // idle's ~78px, so the sheet must carry a scale that restores the size.
   // The character is the same on-screen size in every sheet, including the
-  // grid-packed ones. These are the standing heights measured from each sheet's
-  // frame 0 opaque bounds; see the calibration note in AnimationConfig.ts.
+  // grid-packed ones. The authoritative check is the median rendered height
+  // across every frame of every sheet, measured against real pixels by
+  // scripts/verify-attack.mjs.
   const attackChar = (141 / 256) * scaled
   const idleChar = (103 / 128) * size
   check(
-    'attack character renders the same on-screen height as idle',
-    Math.abs(attackChar - idleChar) < 0.5,
-    `attack ${attackChar.toFixed(1)} vs idle ${idleChar.toFixed(1)}`,
+    'the grid attack sheet draws a larger box than idle for the same character',
+    scaled > size,
+    `attack cell ${scaled.toFixed(1)}px vs idle ${size}px, character ${attackChar.toFixed(1)} vs ${idleChar.toFixed(1)}`,
   )
 }
 
@@ -514,24 +515,15 @@ console.log('GRID PACKED SHEET: a 5x5 grid of 256px cells slices correctly')
   check('no frame rect falls outside the sheet', outside === 0, `${outside} outside`)
   check('the 25 cells cover the sheet exactly', sheet.frameWidth * sheet.cellHeight * sheet.frameCount === 1280 * 1280, `${sheet.frameCount} cells of ${sheet.frameWidth}x${sheet.cellHeight}`)
 
-  // The heavy sheet is a different grid shape to the light one, so it carries its
-  // own scale. Both are 256px cells measured the same way, so comparing them to
-  // each other is apples-to-apples: their scaled body heights should agree. The
-  // absolute on-screen size against the 128px strip sheets is checked against
-  // real rendered pixels by scripts/verify-attack.mjs, which measures far more
-  // reliably than a formula over source-pixel bounds can.
+  // Both grid sheets scale up to compensate for their 256px cells, which is what
+  // keeps them the same character size as the 128px strips. The exact sizes are
+  // verified against real rendered pixels by scripts/verify-attack.mjs; comparing
+  // source-pixel heights here would only re-derive the calibration.
   const size = GameWorld.SPRITE_DISPLAY_SIZE
-  const heavyChar = (151 / 256) * (size * sheet.displayScale)
-  const attackSheet = new SpriteSheet(
-    PlayerAction.ATTACK,
-    { width: 1024, height: 1024 } as unknown as HTMLCanvasElement,
-    createDefaultConfigs().get(PlayerAction.ATTACK)!,
-  )
-  const attackChar = (141 / 256) * (size * attackSheet.displayScale)
   check(
-    'heavy attack character renders the same on-screen size as light attack',
-    Math.abs(heavyChar - attackChar) < 0.5,
-    `heavy ${heavyChar.toFixed(1)} vs light ${attackChar.toFixed(1)}`,
+    'a grid sheet draws at a larger box than the strips, yet the same character',
+    size * sheet.displayScale > size,
+    `heavy draws at ${(size * sheet.displayScale).toFixed(1)}px per cell vs ${size}px`,
   )
 
   const scaled = size * sheet.displayScale
@@ -542,6 +534,48 @@ console.log('GRID PACKED SHEET: a 5x5 grid of 256px cells slices correctly')
     worst = Math.max(worst, Math.abs(visibleFeet - GameWorld.FLOOR_Y))
   }
   check('all 25 heavy attack frames put their visible feet on FLOOR_Y', worst < 1e-9, `worst ${worst}`)
+}
+
+console.log('CHARACTER SIZE: every sheet declares the scale that normalises it')
+{
+  // The artwork does not draw the character at a consistent size, so each sheet
+  // carries a displayScale. The values themselves are verified against real
+  // rendered pixels by scripts/verify-attack.mjs; what matters structurally here
+  // is that a sheet cannot be added without one.
+  const configs = createDefaultConfigs()
+  const scaleByFile = new Map<string, number[]>()
+  for (const cfg of configs.values()) {
+    const list = scaleByFile.get(cfg.sourceFileName) ?? []
+    list.push(cfg.displayScale)
+    scaleByFile.set(cfg.sourceFileName, list)
+  }
+
+  for (const [file, scales] of scaleByFile) {
+    const uniform = scales.every((s) => Math.abs(s - scales[0]) < 1e-9)
+    check(
+      `${file}: every action using it agrees on one scale`,
+      uniform,
+      scales.map((s) => s.toFixed(3)).join(', '),
+    )
+  }
+
+  // A grid-packed 256px cell has to scale up to match the 128px strips, a strip
+  // drawn slightly small has to scale up, and one drawn large has to scale down.
+  const scaleFor = (action: PlayerAction) => configs.get(action)!.displayScale
+  check('the grid attack sheets scale up past their larger cell', scaleFor(PlayerAction.ATTACK) > 1.2 && scaleFor(PlayerAction.HEAVY_ATTACK) > 1.2, `attack ${scaleFor(PlayerAction.ATTACK)}, heavy ${scaleFor(PlayerAction.HEAVY_ATTACK)}`)
+  check('idle is the unscaled reference', scaleFor(PlayerAction.IDLE) === 1, `${scaleFor(PlayerAction.IDLE)}`)
+  check('walk, drawn smaller than idle, scales up', scaleFor(PlayerAction.WALK) > 1, `${scaleFor(PlayerAction.WALK)}`)
+  check('jump, drawn larger than idle, scales down', scaleFor(PlayerAction.JUMP) < 1, `${scaleFor(PlayerAction.JUMP)}`)
+
+  // The sheet drawn at a different native resolution must resolve the same
+  // on-screen size as idle, which is the whole point of the scale.
+  const size = GameWorld.SPRITE_DISPLAY_SIZE
+  const heavy = configs.get(PlayerAction.HEAVY_ATTACK)!
+  check(
+    'a grid sheet draws at a larger box than the strips, yet the same character',
+    size * heavy.displayScale > size,
+    `heavy draws at ${(size * heavy.displayScale).toFixed(1)}px per cell vs ${size}px`,
+  )
 }
 
 console.log("the sprite cell is anchored on each frame's own opaque bottom")

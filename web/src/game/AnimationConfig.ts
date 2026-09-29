@@ -56,17 +56,20 @@ export interface AnimationConfig {
  * Frame counts match the sprite sheets shipped in app/src/main/assets/sprites
  * (12 frames for idle, 12 for walk, 10 for jump).
  *
- * The two attack sheets are packed as grids of 256px cells rather than horizontal
- * strips of 128px ones, so they declare `columns`, `cellSize` and a `displayScale`.
+ * `displayScale` normalises every sheet so the character is the same on-screen size
+ * in all of them, which is what stops it visibly popping as the state changes. The
+ * artwork does not draw the character at a consistent size: the 128px strip sheets
+ * leave different amounts of headroom, and the 256px attack cells were drawn with
+ * room for a large weapon, so the character occupies a much smaller fraction of
+ * their cell. Each scale is the ratio that makes that sheet render the same as idle.
  *
- * The scale is calibrated on the character's standing height in the sheet's first
- * frame, measured from the artwork's opaque bounds: idle stands 103px tall in a
- * 128px cell (80.5% of the cell), while attack stands 141px in 256 (55.1%) and
- * heavy 151px in 256 (59.0%). The scale is the ratio that renders those at the
- * same on-screen height, so the character is the same size in every animation.
- * Calibrating on frame 0 rather than the tallest frame matters, because in these
- * sheets the tallest frame is the one with the sword raised overhead, which would
- * measure the weapon rather than the character.
+ * The values are calibrated on the *median* rendered character height across a
+ * sheet's frames, not on its first or tallest frame. The tallest frame of an attack
+ * is the one with the sword overhead, which measures the weapon rather than the
+ * character, and the character also crouches through part of each swing. The median
+ * is robust to both, and is asserted against the real rendered pixels by
+ * scripts/verify-attack.mjs, which measures far more reliably than a formula over
+ * source-pixel bounds can.
  *
  * DASH / HURT / DEATH / BLOCK sheets are not present yet, so those actions fall
  * back to the idle sheet and reuse its 12 frames until new art is added.
@@ -100,8 +103,15 @@ export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
   })
 
   return new Map<PlayerAction, AnimationConfig>([
+    // idle.png is the reference: its scale is 1 and every other sheet is scaled to
+    // match it. The actions still standing in on idle.png keep scale 1 for the
+    // same reason, so they render identically.
     [PlayerAction.IDLE, config(PlayerAction.IDLE, 'idle.png', 12, 10, true, 0)],
-    [PlayerAction.WALK, config(PlayerAction.WALK, 'walk.png', 12, 12, true, 1)],
+    // walk.png draws its character a little smaller than idle.png does, and
+    // jump.png draws its character larger, so both need a correction to stop the
+    // character visibly resizing as the state changes.
+    [PlayerAction.WALK, config(PlayerAction.WALK, 'walk.png', 12, 12, true, 1, { displayScale: 1.091 })],
+    [PlayerAction.JUMP, config(PlayerAction.JUMP, 'jump.png', 10, 12, false, 1, { displayScale: 0.918 })],
     // 4x4 grid of 256px cells. The blade is furthest out on frames 8 and 9, and
     // stays out through 11, so that is the window in which the hit is live.
     [PlayerAction.ATTACK, config(PlayerAction.ATTACK, 'attack.png', 16, 24, false, 3, {
@@ -110,11 +120,10 @@ export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
     // 5x5 grid of 256px cells. The long windup occupies frames 0..13; the blade
     // first reaches full extension on frame 14 and is still out through 19.
     [PlayerAction.HEAVY_ATTACK, config(PlayerAction.HEAVY_ATTACK, 'heavy_attack.png', 25, 20, false, 4, {
-      columns: 5, cellSize: 256, displayScale: 1.364, hitFrames: [14, 18],
+      columns: 5, cellSize: 256, displayScale: 1.569, hitFrames: [14, 18],
     })],
     [PlayerAction.BLOCK, config(PlayerAction.BLOCK, 'idle.png', 6, 12, true, 2)],
     [PlayerAction.DASH, config(PlayerAction.DASH, 'idle.png', 6, 15, false, 5)],
-    [PlayerAction.JUMP, config(PlayerAction.JUMP, 'jump.png', 10, 12, false, 1)],
     [PlayerAction.HURT, config(PlayerAction.HURT, 'idle.png', 4, 12, false, 6)],
     [PlayerAction.DEATH, config(PlayerAction.DEATH, 'idle.png', 8, 8, false, 10)],
   ])
