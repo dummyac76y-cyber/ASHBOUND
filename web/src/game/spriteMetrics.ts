@@ -31,6 +31,10 @@ export const FOOT_ROWS_BY_SHEET: Readonly<Record<string, readonly number[]>> = {
   'idle.png': [111, 111, 111, 111, 111, 111, 111, 111, 111, 111, 111, 111],
   'walk.png': [111, 111, 110, 110, 110, 111, 110, 111, 112, 112, 112, 112],
   'jump.png': [115, 113, 115, 119, 119, 119, 119, 119, 119, 119],
+  // The attack sheet is a 4x4 grid of 256px cells and every frame plants its feet
+  // on the same row, so the constant 198 keeps the whole swing seated on the
+  // floor. These are rows within a 256 cell, not a 128 one.
+  'attack.png': [198, 198, 198, 198, 198, 198, 198, 198, 198, 198, 198, 198, 198, 198, 198, 198],
 }
 
 /** Per-frame foot rows for a sheet, or null when it has no measured data. */
@@ -41,7 +45,11 @@ export function footRowsFor(sheetFileName: string): readonly number[] | null {
 /**
  * How far below the feet plane the sprite's draw-rect bottom must sit so the visible
  * opaque pixels of that frame land exactly on it.
+ *
+ * `cellHeight` is the sheet's native cell height, which is 128 for the strip sheets
+ * but 256 for the grid-packed attack sheet. `displaySize` must already include any
+ * per-sheet display scale, so this stays a pure ratio of the cell.
  */
-export function footOffsetForRow(row: number, displaySize: number): number {
-  return ((SPRITE_CELL_HEIGHT - 1 - row) / SPRITE_CELL_HEIGHT) * displaySize
+export function footOffsetForRow(row: number, displaySize: number, cellHeight: number = SPRITE_CELL_HEIGHT): number {
+  return ((cellHeight - 1 - row) / cellHeight) * displaySize
 }

@@ -79,7 +79,23 @@ class SpriteAnimationSystem(
      */
     fun footOffsetForCurrentFrame(displaySize: Float): Float {
         val sheet = sheets[currentAction] ?: sheets[PlayerAction.IDLE] ?: return 0f
-        return SpriteMetrics.footOffsetForRow(sheet.footRowForFrame(currentFrameIndex), displaySize)
+        return SpriteMetrics.footOffsetForRow(
+            sheet.footRowForFrame(currentFrameIndex),
+            displaySize * sheet.displayScale,
+            sheet.cellHeight.toFloat()
+        )
+    }
+
+    /**
+     * On-screen size of the current sheet, in logical pixels.
+     *
+     * Sheets packed at a different native resolution (the attack sheet is a grid of
+     * 256px cells, not a strip of 128px ones) carry a displayScale so their
+     * character still occupies the same on-screen box as every other action.
+     */
+    fun displaySizeForCurrentSheet(baseDisplaySize: Float): Float {
+        val sheet = sheets[currentAction] ?: sheets[PlayerAction.IDLE] ?: return baseDisplaySize
+        return baseDisplaySize * sheet.displayScale
     }
 
     fun getAllActions(): List<PlayerAction> = PlayerAction.entries

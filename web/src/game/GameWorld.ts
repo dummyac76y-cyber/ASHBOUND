@@ -252,14 +252,15 @@ export class GameWorld {
    * channel, instead of inferring it from a difference against the backdrop.
    */
   renderCharacter(ctx: CanvasRenderingContext2D): void {
-    // The 128x128 cell is drawn at 100x100 logical pixels (no stretching, aspect
-    // preserved). The cell's transparent lower edge is corrected per frame so the
-    // visible feet — and therefore the collision bottom — land exactly on FLOOR_Y.
-    const spriteDisplaySize = GameWorld.SPRITE_DISPLAY_SIZE
+    // A cell is drawn square, and the sheet's own display scale is applied so a
+    // grid-packed sheet (attack) still matches the strip sheets on screen. The
+    // cell's transparent lower edge is corrected per frame so the visible feet —
+    // and therefore the collision bottom — land exactly on FLOOR_Y.
+    const spriteDisplaySize = this.animationSystem.displaySizeForCurrentSheet(GameWorld.SPRITE_DISPLAY_SIZE)
     this.animationSystem.render(
       ctx,
       this.player.x,
-      this.player.groundY + this.animationSystem.footOffsetForCurrentFrame(spriteDisplaySize),
+      this.player.groundY + this.animationSystem.footOffsetForCurrentFrame(GameWorld.SPRITE_DISPLAY_SIZE),
       spriteDisplaySize,
       spriteDisplaySize,
       this.player.isFacingRight,

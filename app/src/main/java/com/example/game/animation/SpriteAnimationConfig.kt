@@ -14,6 +14,11 @@ package com.example.game.animation
  *   frames. Defaults to the measured data for [sourceFileName]; frames beyond the list fall
  *   back to the rest-pose row. This is what keeps the visible feet on the floor when the
  *   art is not bottom-aligned.
+ * @param columns Cells per row, for sheets packed as a grid. Null means a single strip.
+ * @param cellSize Native cell side in source pixels, for grid-packed sheets. Null means the
+ *   sheet is a strip of square cells as wide as it is tall.
+ * @param displayScale On-screen size multiplier, used to keep a grid-packed sheet's
+ *   character the same on-screen size as the strip sheets.
  */
 data class AnimationConfig(
     val action: PlayerAction,
@@ -23,7 +28,10 @@ data class AnimationConfig(
     val loop: Boolean = true,
     val priority: Int = 0,
     val canBeCancelledByMovement: Boolean = true,
-    val footRows: List<Int> = SpriteMetrics.footRowsFor(sourceFileName)
+    val footRows: List<Int> = SpriteMetrics.footRowsFor(sourceFileName),
+    val columns: Int? = null,
+    val cellSize: Int? = null,
+    val displayScale: Float = 1f
 )
 
 object DefaultAnimationConfigs {
@@ -54,11 +62,17 @@ object DefaultAnimationConfigs {
         PlayerAction.ATTACK to AnimationConfig(
             action = PlayerAction.ATTACK,
             sourceFileName = "attack.png",
-            frameCount = 8,
-            fps = 16,
+            frameCount = 16,
+            fps = 24,
             loop = false,
             priority = 3,
-            canBeCancelledByMovement = false
+            canBeCancelledByMovement = false,
+            // Packed as a 4x4 grid of 256px cells rather than a strip of 128px
+            // ones, so the cell geometry is declared explicitly. displayScale
+            // keeps the character the same on-screen size as the strip sheets.
+            columns = 4,
+            cellSize = 256,
+            displayScale = 1.366f
         ),
         PlayerAction.HEAVY_ATTACK to AnimationConfig(
             action = PlayerAction.HEAVY_ATTACK,

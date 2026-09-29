@@ -7,7 +7,12 @@ import android.graphics.Rect
 import android.util.Log
 
 /**
- * Encapsulates a loaded sprite sheet bitmap and its horizontal frame slices.
+ * Encapsulates a loaded sprite sheet bitmap and its frame slices.
+ *
+ * Two layouts are supported. A strip sheet (idle, walk, jump) is a single row of
+ * square cells. A grid sheet (attack) declares its cell size and column count in
+ * [AnimationConfig] and is addressed row-major, wrapping onto the next row at
+ * [columns].
  */
 class SpriteSheet(
     val action: PlayerAction,
@@ -15,10 +20,17 @@ class SpriteSheet(
     val frameCount: Int,
     val frameWidth: Int,
     val frameHeight: Int,
+    val columns: Int,
+    val cellHeight: Int,
+    val displayScale: Float,
     val config: AnimationConfig
 ) {
     private val frameRects: Array<Rect> = Array(frameCount) { index ->
-        Rect(index * frameWidth, 0, (index + 1) * frameWidth, frameHeight)
+        val col = index % columns
+        val row = index / columns
+        val sx = col * frameWidth
+        val sy = row * cellHeight
+        Rect(sx, sy, sx + frameWidth, sy + cellHeight)
     }
 
     fun getFrameRect(frameIndex: Int): Rect {
@@ -41,9 +53,10 @@ class SpriteSheet(
         private const val TAG = "SpriteSheet"
 
         /**
-         * Loads a sprite sheet from Android assets or drawable resources.
-         * If frameCount is null in the config, it automatically determines frame count
-         * by dividing the bitmap's width by its height.
+         * Loads a sprite sheet from Android assets or drawable resources and derives
+         * its cell geometry. A config without [AnimationConfig.cellSize] is treated as
+         * a single row of square cells; one with it is treated as a grid, with the
+         * row count following from the bitmap's height.
          */
         fun load(context: Context, config: AnimationConfig): SpriteSheet? {
             val bitmap = loadBitmap(context, config.sourceFileName)
@@ -52,21 +65,24 @@ class SpriteSheet(
                 return null
             }
 
-            // Automatic layout detection if frameCount is not explicitly set
-            val detectedFrameCount = config.frameCount ?: run {
-                val ratio = if (bitmap.height > 0) bitmap.width / bitmap.height else 1
-                ratio.coerceAtLeast(1)
-            }
-
-            val validFrameCount = detectedFrameCount.coerceAtLeast(1)
-            val fWidth = (bitmap.width / validFrameCount).coerceAtLeast(1)
-            val fHeight = bitmap.height.coerceAtLeast(1)
+            // Two layouts. Without a configured cell size the sheet is a single row
+            // of square cells, so the cell side is the bitmap height and the frame
+            // count follows from the width. With one, the sheet is a grid (attack:
+            // 4 columns of 256px cells) and the row count follows from the height.
+            val cellSide = (config.cellSize ?: bitmap.height).coerceAtLeast(1)
+            val inferredColumns = (bitmap.width / cellSide).coerceAtLeast(1)
+            val columns = (config.columns ?: inferredColumns).coerceAtLeast(1)
+            val rows = if (config.cellSize != null) (bitmap.height / cellSide).coerceAtLeast(1) else 1
+            val available = columns * rows
+            val validFrameCount = (config.frameCount ?: available).coerceIn(1, available)
+            val fWidth = (bitmap.width / columns).coerceAtLeast(1)
 
             Log.i(
                 TAG,
                 "Loaded ${config.action}: file=${config.sourceFileName}, " +
                         "dimensions=${bitmap.width}x${bitmap.height}, " +
-                        "frames=$validFrameCount, frameSize=${fWidth}x${fHeight}, " +
+                        "frames=$validFrameCount, frameSize=${fWidth}x${cellSide}, " +
+                        "columns=$columns, scale=${config.displayScale}, " +
                         "fps=${config.fps}, loop=${config.loop}"
             )
 
@@ -75,7 +91,10 @@ class SpriteSheet(
                 bitmap = bitmap,
                 frameCount = validFrameCount,
                 frameWidth = fWidth,
-                frameHeight = fHeight,
+                frameHeight = cellSide,
+                columns = columns,
+                cellHeight = cellSide,
+                displayScale = config.displayScale,
                 config = config
             )
         }

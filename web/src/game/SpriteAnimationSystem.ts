@@ -91,7 +91,23 @@ export class SpriteAnimationSystem {
   footOffsetForCurrentFrame(displaySize: number): number {
     const sheet = this.sheets.get(this.currentAction) ?? this.sheets.get(PlayerAction.IDLE)
     if (!sheet) return 0
-    return footOffsetForRow(sheet.footRowForFrame(this.currentFrameIndex), displaySize)
+    return footOffsetForRow(
+      sheet.footRowForFrame(this.currentFrameIndex),
+      displaySize * sheet.displayScale,
+      sheet.cellHeight,
+    )
+  }
+
+  /**
+   * On-screen size of the current sheet, in logical pixels.
+   *
+   * Sheets packed at a different native resolution (the attack sheet is a grid of
+   * 256px cells, not a strip of 128px ones) carry a displayScale so their character
+   * still occupies the same on-screen box as every other action.
+   */
+  displaySizeForCurrentSheet(baseDisplaySize: number): number {
+    const sheet = this.sheets.get(this.currentAction) ?? this.sheets.get(PlayerAction.IDLE)
+    return baseDisplaySize * (sheet?.displayScale ?? 1)
   }
 
   /**

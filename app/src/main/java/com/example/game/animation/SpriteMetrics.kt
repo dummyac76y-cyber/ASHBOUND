@@ -33,7 +33,11 @@ object SpriteMetrics {
     private val FOOT_ROWS_BY_SHEET: Map<String, List<Int>> = mapOf(
         "idle.png" to listOf(111, 111, 111, 111, 111, 111, 111, 111, 111, 111, 111, 111),
         "walk.png" to listOf(111, 111, 110, 110, 110, 111, 110, 111, 112, 112, 112, 112),
-        "jump.png" to listOf(115, 113, 115, 119, 119, 119, 119, 119, 119, 119)
+        "jump.png" to listOf(115, 113, 115, 119, 119, 119, 119, 119, 119, 119),
+        // The attack sheet is a 4x4 grid of 256px cells and every frame plants its
+        // feet on the same row, so the constant 198 keeps the whole swing seated on
+        // the floor. These are rows within a 256 cell, not a 128 one.
+        "attack.png" to List(16) { 198 }
     )
 
     /** Per-frame foot rows for a sheet, or an empty list when it has no measured data. */
@@ -42,7 +46,11 @@ object SpriteMetrics {
     /**
      * How far below the feet plane the sprite's draw-rect bottom must sit so the
      * visible opaque pixels of that frame land exactly on it.
+     *
+     * [cellHeight] is the sheet's native cell height: 128 for the strip sheets but
+     * 256 for the grid-packed attack sheet. [displaySize] must already include any
+     * per-sheet display scale, so this stays a pure ratio of the cell.
      */
-    fun footOffsetForRow(row: Int, displaySize: Float): Float =
-        (SPRITE_CELL_HEIGHT - 1f - row) / SPRITE_CELL_HEIGHT * displaySize
+    fun footOffsetForRow(row: Int, displaySize: Float, cellHeight: Float = SPRITE_CELL_HEIGHT): Float =
+        (cellHeight - 1f - row) / cellHeight * displaySize
 }

@@ -376,7 +376,62 @@ console.log('per-frame foot rows come from the artwork, not a constant')
   )
 }
 
-console.log('the sprite cell is anchored on each frame\'s own opaque bottom')
+console.log('GRID PACKED SHEETS: a 4x4 grid of 256px cells slices correctly')
+{
+  const stubImage = { width: 1024, height: 1024 } as unknown as HTMLCanvasElement
+  const config = createDefaultConfigs().get(PlayerAction.ATTACK)!
+  const sheet = new SpriteSheet(PlayerAction.ATTACK, stubImage, config)
+
+  check('attack uses the attack sheet', config.sourceFileName === 'attack.png', config.sourceFileName)
+  check('attack has 16 frames', sheet.frameCount === 16, `got ${sheet.frameCount}`)
+  check('attack reads 4 columns', sheet.columns === 4, `got ${sheet.columns}`)
+  check('attack cell is 256px', sheet.cellHeight === 256, `got ${sheet.cellHeight}`)
+  check('attack cell is 256 wide', sheet.frameWidth === 256, `got ${sheet.frameWidth}`)
+
+  // Every cell in a 4x4 grid of 256px cells must be addressed correctly, not
+  // just the first row: column advances x, wrapping at 4 moves down a row.
+  check('frame 0 is the top-left cell', JSON.stringify(sheet.frameRect(0)) === JSON.stringify({ sx: 0, sy: 0, sw: 256, sh: 256 }), JSON.stringify(sheet.frameRect(0)))
+  check('frame 3 is the end of the first row', JSON.stringify(sheet.frameRect(3)) === JSON.stringify({ sx: 768, sy: 0, sw: 256, sh: 256 }), JSON.stringify(sheet.frameRect(3)))
+  check('frame 4 wraps to the start of row two', JSON.stringify(sheet.frameRect(4)) === JSON.stringify({ sx: 0, sy: 256, sw: 256, sh: 256 }), JSON.stringify(sheet.frameRect(4)))
+  check('frame 15 is the bottom-right cell', JSON.stringify(sheet.frameRect(15)) === JSON.stringify({ sx: 768, sy: 768, sw: 256, sh: 256 }), JSON.stringify(sheet.frameRect(15)))
+  check('out-of-range frames clamp to the last cell', JSON.stringify(sheet.frameRect(99)) === JSON.stringify(sheet.frameRect(15)), JSON.stringify(sheet.frameRect(99)))
+
+  // No two frames may address the same source rect, or the sheet would visibly
+  // stutter through duplicates instead of playing 16 distinct poses.
+  const seen = new Set<string>()
+  for (let f = 0; f < sheet.frameCount; f++) seen.add(JSON.stringify(sheet.frameRect(f)))
+  check('all 16 frames address distinct cells', seen.size === 16, `got ${seen.size} unique`)
+
+  // The strip sheets must keep their single-row behaviour.
+  const walkStub = { width: 1536, height: 128 } as unknown as HTMLCanvasElement
+  const walkSheet = new SpriteSheet(PlayerAction.WALK, walkStub, createDefaultConfigs().get(PlayerAction.WALK)!)
+  check('walk stays a single row of 128px cells', walkSheet.cellHeight === 128 && walkSheet.frameCount === 12, `cell ${walkSheet.cellHeight}, frames ${walkSheet.frameCount}`)
+  check('walk frame 5 has no vertical offset', walkSheet.frameRect(5).sy === 0, `sy ${walkSheet.frameRect(5).sy}`)
+
+  // The 256px cell has a different padding than a 128px one, so the foot offset
+  // must be computed against this sheet's own cell height.
+  const size = GameWorld.SPRITE_DISPLAY_SIZE
+  const scaled = size * sheet.displayScale
+  let worst = 0
+  for (let frame = 0; frame < sheet.frameCount; frame++) {
+    const rectBottom = GameWorld.FLOOR_Y + footOffsetForRow(sheet.footRowForFrame(frame), scaled, sheet.cellHeight)
+    const visibleFeet = rectBottom - footOffsetForRow(sheet.footRowForFrame(frame), scaled, sheet.cellHeight)
+    worst = Math.max(worst, Math.abs(visibleFeet - GameWorld.FLOOR_Y))
+  }
+  check('all 16 attack frames put their visible feet on FLOOR_Y', worst < 1e-9, `worst ${worst}`)
+
+  // A 256px cell drawn unscaled would shrink the character to ~57px against
+  // idle's ~78px, so the sheet must carry a scale that restores the size.
+  const attackChar = (147.1 / 256) * scaled
+  const idleChar = (100.5 / 128) * size
+  check(
+    'attack character renders the same on-screen height as idle',
+    Math.abs(attackChar - idleChar) < 1,
+    `attack ${attackChar.toFixed(1)} vs idle ${idleChar.toFixed(1)}`,
+  )
+}
+
+console.log("the sprite cell is anchored on each frame's own opaque bottom")
 {
   // SpriteSheet only reads image.width/height here, so a plain stub is enough.
   const stubImage = { width: 1536, height: 128 } as unknown as HTMLCanvasElement
