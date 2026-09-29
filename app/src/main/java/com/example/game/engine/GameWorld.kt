@@ -28,7 +28,54 @@ class GameWorld(val context: Context) {
         const val LOGICAL_WIDTH = 640f
         const val LOGICAL_HEIGHT = 360f
         const val WORLD_WIDTH = 1200f
-        const val FLOOR_Y = 285f
+
+        /**
+         * Native pixel height of the arena backdrop (img_arena_bg_hd.png).
+         * The backdrop is drawn scaled to fill LOGICAL_HEIGHT, so any row in the
+         * artwork maps to logical Y via: row * LOGICAL_HEIGHT / this.
+         */
+        const val BACKGROUND_HEIGHT = 864f
+
+        /**
+         * Row of the visible stone floor surface, measured from the backdrop artwork.
+         *
+         * The floor is a hard horizontal edge running the full width of the image:
+         * a dark ledge seam at row 618 (168/192 sampled columns agree) with the lit
+         * flagstone surface starting at row 620 (111/158 columns; the remainder are
+         * pillars and props occluding the edge). There is no perspective slope, so a
+         * single world-space plane is exact across the whole arena.
+         */
+        const val BACKGROUND_FLOOR_ROW = 620f
+
+        /**
+         * World-space ground / collision plane, in logical pixels.
+         *
+         * The player's feet rest exactly on this Y at all times, and it is the Y the
+         * jump impulse starts from and gravity returns to. Derived from the backdrop
+         * rather than guessed, so the knight stands on the drawn stone floor instead
+         * of an arbitrary line near the bottom of the screen.
+         */
+        val FLOOR_Y: Float = BACKGROUND_FLOOR_ROW * (LOGICAL_HEIGHT / BACKGROUND_HEIGHT)
+
+        /** Native height of one sprite sheet cell, in source pixels. */
+        const val SPRITE_CELL_HEIGHT = 128f
+
+        /**
+         * Fully transparent rows below the character's feet inside a 128px cell.
+         * Measured from the art: opaque content ends at row 111 in every frame of
+         * both idle.png and walk.png, leaving 16 empty rows.
+         */
+        const val SPRITE_FOOT_PADDING = 16f
+
+        /** Logical size a 128px sprite cell is drawn at. */
+        const val SPRITE_DISPLAY_SIZE = 100f
+
+        /**
+         * How far below [FLOOR_Y] the sprite's draw-rect bottom must sit so that the
+         * visible feet — not the transparent padding — land on the ground plane.
+         * Without this the knight floats by this amount every frame.
+         */
+        val SPRITE_FOOT_OFFSET: Float = SPRITE_FOOT_PADDING / SPRITE_CELL_HEIGHT * SPRITE_DISPLAY_SIZE
     }
 
     val animationSystem = SpriteAnimationSystem(context, DefaultAnimationConfigs.createDefaults())
@@ -213,12 +260,15 @@ class GameWorld(val context: Context) {
         canvas.drawOval(player.x - 22f, FLOOR_Y - 4f, player.x + 22f, FLOOR_Y + 4f, pixelPaint)
 
         // 5. Render Character Sprite
-        // Knight display size preserving aspect ratio (128x128 sprite displayed at 100x100 logical pixels)
-        val spriteDisplaySize = 100f
+        // The 128x128 cell is drawn at 100x100 logical pixels (no stretching, aspect
+        // preserved). The cell carries 16px of transparent padding below the feet, so
+        // the draw-rect bottom is offset by SPRITE_FOOT_OFFSET to put the visible
+        // feet — and therefore the collision bottom — exactly on FLOOR_Y.
+        val spriteDisplaySize = SPRITE_DISPLAY_SIZE
         animationSystem.render(
             canvas = canvas,
             centerX = player.x,
-            bottomY = player.groundY,
+            bottomY = player.groundY + SPRITE_FOOT_OFFSET,
             displayWidth = spriteDisplaySize,
             displayHeight = spriteDisplaySize,
             isFacingRight = player.isFacingRight,

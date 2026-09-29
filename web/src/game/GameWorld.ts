@@ -18,8 +18,56 @@ export class GameWorld {
   static readonly LOGICAL_WIDTH = 640
   static readonly LOGICAL_HEIGHT = 360
   static readonly WORLD_WIDTH = 1200
-  static readonly FLOOR_Y = 285
   static readonly SPAWN_X = 300
+
+  /**
+   * Native pixel height of the arena backdrop (bg/arena_bg.png, synced from
+   * img_arena_bg_hd.png). The backdrop is drawn scaled to fill LOGICAL_HEIGHT, so
+   * any row in the artwork maps to logical Y via: row * LOGICAL_HEIGHT / this.
+   */
+  static readonly BACKGROUND_HEIGHT = 864
+
+  /**
+   * Row of the visible stone floor surface, measured from the backdrop artwork.
+   *
+   * The floor is a hard horizontal edge running the full width of the image: a dark
+   * ledge seam at row 618 (168/192 sampled columns agree) with the lit flagstone
+   * surface starting at row 620 (111/158 columns; the remainder are pillars and
+   * props occluding the edge). There is no perspective slope, so a single
+   * world-space plane is exact across the whole arena.
+   */
+  static readonly BACKGROUND_FLOOR_ROW = 620
+
+  /**
+   * World-space ground / collision plane, in logical pixels.
+   *
+   * The player's feet rest exactly on this Y at all times, and it is the Y the jump
+   * impulse starts from and gravity returns to. Derived from the backdrop rather
+   * than guessed, so the knight stands on the drawn stone floor instead of an
+   * arbitrary line near the bottom of the screen.
+   */
+  static readonly FLOOR_Y = (GameWorld.BACKGROUND_FLOOR_ROW * GameWorld.LOGICAL_HEIGHT) / GameWorld.BACKGROUND_HEIGHT
+
+  /** Native height of one sprite sheet cell, in source pixels. */
+  static readonly SPRITE_CELL_HEIGHT = 128
+
+  /**
+   * Fully transparent rows below the character's feet inside a 128px cell.
+   * Measured from the art: opaque content ends at row 111 in every frame of both
+   * idle.png and walk.png, leaving 16 empty rows.
+   */
+  static readonly SPRITE_FOOT_PADDING = 16
+
+  /** Logical size a 128px sprite cell is drawn at. */
+  static readonly SPRITE_DISPLAY_SIZE = 100
+
+  /**
+   * How far below FLOOR_Y the sprite's draw-rect bottom must sit so that the visible
+   * feet — not the transparent padding — land on the ground plane. Without this the
+   * knight floats by this amount every frame.
+   */
+  static readonly SPRITE_FOOT_OFFSET =
+    (GameWorld.SPRITE_FOOT_PADDING / GameWorld.SPRITE_CELL_HEIGHT) * GameWorld.SPRITE_DISPLAY_SIZE
 
   readonly player: PlayerController
   readonly dummies: TrainingDummy[]
@@ -170,12 +218,16 @@ export class GameWorld {
     ctx.ellipse(this.player.x, GameWorld.FLOOR_Y, 22, 4, 0, 0, Math.PI * 2)
     ctx.fill()
 
-    // 5. Render Character Sprite (128x128 sheet drawn at 100x100 logical pixels)
-    const spriteDisplaySize = 100
+    // 5. Render Character Sprite
+    // The 128x128 cell is drawn at 100x100 logical pixels (no stretching, aspect
+    // preserved). The cell carries 16px of transparent padding below the feet, so the
+    // draw-rect bottom is offset by SPRITE_FOOT_OFFSET to put the visible feet — and
+    // therefore the collision bottom — exactly on FLOOR_Y.
+    const spriteDisplaySize = GameWorld.SPRITE_DISPLAY_SIZE
     this.animationSystem.render(
       ctx,
       this.player.x,
-      this.player.groundY,
+      this.player.groundY + GameWorld.SPRITE_FOOT_OFFSET,
       spriteDisplaySize,
       spriteDisplaySize,
       this.player.isFacingRight,

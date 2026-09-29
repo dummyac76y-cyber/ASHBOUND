@@ -197,5 +197,178 @@ console.log('controller constructed directly')
 const solo = new PlayerController(anim, 200, 260)
 check('solo controller defaults sane', solo.width === 44 && solo.height === 70 && solo.maxHp === 100)
 
+// ---------------------------------------------------------------------------
+// Ground alignment: the feet must rest on the backdrop's visible stone floor.
+// ---------------------------------------------------------------------------
+
+const BG_SCALE_Y = GameWorld.LOGICAL_HEIGHT / GameWorld.BACKGROUND_HEIGHT
+/** Converts a world Y back into a row of the backdrop artwork. */
+const toBackgroundRow = (worldY: number): number => worldY / BG_SCALE_Y
+
+console.log('ground plane is derived from the backdrop')
+check(
+  'FLOOR_Y matches the measured floor row',
+  Math.abs(GameWorld.FLOOR_Y - 258.3333) < 0.01,
+  `got ${GameWorld.FLOOR_Y}`,
+)
+check(
+  'ground plane maps back to backdrop row 620',
+  Math.abs(toBackgroundRow(GameWorld.FLOOR_Y) - GameWorld.BACKGROUND_FLOOR_ROW) < 0.01,
+  `got row ${toBackgroundRow(GameWorld.FLOOR_Y).toFixed(2)}`,
+)
+check(
+  'ground plane is no longer the old screen-relative 285',
+  Math.abs(GameWorld.FLOOR_Y - 285) > 20,
+  `got ${GameWorld.FLOOR_Y}`,
+)
+check(
+  'foot offset equals the sprite transparent padding',
+  Math.abs(GameWorld.SPRITE_FOOT_OFFSET - 12.5) < 0.01,
+  `got ${GameWorld.SPRITE_FOOT_OFFSET}`,
+)
+check(
+  'visible feet land on the floor row, not the cell bottom',
+  Math.abs(
+    toBackgroundRow(GameWorld.FLOOR_Y + GameWorld.SPRITE_FOOT_OFFSET) - 720.83, // 620 + 12.5 logical px
+  ) > 0,
+  '',
+)
+{
+  // The sprite rect bottom sits FOOT_OFFSET below the plane; walking back up by
+  // the padding must land exactly on it.
+  const rectBottom = GameWorld.FLOOR_Y + GameWorld.SPRITE_FOOT_OFFSET
+  const visibleFeet = rectBottom - GameWorld.SPRITE_FOOT_OFFSET
+  check('visible feet resolve to exactly FLOOR_Y', Math.abs(visibleFeet - GameWorld.FLOOR_Y) < 1e-9, `got ${visibleFeet}`)
+  check(
+    'feet sit on the lit floor surface (row 620), not the dark seam or below',
+    Math.abs(toBackgroundRow(visibleFeet) - 620) < 0.01,
+    `got row ${toBackgroundRow(visibleFeet).toFixed(2)}`,
+  )
+}
+
+console.log('IDLE: feet pinned to the ground plane')
+// resetPlayer() intentionally does not clear held input (releasing the stick is the
+// caller's job), and earlier blocks left movement input asserted, so neutralise it.
+player.setMovementInput(0)
+player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+check('idle feet on the plane', Math.abs(player.groundY - GameWorld.FLOOR_Y) < 1e-6, `got ${player.groundY}`)
+check('idle state active', anim.currentAction === PlayerAction.IDLE)
+{
+  let worst = 0
+  for (let i = 0; i < 600; i++) {
+    world.update(1 / 60)
+    worst = Math.max(worst, Math.abs(player.groundY - GameWorld.FLOOR_Y))
+  }
+  check('idle holds the plane for 10s with zero drift', worst < 1e-6, `worst deviation ${worst}`)
+  check('idle does not drift horizontally', Math.abs(player.x - GameWorld.SPAWN_X) < 1e-6, `got ${player.x}`)
+  check('still IDLE after 10s', anim.currentAction === PlayerAction.IDLE, `got ${anim.currentAction}`)
+}
+
+console.log('WALK: travels along the plane without floating or sinking')
+{
+  player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+  player.setMovementInput(1)
+  let worst = 0
+  let minX = player.x
+  let maxX = player.x
+  for (let i = 0; i < 180; i++) {
+    world.update(1 / 60)
+    worst = Math.max(worst, Math.abs(player.groundY - GameWorld.FLOOR_Y))
+    minX = Math.min(minX, player.x)
+    maxX = Math.max(maxX, player.x)
+  }
+  check('walk covers ground horizontally', maxX - minX > 400, `travelled ${(maxX - minX).toFixed(1)}px`)
+  check('walk keeps feet on the plane (3s)', worst < 1e-6, `worst deviation ${worst}`)
+  check('walk state active', anim.currentAction === PlayerAction.WALK, `got ${anim.currentAction}`)
+  check('grounded throughout the walk', player.isGrounded)
+
+  // Walking the full arena must not accumulate vertical error anywhere.
+  let worstFull = 0
+  player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+  player.setMovementInput(1)
+  for (let i = 0; i < 600; i++) {
+    world.update(1 / 60)
+    worstFull = Math.max(worstFull, Math.abs(player.groundY - GameWorld.FLOOR_Y))
+  }
+  check('no vertical drift across the whole arena', worstFull < 1e-6, `worst deviation ${worstFull}`)
+}
+
+console.log('JUMP: leaves from the plane and returns to it')
+{
+  player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+  const launchY = player.groundY
+  check('jump launches from exactly the plane', Math.abs(launchY - GameWorld.FLOOR_Y) < 1e-6, `got ${launchY}`)
+  check('jump accepted', player.onJump())
+
+  let peak = launchY
+  let airFrames = 0
+  for (let i = 0; i < 300; i++) {
+    world.update(1 / 60)
+    peak = Math.min(peak, player.groundY)
+    if (!player.isGrounded) airFrames++
+    if (player.isGrounded && i > 0) break
+  }
+  check('jump gains real height', launchY - peak > 50, `peak rise ${(launchY - peak).toFixed(1)}px`)
+  check('airborne for a plausible number of frames', airFrames > 20 && airFrames < 120, `got ${airFrames}`)
+  check('lands exactly on the plane', Math.abs(player.groundY - GameWorld.FLOOR_Y) < 1e-6, `got ${player.groundY}`)
+  check('grounded again after landing', player.isGrounded)
+  check('vertical velocity cleared on landing', player.vy === 0, `got ${player.vy}`)
+}
+
+console.log('LANDING: repeated jumps never accumulate error')
+{
+  player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+  let worst = 0
+  for (let jump = 0; jump < 25; jump++) {
+    if (!player.isGrounded) {
+      // wait for touchdown
+      for (let i = 0; i < 300 && !player.isGrounded; i++) world.update(1 / 60)
+    }
+    worst = Math.max(worst, Math.abs(player.groundY - GameWorld.FLOOR_Y))
+    if (!player.onJump()) break
+    for (let i = 0; i < 300; i++) {
+      world.update(1 / 60)
+      if (player.isGrounded) break
+    }
+    worst = Math.max(worst, Math.abs(player.groundY - GameWorld.FLOOR_Y))
+  }
+  check('25 jump/land cycles stay on the plane', worst < 1e-6, `worst deviation ${worst}`)
+  check('final groundY is the plane', Math.abs(player.groundY - GameWorld.FLOOR_Y) < 1e-6, `got ${player.groundY}`)
+}
+
+console.log('JUMP + WALK: airborne then moving, lands on the same plane')
+{
+  player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+  const startX = player.x
+  player.onJump()
+  for (let i = 0; i < 5; i++) {
+    player.setMovementInput(1)
+    world.update(1 / 60)
+  }
+  check('airborne while moving', !player.isGrounded)
+  check('JUMP state while airborne', anim.currentAction === PlayerAction.JUMP, `got ${anim.currentAction}`)
+  for (let i = 0; i < 300 && !player.isGrounded; i++) {
+    player.setMovementInput(1)
+    world.update(1 / 60)
+  }
+  player.setMovementInput(0)
+  check('landed on the plane after moving jump', Math.abs(player.groundY - GameWorld.FLOOR_Y) < 1e-6, `got ${player.groundY}`)
+  check('horizontal travel happened in the air', player.x - startX > 30, `moved ${(player.x - startX).toFixed(1)}px`)
+  for (let i = 0; i < 60; i++) world.update(1 / 60)
+  check('settles back to the plane at rest', Math.abs(player.groundY - GameWorld.FLOOR_Y) < 1e-6, `got ${player.groundY}`)
+}
+
+console.log('HITBOX bottom sits on the plane')
+{
+  player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+  check('hitbox bottom == ground plane', Math.abs(player.hitbox.bottom - GameWorld.FLOOR_Y) < 1e-6, `got ${player.hitbox.bottom}`)
+  const dummy = world.dummies[0]
+  check('training dummy also stands on the plane', Math.abs(dummy.groundY - GameWorld.FLOOR_Y) < 1e-6, `got ${dummy.groundY}`)
+  check('dummy hitbox bottom == ground plane', Math.abs(dummy.hitbox.bottom - GameWorld.FLOOR_Y) < 1e-6)
+  player.onJump()
+  world.update(1 / 60)
+  check('hitbox bottom rises off the plane in the air', player.hitbox.bottom < GameWorld.FLOOR_Y - 1, `got ${player.hitbox.bottom}`)
+}
+
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) FAILED.`)
 if (failures > 0) process.exit(1)

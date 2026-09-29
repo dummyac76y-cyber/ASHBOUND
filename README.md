@@ -77,6 +77,36 @@ Keyboard bindings are web-only; the Android build is touch-driven. `CONFIG` in t
 HUD opens the animation inspector (live FPS tuning, frame-count stepping, per-action
 preview) on both platforms.
 
+## Ground plane
+
+The arena floor is **derived from the backdrop artwork**, not guessed from the screen size.
+
+The backdrop (`img_arena_bg_hd.png`, 1536×864) is drawn scaled into 960×360 logical pixels,
+so artwork row *r* maps to logical Y via `r × 360 / 864`. The stone floor is a hard
+horizontal edge running the full width of the image — a dark ledge seam at row **618**
+(168/192 sampled columns agree) with the lit flagstone surface starting at row **620**
+(111/158 columns; the rest are pillars occluding the edge). There is no perspective slope.
+
+```
+GROUND_Y = 620 × (360 / 864) = 258.33 logical px
+```
+
+`GameWorld.FLOOR_Y` is that value. It is the single world-space collision plane: the
+player's feet rest exactly on it while idle and walking, the jump impulse launches from
+it, and gravity returns to it. The engine's stone slab is drawn from `FLOOR_Y` downward,
+so its top edge coincides with the backdrop's own floor line and the background stays
+visible above it as the reference.
+
+The sprite cell also carries transparent padding below the feet — opaque content ends at
+row 111 of the 128px cell in every frame of both sheets, leaving 16 empty rows, which is
+12.5 logical px at the 100px display size. `GameWorld.SPRITE_FOOT_OFFSET` offsets the
+draw-rect by that amount so the *visible* feet, not the padding, land on `FLOOR_Y`. The
+PNG itself is neither modified nor stretched.
+
+The walk cycle's last four frames let the cloak hang one to two source pixels lower than
+the idle rest pose, so worst-case penetration is 0.78 logical px (sub-pixel at typical
+display scale). The idle sheet is exact to the pixel on all 12 frames.
+
 ## Shared assets
 
 The Android app is the **source of truth** for art. The web build never stores its
