@@ -1,6 +1,7 @@
 {
   "./sprites/exiled_knight_portrait.png": "810a94ed",
   "./sprites/idle.png": "05bbad9a",
+  "./sprites/jump.png": "94f257b2",
   "./sprites/walk.png": "ddd33570",
   "./ui/btn_attack.png": "b5a90449",
   "./ui/btn_block.png": "6122ee5b",

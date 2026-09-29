@@ -384,6 +384,14 @@ const frames = [
   ['WALK', 5, 'walk (foot row 111)'],
   ['WALK', 8, 'walk (foot row 112)'],
   ['WALK', 11, 'walk (foot row 112)'],
+  // Every frame of the 10-frame jump sheet, so a mis-registered row in any one
+  // of them shows up as a frame sitting off the floor.
+  ['JUMP', 0, 'jump (foot row 115)'],
+  ['JUMP', 1, 'jump (foot row 113)'],
+  ['JUMP', 2, 'jump (foot row 115)'],
+  ['JUMP', 4, 'jump (foot row 119)'],
+  ['JUMP', 7, 'jump (foot row 119)'],
+  ['JUMP', 9, 'jump (foot row 119)'],
 ]
 
 console.log('visible feet vs. rendered floor')

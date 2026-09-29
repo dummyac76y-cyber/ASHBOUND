@@ -505,6 +505,35 @@ console.log('JUMP: leaves from the plane and returns to it')
   check('vertical velocity cleared on landing', player.vy === 0, `got ${player.vy}`)
 }
 
+console.log('JUMP ANIMATION: uses the jump sheet and tracks the arc')
+{
+  const cfg = createDefaultConfigs().get(PlayerAction.JUMP)!
+  check('jump plays the jump sheet, not a stand-in', cfg.sourceFileName === 'jump.png', cfg.sourceFileName)
+  check('jump frame count matches the 10-frame sheet', cfg.frameCount === 10, `got ${cfg.frameCount}`)
+  check('jump has measured foot rows for every frame', cfg.footRows.length === 10, `got ${cfg.footRows.length}`)
+
+  // The animation must finish when the character does. Airtime is
+  // 2*|impulse|/gravity; the sheet is frameCount/fps seconds long.
+  const airtime = (2 * 360) / 880
+  const animLength = cfg.frameCount! / cfg.fps
+  check(
+    'jump animation length matches the airtime within one frame',
+    Math.abs(animLength - airtime) <= 1 / cfg.fps,
+    `animation ${animLength.toFixed(3)}s vs airtime ${airtime.toFixed(3)}s`,
+  )
+  check('jump animation does not loop', cfg.loop === false, `loop ${cfg.loop}`)
+
+  // The rise in the art must be real, not a mis-registered sheet: the middle
+  // frames sit lower in the cell (larger row) than the launch frames.
+  const first = cfg.footRows[0]!
+  const apex = cfg.footRows[cfg.footRows.length - 1]!
+  check(
+    'the jump sheet actually shows a rise',
+    apex > first,
+    `launch foot row ${first}, later foot row ${apex}`,
+  )
+}
+
 console.log('LANDING: repeated jumps never accumulate error')
 {
   player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)

@@ -26,9 +26,9 @@ export interface AnimationConfig {
 
 /**
  * Frame counts match the sprite sheets shipped in app/src/main/assets/sprites
- * (12 frames for idle, 12 for walk). ATTACK / HEAVY_ATTACK / DASH / HURT /
- * DEATH / BLOCK sheets are not present yet, so those actions fall back to the
- * idle sheet and reuse the same 12 frames until new art is added.
+ * (12 frames for idle, 12 for walk, 10 for jump). ATTACK / HEAVY_ATTACK / DASH /
+ * HURT / DEATH / BLOCK sheets are not present yet, so those actions fall back to
+ * the idle sheet and reuse the same 12 frames until new art is added.
  */
 export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
   const config = (
@@ -55,7 +55,7 @@ export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
     [PlayerAction.HEAVY_ATTACK, config(PlayerAction.HEAVY_ATTACK, 'idle.png', 10, 14, false, 4)],
     [PlayerAction.BLOCK, config(PlayerAction.BLOCK, 'idle.png', 6, 12, true, 2)],
     [PlayerAction.DASH, config(PlayerAction.DASH, 'idle.png', 6, 15, false, 5)],
-    [PlayerAction.JUMP, config(PlayerAction.JUMP, 'walk.png', 12, 8, false, 1)],
+    [PlayerAction.JUMP, config(PlayerAction.JUMP, 'jump.png', 10, 12, false, 1)],
     [PlayerAction.HURT, config(PlayerAction.HURT, 'idle.png', 4, 12, false, 6)],
     [PlayerAction.DEATH, config(PlayerAction.DEATH, 'idle.png', 8, 8, false, 10)],
   ])
