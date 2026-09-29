@@ -3,8 +3,8 @@
   "./sprites/idle.png": "05bbad9a",
   "./sprites/walk.png": "ddd33570",
   "./ui/btn_attack.png": "b5a90449",
-  "./ui/btn_block.png": "dfd2f54b",
+  "./ui/btn_block.png": "6122ee5b",
   "./ui/btn_dash.png": "7ba2144c",
   "./ui/btn_heavy_attack.png": "c9bd1a5f",
-  "./ui/btn_jump.png": "6122ee5b"
+  "./ui/btn_jump.png": "dfd2f54b"
 }
