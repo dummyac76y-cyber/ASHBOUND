@@ -260,16 +260,20 @@ console.log('dummies are fixed in world space while the camera follows the playe
   seen.push({ screen: dummy.x - world.cameraX, camera: world.cameraX, player: world.player.x })
 
   check('dummy world X is constant through the whole walk', dummy.x === worldX, `${worldX} -> ${dummy.x}`)
-  check('the camera genuinely panned', Math.abs(seen[0].camera - seen[1].camera) > 50, `${seen[0].camera.toFixed(1)} -> ${seen[1].camera.toFixed(1)}`)
+  check(
+    'the camera is pinned: the world is exactly one backdrop wide',
+    seen.every((r) => r.camera === 0),
+    `cameraX ${seen[0].camera} / ${seen[1].camera}`,
+  )
   check(
     'screen position = worldX - cameraX in both samples',
     Math.abs(seen[0].screen - (worldX - seen[0].camera)) < 1e-9 && Math.abs(seen[1].screen - (worldX - seen[1].camera)) < 1e-9,
     '',
   )
   check(
-    'the dummy appears to move on screen by exactly the camera delta',
-    Math.abs(seen[0].screen - seen[1].screen - (seen[1].camera - seen[0].camera)) < 1e-9,
-    '',
+    'the dummy holds its screen position while the player walks',
+    Math.abs(seen[0].screen - seen[1].screen) < 1e-9,
+    `${seen[0].screen} vs ${seen[1].screen}`,
   )
   check('the player actually moved', Math.abs(seen[0].player - GameWorld.SPAWN_X) > 50, `player reached ${seen[0].player.toFixed(1)}`)
 }
@@ -289,14 +293,20 @@ console.log('dummy hitbox and health bar are anchored to the dummy')
 
 console.log('backdrop is anchored in world space and repeats across the arena')
 check(
-  'the scaled plate is narrower than the arena, so it must repeat',
-  GameWorld.BACKGROUND_LOGICAL_WIDTH < GameWorld.WORLD_WIDTH,
+  'the world is exactly the backdrop, so the plate is drawn once and never repeated',
+  Math.abs(GameWorld.BACKGROUND_LOGICAL_WIDTH - GameWorld.WORLD_WIDTH) < 1e-9,
   `plate ${GameWorld.BACKGROUND_LOGICAL_WIDTH} vs world ${GameWorld.WORLD_WIDTH}`,
 )
 check(
   'the plate covers the viewport at the uniform scale',
-  Math.abs(GameWorld.BACKGROUND_LOGICAL_WIDTH - GameWorld.LOGICAL_WIDTH) < 1e-9,
-  `got ${GameWorld.BACKGROUND_LOGICAL_WIDTH}`,
+  Math.abs(GameWorld.BACKGROUND_LOGICAL_WIDTH - GameWorld.LOGICAL_WIDTH) < 1e-9 &&
+    Math.abs(GameWorld.BACKGROUND_LOGICAL_HEIGHT - GameWorld.LOGICAL_HEIGHT) < 1e-9,
+  `plate ${GameWorld.BACKGROUND_LOGICAL_WIDTH}x${GameWorld.BACKGROUND_LOGICAL_HEIGHT}`,
+)
+check(
+  'the camera has no scroll range, so there is nothing to mirror or repeat into',
+  GameWorld.WORLD_WIDTH - GameWorld.LOGICAL_WIDTH === 0,
+  `range ${GameWorld.WORLD_WIDTH - GameWorld.LOGICAL_WIDTH}`,
 )
 
 // ---------------------------------------------------------------------------
@@ -450,7 +460,14 @@ console.log('WALK: travels along the plane without floating or sinking')
     minX = Math.min(minX, player.x)
     maxX = Math.max(maxX, player.x)
   }
-  check('walk covers ground horizontally', maxX - minX > 400, `travelled ${(maxX - minX).toFixed(1)}px`)
+  // The arena is exactly one backdrop wide, so a sustained walk drives the player
+  // into the right wall and stops there rather than running off into nothing.
+  const rightLimit = GameWorld.WORLD_WIDTH - player.width / 2
+  check(
+    'walk drives the player to the right world boundary and stops',
+    maxX > GameWorld.SPAWN_X + 200 && Math.abs(maxX - rightLimit) < 1e-6,
+    `travelled ${(maxX - minX).toFixed(1)}px, stopped at ${maxX.toFixed(2)}, limit ${rightLimit}`,
+  )
   check('walk keeps feet on the plane (3s)', worst < 1e-6, `worst deviation ${worst}`)
   check('walk state active', anim.currentAction === PlayerAction.WALK, `got ${anim.currentAction}`)
   check('grounded throughout the walk', player.isGrounded)

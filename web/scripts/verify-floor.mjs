@@ -50,6 +50,8 @@ const server = createServer(async (req, res) => {
 await new Promise((r) => server.listen(0, r))
 const base = `http://127.0.0.1:${server.address().port}`
 
+const GameWorld_DUMMY_X_EXPECTED = 450
+
 let failures = 0
 function check(name, ok, detail = '') {
   console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? `  ${detail}` : ''}`)
@@ -95,7 +97,7 @@ await page.evaluate(() => {
 
   /**
    * The backdrop alone, drawn exactly as the game draws it: same world-space
-   * camera transform, same uniform scale, same mirrored tiling. Used as the
+   * camera transform, same uniform scale, drawn once at world (0, 0). Used as the
    * subtraction reference so only world objects are measured.
    */
   g.barePlate = () => {
@@ -111,23 +113,8 @@ await page.evaluate(() => {
     b.translate(g.offX(), g.offY())
     b.scale(s, s)
     b.translate(-g.world.cameraX, 0)
-    // Mirror the real drawBackdrop() so the reference matches pixel for pixel.
     const bg = g.world.background
-    const plateW = g.GameWorld.BACKGROUND_LOGICAL_WIDTH
-    const plateH = bg.height * g.GameWorld.BACKGROUND_SCALE
-    const count = Math.ceil(g.GameWorld.WORLD_WIDTH / plateW)
-    for (let i = 0; i < count; i++) {
-      const x = i * plateW
-      if (i % 2 === 1) {
-        b.save()
-        b.translate(x + plateW, 0)
-        b.scale(-1, 1)
-        b.drawImage(bg.image, 0, 0, bg.width, bg.height, 0, 0, plateW, plateH)
-        b.restore()
-      } else {
-        b.drawImage(bg.image, 0, 0, bg.width, bg.height, x, 0, plateW, plateH)
-      }
-    }
+    b.drawImage(bg.image, 0, 0, bg.width, bg.height, 0, 0, bg.width * g.GameWorld.BACKGROUND_SCALE, bg.height * g.GameWorld.BACKGROUND_SCALE)
     return b.getImageData(0, 0, c.width, c.height).data
   }
 
@@ -153,7 +140,6 @@ await page.evaluate(() => {
     return [...hits].sort((a, c) => a - c)
   }
 
-  /**
   /** Longest contiguous run in a sorted column list, as its midpoint and width. */
   g.strawRun = (cols) => {
     if (!cols.length) return { mid: NaN, width: 0 }
@@ -439,21 +425,45 @@ console.log('per-frame correction is actually doing work')
   )
 }
 
-// --- 4. Camera translation must not move the floor -----------------------------
-console.log('camera translation')
-for (const cameraX of [0, 137.5, 300, 560]) {
-  const res = await page.evaluate(
-    async (cameraX) => {
-      const g = window.__game
-      await g.pin({ action: 'IDLE', frame: 0, playerX: cameraX + 320, cameraX })
-      return { footRow: g.footRow(), floorY: g.GameWorld.FLOOR_Y }
-    },
-    cameraX,
+// --- 4. Camera is clamped to the world ---------------------------------------
+console.log('camera clamping')
+{
+  const res = await page.evaluate(async () => {
+    const g = window.__game
+    g.resume()
+    const out = []
+    for (const dir of [1, -1, 1, -1]) {
+      g.world.player.setMovementInput(dir)
+      for (let i = 0; i < 300; i++) await new Promise((r) => requestAnimationFrame(r))
+      out.push({ dir, playerX: g.world.player.x, cameraX: g.world.cameraX })
+    }
+    g.world.player.setMovementInput(0)
+    return out
+  })
+  check(
+    'the camera never leaves [0, WORLD_WIDTH - LOGICAL_WIDTH]',
+    res.every((r) => r.cameraX === 0),
+    res.map((r) => r.cameraX).join(', '),
   )
   check(
-    `cameraX=${cameraX}: feet stay on the floor`,
-    res.footRow !== null && Math.abs(res.footRow - res.floorY) <= 1.5,
-    `feet at y=${res.footRow}, floor at ${res.floorY.toFixed(3)}`,
+    'the world leaves the camera no scroll range',
+    (await page.evaluate(() => window.__game.GameWorld.WORLD_WIDTH - window.__game.GameWorld.LOGICAL_WIDTH)) === 0,
+    '',
+  )
+  check(
+    'the player is stopped at the world boundary, never past it',
+    res.every((r) => r.playerX >= 0 && r.playerX <= 640),
+    res.map((r) => r.playerX.toFixed(1)).join(', '),
+  )
+  check(
+    'walking left reaches the left world edge',
+    Math.abs(Math.min(...res.map((r) => r.playerX)) - 22) < 1e-6,
+    `min ${Math.min(...res.map((r) => r.playerX)).toFixed(2)}`,
+  )
+  check(
+    'walking right reaches the right world edge',
+    Math.abs(Math.max(...res.map((r) => r.playerX)) - 618) < 1e-6,
+    `max ${Math.max(...res.map((r) => r.playerX)).toFixed(2)}`,
   )
 }
 
@@ -494,106 +504,75 @@ console.log('training dummy is a world fixture')
   const res = await page.evaluate(async () => {
     const g = window.__game
     g.resume()
+    const d = g.world.dummies[0]
+    const worldX = d.x
     const out = []
 
-    // Walk right for a while and sample the dummy's world and screen position.
     g.world.player.setMovementInput(1)
-    for (let i = 0; i < 240; i++) await new Promise((r) => requestAnimationFrame(r))
+    for (let i = 0; i < 300; i++) await new Promise((r) => requestAnimationFrame(r))
     g.world.player.setMovementInput(0)
     for (let i = 0; i < 60; i++) await new Promise((r) => requestAnimationFrame(r))
+    out.push({ phase: 'walked right', dummyWorldX: d.x, cameraX: g.world.cameraX, screenX: d.x - g.world.cameraX, footRow: g.dummyFootRow(d) })
 
-    const d = g.world.dummies[0]
-    out.push({
-      phase: 'walked right',
-      dummyWorldX: d.x,
-      cameraX: g.world.cameraX,
-      playerWorldX: g.world.player.x,
-      screenX: d.x - g.world.cameraX,
-      footRow: g.dummyFootRow(d),
-      floorY: g.GameWorld.FLOOR_Y,
-    })
-
-    // Walk back and confirm the dummy returns to where it started on screen.
-    const startScreen = out[0].screenX
     g.world.player.setMovementInput(-1)
     for (let i = 0; i < 400; i++) await new Promise((r) => requestAnimationFrame(r))
     g.world.player.setMovementInput(0)
     for (let i = 0; i < 60; i++) await new Promise((r) => requestAnimationFrame(r))
-    out.push({
-      phase: 'walked back',
-      dummyWorldX: d.x,
-      cameraX: g.world.cameraX,
-      screenX: d.x - g.world.cameraX,
-      footRow: g.dummyFootRow(d),
-      startScreen,
-    })
+    out.push({ phase: 'walked back', dummyWorldX: d.x, cameraX: g.world.cameraX, screenX: d.x - g.world.cameraX, footRow: g.dummyFootRow(d) })
     return out
   })
 
-  const walked = res[0]
-  const back = res[1]
-  check(
-    'dummy world X never changes as the player walks',
-    walked.dummyWorldX === back.dummyWorldX && walked.dummyWorldX === 750,
-    `world X stayed ${walked.dummyWorldX}`,
-  )
-  check(
-    'camera actually panned while the player walked',
-    Math.abs(walked.cameraX - back.cameraX) > 50,
-    `cameraX ${walked.cameraX.toFixed(1)} -> ${back.cameraX.toFixed(1)}`,
-  )
-  check(
-    'dummy screen X tracks the camera (world object, screen-follows)',
-    Math.abs(walked.screenX - back.screenX) > 50,
-    `screenX ${walked.screenX.toFixed(1)} -> ${back.screenX.toFixed(1)}`,
-  )
-  check(
-    'dummy feet sit on FLOOR_Y',
-    walked.footRow !== null && Math.abs(walked.footRow - walked.floorY) <= 1.5,
-    `feet at y=${walked.footRow}, floor ${walked.floorY.toFixed(3)}`,
-  )
+  for (const r of res) {
+    check(
+      `${r.phase}: dummy world X unchanged and screen position held`,
+      r.dummyWorldX === GameWorld_DUMMY_X_EXPECTED && r.cameraX === 0 && r.screenX === r.dummyWorldX,
+      `worldX ${r.dummyWorldX}, cameraX ${r.cameraX}, screenX ${r.screenX}`,
+    )
+    check(
+      `${r.phase}: dummy feet on FLOOR_Y`,
+      r.footRow !== null && Math.abs(r.footRow - 222.0833) <= 1.5,
+      `feet at y=${r.footRow}`,
+    )
+  }
 }
 
 // --- 7. The dummy is a fixed object in the rendered frame --------------------
 console.log('dummy drawn in world space, not screen space')
 {
-  // Both samples keep the dummy on screen: its world X is 750 and the camera is
-  // clamped to 0..560, so the camera must be past ~110 for it to be visible.
-  const samples = [
-    { playerX: 900, cameraX: 300 },
-    { playerX: 1100, cameraX: 560 },
-  ]
-  const res = await page.evaluate(async (samples) => {
+  const res = await page.evaluate(async () => {
     const g = window.__game
     g.resume()
     const out = []
-    for (const s of samples) {
-      g.pause()
-      g.world.player.x = s.playerX
-      g.world.cameraX = s.cameraX
-      g.world.player.groundY = g.GameWorld.FLOOR_Y
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
-      const cols = g.strawColumns(180, 150, 90)
-      const best = g.strawRun(cols)
-      out.push({ ...s, mid: best.mid, width: best.width, dummyWorldX: g.world.dummies[0].x })
+    // Walk right hard, then sample the dummy where it actually lands on screen.
+    g.world.player.setMovementInput(1)
+    for (let i = 0; i < 300; i++) await new Promise((r) => requestAnimationFrame(r))
+    g.world.player.setMovementInput(0)
+    for (let i = 0; i < 60; i++) await new Promise((r) => requestAnimationFrame(r))
+    g.pause()
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    const best = g.strawRun(g.strawColumns(180, 150, 90))
+    const foot = g.dummyFootRow(g.world.dummies[0])
+    return {
+      mid: best.mid,
+      worldX: g.world.dummies[0].x,
+      cameraX: g.world.cameraX,
+      foot,
+      floorY: g.GameWorld.FLOOR_Y,
+      playerX: g.world.player.x,
     }
-    return out
-  }, samples)
-
-  for (const r of res) {
-    const expected = r.dummyWorldX - r.cameraX
-    check(
-      `cameraX=${r.cameraX}: dummy renders at worldX - cameraX`,
-      Math.abs(r.mid - expected) < 3,
-      `rendered at screen x ${r.mid.toFixed(1)}, expected ${expected}`,
-    )
-  }
-  const delta = res[0].mid - res[1].mid
+  })
   check(
-    'dummy shifts on screen by exactly the camera delta',
-    Math.abs(delta - 260) < 1,
-    `moved ${delta.toFixed(1)}px for a 260px camera move`,
+    'dummy renders at its world X (camera pinned at 0)',
+    Math.abs(res.mid - res.worldX) < 3,
+    `rendered at screen x ${res.mid.toFixed(1)}, world x ${res.worldX}`,
   )
+  check('the camera really is pinned at 0', res.cameraX === 0, `cameraX ${res.cameraX}`)
+  check(
+    'dummy feet sit on FLOOR_Y',
+    res.foot !== null && Math.abs(res.foot - res.floorY) <= 1.5,
+    `feet at y=${res.foot}, floor ${res.floorY.toFixed(3)}`,
+  )
+  check('the player did move while the dummy held its world X', res.playerX > 600, `player at ${res.playerX.toFixed(1)}`)
 }
 
 // --- 8. Dummy hitbox and HP bar follow the dummy ----------------------------
@@ -603,17 +582,19 @@ console.log('hitbox and health bar are anchored to the dummy')
     const g = window.__game
     const d = g.world.dummies[0]
     d.hp = 40
+    const originX = d.x
     const before = { ...d.hitbox }
-    d.x = 900
+    d.x = originX + 150
     const after = { ...d.hitbox }
-    d.x = 750
+    d.x = originX
     d.hp = 100
-    return { before, after, floorY: g.GameWorld.FLOOR_Y, width: d.width, height: d.height }
+    return { before, after, delta: 150, floorY: g.GameWorld.FLOOR_Y, width: d.width, height: d.height }
   })
   check(
     'hitbox follows the dummy world X',
-    Math.abs(res.after.left - (res.before.left + 150)) < 1e-6 && Math.abs(res.after.right - (res.before.right + 150)) < 1e-6,
-    `moved ${(res.after.left - res.before.left).toFixed(1)}px for a 150px move`,
+    Math.abs(res.after.left - (res.before.left + res.delta)) < 1e-6 &&
+      Math.abs(res.after.right - (res.before.right + res.delta)) < 1e-6,
+    `moved ${(res.after.left - res.before.left).toFixed(1)}px for a ${res.delta}px move`,
   )
   check(
     'hitbox bottom is the floor plane',
@@ -634,7 +615,11 @@ console.log('player spawns at the arena centre')
     ...window.__spawn,
     playerScreenX: window.__spawn.playerX - window.__spawn.cameraX,
   }))
-  check('spawn X is the arena centre, not a screen constant', res.spawnX === res.arenaCenter && res.spawnX === 600, `spawnX ${res.spawnX}`)
+  check(
+    'spawn X is the arena centre, not a screen constant',
+    res.spawnX === res.arenaCenter && res.spawnX === res.logicalWidth / 2,
+    `spawnX ${res.spawnX}, arena centre ${res.arenaCenter}, half width ${res.logicalWidth / 2}`,
+  )
   check('player starts at the spawn X', Math.abs(res.playerX - res.spawnX) < 1e-6, `playerX ${res.playerX}`)
   check(
     'spawn leaves room to walk both ways',

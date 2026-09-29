@@ -18,7 +18,37 @@ export interface LoadedImage {
 export class GameWorld {
   static readonly LOGICAL_WIDTH = 640
   static readonly LOGICAL_HEIGHT = 360
-  static readonly WORLD_WIDTH = 1200
+
+  /**
+   * Native pixel size of the arena backdrop (img_arena_bg_hd.png, synced to
+   * bg/arena_bg.png). The backdrop is drawn with a single uniform scale, so any
+   * source row maps to logical Y via: row * LOGICAL_HEIGHT / this.
+   */
+  static readonly BACKGROUND_WIDTH = 1536
+  static readonly BACKGROUND_HEIGHT = 864
+
+  /** Uniform scale the backdrop is drawn at. 360 / 864 is exactly 5/12. */
+  static readonly BACKGROUND_SCALE = GameWorld.LOGICAL_HEIGHT / GameWorld.BACKGROUND_HEIGHT
+
+  /**
+   * Logical size of the backdrop once scaled.
+   *
+   * 1536 x 5/12 is exactly 640 and 864 x 5/12 is exactly 360: the artwork is a
+   * single frame that covers the viewport precisely. It is one finite environment,
+   * not a texture, so it is drawn once, never repeated and never mirrored.
+   */
+  static readonly BACKGROUND_LOGICAL_WIDTH = GameWorld.BACKGROUND_WIDTH * GameWorld.BACKGROUND_SCALE
+  static readonly BACKGROUND_LOGICAL_HEIGHT = GameWorld.BACKGROUND_HEIGHT * GameWorld.BACKGROUND_SCALE
+
+  /**
+   * Width of the playable world, in logical pixels.
+   *
+   * The world is exactly the backdrop: the player can walk the full width of the
+   * painted arena, and the arena edge is the world edge. Because the backdrop is
+   * one frame, the camera has no room to scroll, and there is nothing beyond the
+   * edges that could be filled with a flipped or repeated copy.
+   */
+  static readonly WORLD_WIDTH = GameWorld.BACKGROUND_LOGICAL_WIDTH
 
   /**
    * Centre of the playable arena, in world units.
@@ -39,17 +69,10 @@ export class GameWorld {
    * match opens as player-versus-target, and left untouched thereafter: a fixed
    * world position, not a screen or player-relative one.
    */
-  static readonly DUMMY_X = GameWorld.ARENA_CENTER_X + 150
+  static readonly DUMMY_X = GameWorld.ARENA_CENTER_X + 130
 
   /** World distance between the two training dummies. */
-  static readonly DUMMY_SPACING = 300
-
-  /**
-   * Native pixel height of the arena backdrop (img_arena_bg_hd.png, synced to
-   * bg/arena_bg.png). The backdrop is drawn with a single uniform scale, so any
-   * source row maps to logical Y via: row * LOGICAL_HEIGHT / this.
-   */
-  static readonly BACKGROUND_HEIGHT = 864
+  static readonly DUMMY_SPACING = 120
 
   /**
    * Row of the visible stone floor surface, measured from the backdrop artwork.
@@ -72,20 +95,6 @@ export class GameWorld {
    * an arbitrary line near the bottom of the screen.
    */
   static readonly FLOOR_Y = (GameWorld.BACKGROUND_FLOOR_ROW * GameWorld.LOGICAL_HEIGHT) / GameWorld.BACKGROUND_HEIGHT
-
-  /**
-   * Uniform scale the backdrop is drawn at. 360 / 864 is exactly 5/12, which maps
-   * the 1536x864 art to the 640x360 logical viewport with no distortion and no
-   * letterboxing. Because the same factor drives both the drawing and FLOOR_Y
-   * above, the floor can never drift away from the feet.
-   */
-  static readonly BACKGROUND_SCALE = GameWorld.LOGICAL_HEIGHT / GameWorld.BACKGROUND_HEIGHT
-
-  /**
-   * Width of the backdrop once scaled, in logical pixels. 1536 x 5/12 is exactly
-   * 640, the viewport width; the arena is wider, so the plate repeats.
-   */
-  static readonly BACKGROUND_LOGICAL_WIDTH = 1536 * GameWorld.BACKGROUND_SCALE
 
   /** Logical size a 128px sprite cell is drawn at (aspect preserved). */
   static readonly SPRITE_DISPLAY_SIZE = 100
@@ -205,12 +214,12 @@ export class GameWorld {
   }
 
   /**
-   * Draws the backdrop across the whole arena in world space.
+   * Draws the backdrop once, in world space, at its natural size.
    *
-   * The plate is 640 logical px wide against a 1200-unit arena, so it is mirrored
-   * and repeated to fill the width. Mirroring means the join is a palindrome
-   * rather than an arbitrary cut, and because the plate's floor edge is
-   * horizontal, panning the camera cannot move the floor off FLOOR_Y.
+   * The artwork is a single finite environment that already covers the viewport
+   * exactly, so it is neither mirrored, repeated, nor flipped. It is anchored to
+   * world (0, 0) and the camera is clamped to the world, so the plate can never
+   * be drawn twice or leave a gap at either edge.
    */
   private drawBackdrop(ctx: CanvasRenderingContext2D): void {
     const bg = this.background
@@ -221,23 +230,17 @@ export class GameWorld {
       return
     }
 
-    const plateW = GameWorld.BACKGROUND_LOGICAL_WIDTH
-    const plateH = bg.height * GameWorld.BACKGROUND_SCALE
-    const count = Math.ceil(GameWorld.WORLD_WIDTH / plateW)
-
-    for (let i = 0; i < count; i++) {
-      const x = i * plateW
-      // Alternate mirrored copies so the seam falls on a symmetric join.
-      if (i % 2 === 1) {
-        ctx.save()
-        ctx.translate(x + plateW, 0)
-        ctx.scale(-1, 1)
-        ctx.drawImage(bg.image, 0, 0, bg.width, bg.height, 0, 0, plateW, plateH)
-        ctx.restore()
-      } else {
-        ctx.drawImage(bg.image, 0, 0, bg.width, bg.height, x, 0, plateW, plateH)
-      }
-    }
+    ctx.drawImage(
+      bg.image,
+      0,
+      0,
+      bg.width,
+      bg.height,
+      0,
+      0,
+      bg.width * GameWorld.BACKGROUND_SCALE,
+      bg.height * GameWorld.BACKGROUND_SCALE,
+    )
   }
 
   /**
@@ -271,13 +274,11 @@ export class GameWorld {
     // locked to the dungeon while the player walks.
     ctx.translate(-this.cameraX, 0)
 
-    // 1. Backdrop, drawn in world space at a single uniform scale.
+    // 1. Backdrop, drawn once in world space at a single uniform scale.
     //
-    // The plate is BACKGROUND_LOGICAL_WIDTH wide, narrower than the 1200-unit
-    // arena, so it is mirrored and repeated across the world. It is anchored to
-    // world Y, not to the viewport, which is what keeps the floor line at FLOOR_Y
-    // no matter where the camera is: the plate's floor row is horizontal, so
-    // panning X cannot move it.
+    // The artwork already covers the viewport exactly and the world is exactly as
+    // wide as the artwork, so there is nothing to repeat, mirror or fill in: the
+    // plate is drawn at world (0, 0) and the camera never leaves [0, 0].
     this.drawBackdrop(ctx)
 
     // 2. Arena boundary stone pillars, in world space at the arena edges.
