@@ -1,5 +1,6 @@
 import type { AnimationConfig } from './AnimationConfig'
 import { PlayerAction } from './PlayerAction'
+import { DEFAULT_FOOT_ROW } from './spriteMetrics'
 
 /**
  * Encapsulates a loaded sprite sheet image and its horizontal frame slices.
@@ -35,6 +36,17 @@ export class SpriteSheet {
       sw: this.frameWidth,
       sh: this.frameHeight,
     }
+  }
+
+  /**
+   * Bottom-most opaque source row of a frame. The sprite cells are not filled to the
+   * bottom edge, and the walk cycle's contact row drifts by a few rows, so this is
+   * read per frame rather than baked into a single constant. Frames with no measured
+   * row fall back to the idle rest pose.
+   */
+  footRowForFrame(index: number): number {
+    const clamped = Math.min(Math.max(index, 0), this.frameCount - 1)
+    return this.config.footRows[clamped] ?? DEFAULT_FOOT_ROW
   }
 }
 

@@ -81,31 +81,72 @@ preview) on both platforms.
 
 The arena floor is **derived from the backdrop artwork**, not guessed from the screen size.
 
-The backdrop (`img_arena_bg_hd.png`, 1536×864) is drawn scaled into 960×360 logical pixels,
-so artwork row *r* maps to logical Y via `r × 360 / 864`. The stone floor is a hard
-horizontal edge running the full width of the image — a dark ledge seam at row **618**
-(168/192 sampled columns agree) with the lit flagstone surface starting at row **620**
-(111/158 columns; the rest are pillars occluding the edge). There is no perspective slope.
+The backdrop (`img_arena_bg_hd.png`, 1536×864) is drawn with a **single uniform scale** of
+`360 / 864 = 5/12`, which maps the art exactly onto the 640×360 logical viewport — no
+distortion, no letterboxing, no screen-relative coordinates. Because the same factor drives
+both the drawing and the floor constant, the two cannot drift apart.
+
+Row 533 is where the wall ends and the stone floor begins. Measuring mean luma and lit-pixel
+fraction across the image width, the transition is unambiguous:
+
+| row | mean luma | lit pixels |
+|-----|-----------|-----------|
+| 532 | 22.1 | 20% |
+| 533 | 32.0 | 50% |
+| 534 | 35.5 | 65% |
 
 ```
-GROUND_Y = 620 × (360 / 864) = 258.33 logical px
+FLOOR_Y = 533 × (360 / 864) = 222.083 logical px
 ```
 
-`GameWorld.FLOOR_Y` is that value. It is the single world-space collision plane: the
-player's feet rest exactly on it while idle and walking, the jump impulse launches from
-it, and gravity returns to it. The engine's stone slab is drawn from `FLOOR_Y` downward,
-so its top edge coincides with the backdrop's own floor line and the background stays
-visible above it as the reference.
+The edge is horizontal, so one world-space plane is exact across the arena. `FLOOR_Y` is
+the single collision plane: the player's feet rest on it while idle and walking, the jump
+impulse launches from it, and gravity returns to it.
 
-The sprite cell also carries transparent padding below the feet — opaque content ends at
-row 111 of the 128px cell in every frame of both sheets, leaving 16 empty rows, which is
-12.5 logical px at the 100px display size. `GameWorld.SPRITE_FOOT_OFFSET` offsets the
-draw-rect by that amount so the *visible* feet, not the padding, land on `FLOOR_Y`. The
-PNG itself is neither modified nor stretched.
+> Row 620 is a bright flagstone joint *inside* the floor, not its top edge. It produces a
+> larger single-row brightness jump than the real horizon does, which is how an earlier
+> version of this file came to place the knight standing in front of the wall. The floor
+> edge has to be found with a windowed comparison, not a one-row difference.
 
-The walk cycle's last four frames let the cloak hang one to two source pixels lower than
-the idle rest pose, so worst-case penetration is 0.78 logical px (sub-pixel at typical
-display scale). The idle sheet is exact to the pixel on all 12 frames.
+The backdrop is drawn in **screen space, before the camera translate**, so panning cannot
+slide the floor relative to the feet. Nothing opaque is painted over it: the engine's
+original stone slab and flagstone grid were removed, since covering the floor is exactly
+what hid the surface the player has to stand on. Pillars and a soft contact shadow remain.
+
+### Per-frame foot rows
+
+The 128px sprite cells are not filled to the bottom edge, and the walk cycle's contact row
+moves, so the padding is **measured per frame** rather than assumed constant:
+
+| sheet | bottom-most opaque row per frame |
+|-------|----------------------------------|
+| `idle.png` | 111 on all 12 frames |
+| `walk.png` | 111, 111, 110, 110, 110, 111, 110, 111, 112, 112, 112, 112 |
+
+Those rows live in the animation config (`footRows` in `AnimationConfig.kt` /
+`AnimationConfig.ts`, measured by scanning each sheet's alpha channel) and are read through
+`footRowForFrame(index)`. At the 100px display size they span 11.72–13.28 logical px, so a
+single constant would leave the extreme walk frames up to 0.78 logical px off the floor.
+The PNGs are neither modified nor stretched.
+
+### Verifying it against the rendered output
+
+`web/src/game/logic.test.ts` (`npm test`) proves the geometry is self-consistent, but it
+cannot prove the pixels. `web/scripts/verify-floor.mjs` drives the real page in Chromium via
+a `?debug=1` hook and measures the rendered canvas:
+
+- the plate's wall/floor horizon, found by a windowed brightness comparison
+- the character's lowest painted row, read from the alpha channel of the real draw path
+  (`GameWorld.renderCharacter`, extracted from `render` for exactly this purpose)
+
+```
+cd web && npm run build && npm run verify:floor
+```
+
+Current result: horizon at source row 533, feet edge at logical y 221.75 against a floor of
+222.083 — a 0.33px difference, which is one device pixel at 2× and the closest a pixel-grid
+measurement can get. Verified across idle and all walk foot-row variants, and at four camera
+offsets.
 
 ## Shared assets
 

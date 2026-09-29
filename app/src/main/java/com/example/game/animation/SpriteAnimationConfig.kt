@@ -10,6 +10,10 @@ package com.example.game.animation
  * @param loop Whether the animation loops continuously or stops at the final frame.
  * @param priority Higher priority actions cannot be interrupted by lower priority actions.
  * @param canBeCancelledByMovement Whether user movement immediately cancels this animation back to WALK.
+ * @param footRows Bottom-most opaque source row per frame, in the same order as the sheet's
+ *   frames. Defaults to the measured data for [sourceFileName]; frames beyond the list fall
+ *   back to the rest-pose row. This is what keeps the visible feet on the floor when the
+ *   art is not bottom-aligned.
  */
 data class AnimationConfig(
     val action: PlayerAction,
@@ -18,7 +22,8 @@ data class AnimationConfig(
     val fps: Int = 12,
     val loop: Boolean = true,
     val priority: Int = 0,
-    val canBeCancelledByMovement: Boolean = true
+    val canBeCancelledByMovement: Boolean = true,
+    val footRows: List<Int> = SpriteMetrics.footRowsFor(sourceFileName)
 )
 
 object DefaultAnimationConfigs {

@@ -15,11 +15,13 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "verify:floor": "node scripts/verify-floor.mjs",
     "test": "esbuild src/game/logic.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/logic.test.mjs --log-level=error && node node_modules/.cache/logic.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.3",
     "esbuild": "^0.28.2",
+    "playwright-core": "^1.63.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.5"
   }

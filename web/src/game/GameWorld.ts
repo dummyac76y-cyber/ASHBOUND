@@ -1,6 +1,7 @@
 import { DamageText, SparkParticle, TrainingDummy } from './CombatEntity'
 import { PlayerController, rectsIntersect } from './PlayerController'
 import type { SpriteAnimationSystem } from './SpriteAnimationSystem'
+import { DEFAULT_FOOT_ROW, footOffsetForRow } from './spriteMetrics'
 
 /** A decoded image plus its intrinsic size, needed for 9-argument drawImage. */
 export interface LoadedImage {
@@ -21,53 +22,52 @@ export class GameWorld {
   static readonly SPAWN_X = 300
 
   /**
-   * Native pixel height of the arena backdrop (bg/arena_bg.png, synced from
-   * img_arena_bg_hd.png). The backdrop is drawn scaled to fill LOGICAL_HEIGHT, so
-   * any row in the artwork maps to logical Y via: row * LOGICAL_HEIGHT / this.
+   * Native pixel height of the arena backdrop (img_arena_bg_hd.png, synced to
+   * bg/arena_bg.png). The backdrop is drawn with a single uniform scale, so any
+   * source row maps to logical Y via: row * LOGICAL_HEIGHT / this.
    */
   static readonly BACKGROUND_HEIGHT = 864
 
   /**
    * Row of the visible stone floor surface, measured from the backdrop artwork.
    *
-   * The floor is a hard horizontal edge running the full width of the image: a dark
-   * ledge seam at row 618 (168/192 sampled columns agree) with the lit flagstone
-   * surface starting at row 620 (111/158 columns; the remainder are pillars and
-   * props occluding the edge). There is no perspective slope, so a single
-   * world-space plane is exact across the whole arena.
+   * Row statistics across the image width show a hard horizon: row 532 is still
+   * dark wall (mean 21.6, 18.5% lit, 43.9% of sampled columns agreeing), while row
+   * 533 is the first lit floor row (mean 31.5, 51.2% lit, 68.9% coherent). The
+   * edge is horizontal, so one world-space plane is exact across the arena. The
+   * bright seam further down at row 620 is a flagstone joint *inside* the floor,
+   * not its top edge, and using it left the knight standing in front of the wall.
    */
-  static readonly BACKGROUND_FLOOR_ROW = 620
+  static readonly BACKGROUND_FLOOR_ROW = 533
 
   /**
    * World-space ground / collision plane, in logical pixels.
    *
-   * The player's feet rest exactly on this Y at all times, and it is the Y the jump
-   * impulse starts from and gravity returns to. Derived from the backdrop rather
-   * than guessed, so the knight stands on the drawn stone floor instead of an
-   * arbitrary line near the bottom of the screen.
+   * The player's visible feet rest exactly on this Y at all times, and it is the Y
+   * the jump impulse starts from and gravity returns to. Derived from the backdrop
+   * rather than guessed, so the knight stands on the drawn stone floor instead of
+   * an arbitrary line near the bottom of the screen.
    */
   static readonly FLOOR_Y = (GameWorld.BACKGROUND_FLOOR_ROW * GameWorld.LOGICAL_HEIGHT) / GameWorld.BACKGROUND_HEIGHT
 
-  /** Native height of one sprite sheet cell, in source pixels. */
-  static readonly SPRITE_CELL_HEIGHT = 128
-
   /**
-   * Fully transparent rows below the character's feet inside a 128px cell.
-   * Measured from the art: opaque content ends at row 111 in every frame of both
-   * idle.png and walk.png, leaving 16 empty rows.
+   * Uniform scale the backdrop is drawn at. 360 / 864 is exactly 5/12, which maps
+   * the 1536x864 art to the 640x360 logical viewport with no distortion and no
+   * letterboxing. Because the same factor drives both the drawing and FLOOR_Y
+   * above, the floor can never drift away from the feet.
    */
-  static readonly SPRITE_FOOT_PADDING = 16
+  static readonly BACKGROUND_SCALE = GameWorld.LOGICAL_HEIGHT / GameWorld.BACKGROUND_HEIGHT
 
-  /** Logical size a 128px sprite cell is drawn at. */
+  /** Logical size a 128px sprite cell is drawn at (aspect preserved). */
   static readonly SPRITE_DISPLAY_SIZE = 100
 
   /**
-   * How far below FLOOR_Y the sprite's draw-rect bottom must sit so that the visible
-   * feet — not the transparent padding — land on the ground plane. Without this the
-   * knight floats by this amount every frame.
+   * Rest-pose foot offset, i.e. the padding below the opaque pixels of the idle
+   * sheet's frames. Kept for diagnostics and tests; the renderer uses the
+   * per-frame value from the animation system instead, since the walk cycle's
+   * contact row is not constant.
    */
-  static readonly SPRITE_FOOT_OFFSET =
-    (GameWorld.SPRITE_FOOT_PADDING / GameWorld.SPRITE_CELL_HEIGHT) * GameWorld.SPRITE_DISPLAY_SIZE
+  static readonly SPRITE_FOOT_OFFSET = footOffsetForRow(DEFAULT_FOOT_ROW, GameWorld.SPRITE_DISPLAY_SIZE)
 
   readonly player: PlayerController
   readonly dummies: TrainingDummy[]
@@ -160,49 +160,68 @@ export class GameWorld {
     }
   }
 
+  /**
+   * Draws the character sprite and nothing else, in the caller's (already camera
+   * translated) coordinate space.
+   *
+   * Split out of {@link render} so headless verification can run the real drawing
+   * path onto a transparent surface and read the foot line straight off the alpha
+   * channel, instead of inferring it from a difference against the backdrop.
+   */
+  renderCharacter(ctx: CanvasRenderingContext2D): void {
+    // The 128x128 cell is drawn at 100x100 logical pixels (no stretching, aspect
+    // preserved). The cell's transparent lower edge is corrected per frame so the
+    // visible feet — and therefore the collision bottom — land exactly on FLOOR_Y.
+    const spriteDisplaySize = GameWorld.SPRITE_DISPLAY_SIZE
+    this.animationSystem.render(
+      ctx,
+      this.player.x,
+      this.player.groundY + this.animationSystem.footOffsetForCurrentFrame(spriteDisplaySize),
+      spriteDisplaySize,
+      spriteDisplaySize,
+      this.player.isFacingRight,
+    )
+  }
+
   /** Renders the game world. The ctx is already in logical coordinates. */
   render(ctx: CanvasRenderingContext2D): void {
-    ctx.save()
-    // Translate world by negative camera position
-    ctx.translate(-this.cameraX, 0)
-
-    // 1. Parallax background
+    // 1. Backdrop, drawn in screen space before the camera translate.
+    //
+    // The backdrop is a fixed 1536x864 plate that exactly covers the 640x360
+    // viewport at BACKGROUND_SCALE, so it is not panned by the camera. That is
+    // deliberate: the floor is baked into the plate, and keeping the plate out of
+    // the camera transform means the floor cannot slide relative to the feet as
+    // the player walks. FLOOR_Y is derived from the same scale, so the two agree
+    // by construction at every camera offset.
     const bg = this.background
     if (bg) {
-      const bgX = this.cameraX * 0.3 // parallax factor
       ctx.drawImage(
         bg.image,
         0,
         0,
         bg.width,
         bg.height,
-        bgX,
         0,
-        GameWorld.LOGICAL_WIDTH * 1.5,
-        GameWorld.LOGICAL_HEIGHT,
+        0,
+        bg.width * GameWorld.BACKGROUND_SCALE,
+        bg.height * GameWorld.BACKGROUND_SCALE,
       )
     } else {
       // Fallback dark castle gradient
       ctx.fillStyle = 'rgb(18, 20, 28)'
-      ctx.fillRect(0, 0, GameWorld.WORLD_WIDTH, GameWorld.LOGICAL_HEIGHT)
+      ctx.fillRect(0, 0, GameWorld.LOGICAL_WIDTH, GameWorld.LOGICAL_HEIGHT)
     }
 
-    // 2. Stone Arena Ground
-    ctx.fillStyle = 'rgb(36, 40, 52)'
-    ctx.fillRect(0, GameWorld.FLOOR_Y, GameWorld.WORLD_WIDTH, GameWorld.LOGICAL_HEIGHT)
+    ctx.save()
+    // Translate world by negative camera position
+    ctx.translate(-this.cameraX, 0)
 
-    // Flagstone ground texture lines
-    ctx.fillStyle = 'rgb(55, 62, 80)'
-    ctx.fillRect(0, GameWorld.FLOOR_Y, GameWorld.WORLD_WIDTH, 4)
-
-    for (let x = 0; x <= GameWorld.WORLD_WIDTH; x += 60) {
-      ctx.fillStyle = 'rgb(28, 31, 40)'
-      ctx.fillRect(x, GameWorld.FLOOR_Y + 4, 1, GameWorld.LOGICAL_HEIGHT)
-      ctx.fillStyle = 'rgb(48, 54, 70)'
-      ctx.fillRect(x + 30, GameWorld.FLOOR_Y + 24, 1, GameWorld.LOGICAL_HEIGHT)
-    }
-
-    // Arena boundary stone pillars
+    // 2. Arena boundary stone pillars.
+    //
+    // No ground slab or flagstone grid is drawn here on purpose: the backdrop
+    // already renders a detailed stone floor starting at FLOOR_Y, and painting an
+    // opaque rectangle over that area is what previously hid the very surface the
+    // player has to stand on.
     ctx.fillStyle = 'rgb(50, 55, 70)'
     ctx.fillRect(0, 0, 24, GameWorld.FLOOR_Y)
     ctx.fillRect(GameWorld.WORLD_WIDTH - 24, 0, 24, GameWorld.FLOOR_Y)
@@ -212,26 +231,14 @@ export class GameWorld {
       dummy.render(ctx)
     }
 
-    // 4. Character Shadow
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.47)'
+    // 4. Character contact shadow, seated on the floor line.
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.32)'
     ctx.beginPath()
-    ctx.ellipse(this.player.x, GameWorld.FLOOR_Y, 22, 4, 0, 0, Math.PI * 2)
+    ctx.ellipse(this.player.x, GameWorld.FLOOR_Y + 1, 18, 3, 0, 0, Math.PI * 2)
     ctx.fill()
 
     // 5. Render Character Sprite
-    // The 128x128 cell is drawn at 100x100 logical pixels (no stretching, aspect
-    // preserved). The cell carries 16px of transparent padding below the feet, so the
-    // draw-rect bottom is offset by SPRITE_FOOT_OFFSET to put the visible feet — and
-    // therefore the collision bottom — exactly on FLOOR_Y.
-    const spriteDisplaySize = GameWorld.SPRITE_DISPLAY_SIZE
-    this.animationSystem.render(
-      ctx,
-      this.player.x,
-      this.player.groundY + GameWorld.SPRITE_FOOT_OFFSET,
-      spriteDisplaySize,
-      spriteDisplaySize,
-      this.player.isFacingRight,
-    )
+    this.renderCharacter(ctx)
 
     // 6. Render Particles
     for (const p of this.particles) {

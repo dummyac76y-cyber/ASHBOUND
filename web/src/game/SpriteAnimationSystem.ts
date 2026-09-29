@@ -2,6 +2,7 @@ import type { AnimationConfig } from './AnimationConfig'
 import { createDefaultConfigs } from './AnimationConfig'
 import { PlayerAction, PLAYER_ACTIONS } from './PlayerAction'
 import { type ImageFactory, SpriteSheet, defaultImageFactory, loadSpriteSheet } from './SpriteSheet'
+import { footOffsetForRow } from './spriteMetrics'
 
 /**
  * Reusable 2D Sprite Animation System.
@@ -80,6 +81,17 @@ export class SpriteAnimationSystem {
 
   getAllActions(): PlayerAction[] {
     return PLAYER_ACTIONS
+  }
+
+  /**
+   * Distance the current frame's draw-rect bottom must sit below the ground plane for
+   * that frame's *visible* feet to land on it. Resolved per frame because the walk
+   * cycle's contact row moves; a single constant leaves those frames off the floor.
+   */
+  footOffsetForCurrentFrame(displaySize: number): number {
+    const sheet = this.sheets.get(this.currentAction) ?? this.sheets.get(PlayerAction.IDLE)
+    if (!sheet) return 0
+    return footOffsetForRow(sheet.footRowForFrame(this.currentFrameIndex), displaySize)
   }
 
   /**

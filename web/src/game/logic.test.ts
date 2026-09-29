@@ -9,6 +9,9 @@ import { GameWorld } from './GameWorld.ts'
 import { PlayerController, rectsIntersect } from './PlayerController.ts'
 import { PlayerAction } from './PlayerAction.ts'
 import type { SpriteAnimationSystem } from './SpriteAnimationSystem.ts'
+import { createDefaultConfigs } from './AnimationConfig.ts'
+import { SpriteSheet } from './SpriteSheet.ts'
+import { DEFAULT_FOOT_ROW, FOOT_ROWS_BY_SHEET, footOffsetForRow } from './spriteMetrics.ts'
 
 let failures = 0
 function check(name: string, condition: boolean, detail = ''): void {
@@ -207,14 +210,30 @@ const toBackgroundRow = (worldY: number): number => worldY / BG_SCALE_Y
 
 console.log('ground plane is derived from the backdrop')
 check(
-  'FLOOR_Y matches the measured floor row',
-  Math.abs(GameWorld.FLOOR_Y - 258.3333) < 0.01,
+  'FLOOR_Y matches the measured floor row (533 * 5/12)',
+  Math.abs(GameWorld.FLOOR_Y - 222.0833) < 0.01,
   `got ${GameWorld.FLOOR_Y}`,
 )
 check(
-  'ground plane maps back to backdrop row 620',
+  'backdrop is drawn at a uniform 5/12 scale',
+  Math.abs(GameWorld.BACKGROUND_SCALE - 5 / 12) < 1e-12,
+  `got ${GameWorld.BACKGROUND_SCALE}`,
+)
+check(
+  'uniform scale maps the 1536x864 plate exactly onto the 640x360 viewport',
+  Math.abs(1536 * GameWorld.BACKGROUND_SCALE - GameWorld.LOGICAL_WIDTH) < 1e-9 &&
+    Math.abs(864 * GameWorld.BACKGROUND_SCALE - GameWorld.LOGICAL_HEIGHT) < 1e-9,
+  `got ${1536 * GameWorld.BACKGROUND_SCALE}x${864 * GameWorld.BACKGROUND_SCALE}`,
+)
+check(
+  'ground plane maps back to backdrop row 533',
   Math.abs(toBackgroundRow(GameWorld.FLOOR_Y) - GameWorld.BACKGROUND_FLOOR_ROW) < 0.01,
   `got row ${toBackgroundRow(GameWorld.FLOOR_Y).toFixed(2)}`,
+)
+check(
+  'floor is the lit surface, not the row-620 flagstone joint',
+  GameWorld.BACKGROUND_FLOOR_ROW === 533 && GameWorld.FLOOR_Y < 230,
+  `got row ${GameWorld.BACKGROUND_FLOOR_ROW}, y ${GameWorld.FLOOR_Y}`,
 )
 check(
   'ground plane is no longer the old screen-relative 285',
@@ -222,28 +241,83 @@ check(
   `got ${GameWorld.FLOOR_Y}`,
 )
 check(
-  'foot offset equals the sprite transparent padding',
+  'rest-pose foot offset equals the idle sheet padding',
   Math.abs(GameWorld.SPRITE_FOOT_OFFSET - 12.5) < 0.01,
   `got ${GameWorld.SPRITE_FOOT_OFFSET}`,
 )
-check(
-  'visible feet land on the floor row, not the cell bottom',
-  Math.abs(
-    toBackgroundRow(GameWorld.FLOOR_Y + GameWorld.SPRITE_FOOT_OFFSET) - 720.83, // 620 + 12.5 logical px
-  ) > 0,
-  '',
-)
+
+console.log('per-frame foot rows come from the artwork, not a constant')
 {
-  // The sprite rect bottom sits FOOT_OFFSET below the plane; walking back up by
-  // the padding must land exactly on it.
-  const rectBottom = GameWorld.FLOOR_Y + GameWorld.SPRITE_FOOT_OFFSET
-  const visibleFeet = rectBottom - GameWorld.SPRITE_FOOT_OFFSET
-  check('visible feet resolve to exactly FLOOR_Y', Math.abs(visibleFeet - GameWorld.FLOOR_Y) < 1e-9, `got ${visibleFeet}`)
+  const walkFootRows = FOOT_ROWS_BY_SHEET['walk.png']
+  const idleFootRows = FOOT_ROWS_BY_SHEET['idle.png']
+
+  check('walk foot rows are measured per frame, not a single constant', new Set(walkFootRows).size > 1, '')
+  check('every walk frame has a measured foot row', walkFootRows.length === 12, `got ${walkFootRows.length}`)
+  check('every idle frame has a measured foot row', idleFootRows.length === 12, `got ${idleFootRows.length}`)
+  check('idle foot rows are the constant rest pose', idleFootRows.every((r) => r === 111), '')
+
+  const size = GameWorld.SPRITE_DISPLAY_SIZE
+  const offsets = walkFootRows.map((r) => footOffsetForRow(r, size))
+  // The walk contact row ranges 110..112, so the correct offset spans ~1.56px. A
+  // single constant would therefore misplace the extreme frames by ~0.78px each.
   check(
-    'feet sit on the lit floor surface (row 620), not the dark seam or below',
-    Math.abs(toBackgroundRow(visibleFeet) - 620) < 0.01,
-    `got row ${toBackgroundRow(visibleFeet).toFixed(2)}`,
+    'walk foot offsets span ~1.56px, so a constant would err by ~0.78px',
+    Math.abs(Math.max(...offsets) - Math.min(...offsets) - 1.5625) < 0.01,
+    `spread ${(Math.max(...offsets) - Math.min(...offsets)).toFixed(3)}`,
   )
+}
+
+console.log('the sprite cell is anchored on each frame\'s own opaque bottom')
+{
+  // SpriteSheet only reads image.width/height here, so a plain stub is enough.
+  const stubImage = { width: 1536, height: 128 } as unknown as HTMLCanvasElement
+  const size = GameWorld.SPRITE_DISPLAY_SIZE
+
+  for (const [action, sheetFile] of [
+    [PlayerAction.IDLE, 'idle.png'],
+    [PlayerAction.WALK, 'walk.png'],
+  ] as const) {
+    const config = createDefaultConfigs().get(action)!
+    const sheet = new SpriteSheet(action, stubImage, config)
+
+    check(`${sheetFile}: every frame reports its measured foot row`, sheet.footRowForFrame(0) !== undefined, '')
+
+    let worst = 0
+    for (let frame = 0; frame < sheet.frameCount; frame++) {
+      // The renderer puts the draw-rect bottom this far below FLOOR_Y...
+      const rectBottom = GameWorld.FLOOR_Y + footOffsetForRow(sheet.footRowForFrame(frame), size)
+      // ...so walking back up by that frame's own padding lands on the plane.
+      const visibleFeet = rectBottom - footOffsetForRow(sheet.footRowForFrame(frame), size)
+      worst = Math.max(worst, Math.abs(visibleFeet - GameWorld.FLOOR_Y))
+    }
+    check(`${sheetFile}: all ${sheet.frameCount} frames put their visible feet on FLOOR_Y`, worst < 1e-9, `worst ${worst}`)
+  }
+
+  const walkSheet = new SpriteSheet(PlayerAction.WALK, stubImage, createDefaultConfigs().get(PlayerAction.WALK)!)
+  check(
+    'walk frames report distinct foot rows where the art varies',
+    walkSheet.footRowForFrame(2) === 110 && walkSheet.footRowForFrame(8) === 112 && walkSheet.footRowForFrame(0) === 111,
+    '',
+  )
+  check(
+    'out-of-range frame index clamps to the last frame, like frameRect does',
+    walkSheet.footRowForFrame(99) === 112 && walkSheet.footRowForFrame(-5) === 111,
+    `got ${walkSheet.footRowForFrame(99)} / ${walkSheet.footRowForFrame(-5)}`,
+  )
+  {
+    // A sheet with no measured data must still anchor on the rest pose rather than
+    // silently treating the cell bottom as the foot.
+    const unmeasured = new SpriteSheet(
+      PlayerAction.DASH,
+      stubImage,
+      { ...createDefaultConfigs().get(PlayerAction.DASH)!, footRows: [] },
+    )
+    check(
+      'unmeasured frames fall back to the rest-pose foot row',
+      unmeasured.footRowForFrame(0) === DEFAULT_FOOT_ROW,
+      `got ${unmeasured.footRowForFrame(0)}`,
+    )
+  }
 }
 
 console.log('IDLE: feet pinned to the ground plane')

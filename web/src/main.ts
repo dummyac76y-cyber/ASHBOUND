@@ -1,5 +1,6 @@
 import { assetUrl } from './assetUrl'
 import { GameWorld } from './game/GameWorld'
+import type { PlayerAction } from './game/PlayerAction'
 import { SpriteAnimationSystem } from './game/SpriteAnimationSystem'
 import { AnimationInspectorDialog } from './ui/AnimationInspectorDialog'
 import { GameHud } from './ui/GameHud'
@@ -111,11 +112,12 @@ async function boot(): Promise<void> {
   let lastFpsCalc = performance.now()
 
   let lastFrameTime = 0
+  let paused = false
   function tick(now: number): void {
     if (lastFrameTime !== 0) {
       const dt = (now - lastFrameTime) / 1000
       lastFrameTime = now
-      world.update(dt)
+      if (!paused) world.update(dt)
 
       frameCounter++
       if (now - lastFpsCalc >= 1000) {
@@ -155,6 +157,40 @@ async function boot(): Promise<void> {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) lastFrameTime = 0
   })
+
+  // Test hook, opt-in via ?debug=1. It lets the headless verification harness put
+  // the game into an exact state (a chosen action/frame, a chosen camera X) and
+  // read back the same numbers the renderer uses, so the rendered pixels can be
+  // checked against the geometry instead of eyeballed.
+  if (new URLSearchParams(location.search).has('debug')) {
+    Object.assign(window, {
+      __game: {
+        world,
+        animations,
+        GameWorld,
+        /**
+         * Freezes the simulation while still drawing. Needed because update() would
+         * otherwise overwrite the pinned action and frame on the very next tick.
+         */
+        pause(): void {
+          paused = true
+        },
+        resume(): void {
+          paused = false
+          lastFrameTime = 0
+        },
+        /** Sets an action and pins a frame, for pixel-stable captures. */
+        setFrame(action: PlayerAction, frameIndex: number): void {
+          animations.playAction(action, true)
+          animations.currentFrameIndex = frameIndex
+        },
+        /** Pins the camera so the floor line can be checked at several offsets. */
+        setCamera(x: number): void {
+          world.cameraX = x
+        },
+      },
+    })
+  }
 }
 
 boot().catch((err) => {

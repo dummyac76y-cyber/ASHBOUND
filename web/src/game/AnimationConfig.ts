@@ -1,4 +1,5 @@
 import { PlayerAction } from './PlayerAction'
+import { footRowsFor } from './spriteMetrics'
 
 /**
  * Modular animation configuration for a 2D sprite action.
@@ -14,6 +15,13 @@ export interface AnimationConfig {
   loop: boolean
   /** Higher priority actions cannot be interrupted by lower priority actions. */
   priority: number
+  /**
+   * Bottom-most opaque source row per frame, in the same order as the sheet's
+   * frames. Defaults to the measured data for sourceFileName; frames beyond the
+   * list fall back to the rest-pose row. This is what keeps the visible feet on
+   * the floor when the art is not bottom-aligned.
+   */
+  footRows: readonly number[]
 }
 
 /**
@@ -23,105 +31,32 @@ export interface AnimationConfig {
  * idle sheet and reuse the same 12 frames until new art is added.
  */
 export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
+  const config = (
+    action: PlayerAction,
+    sourceFileName: string,
+    frameCount: number,
+    fps: number,
+    loop: boolean,
+    priority: number,
+  ): AnimationConfig => ({
+    action,
+    sourceFileName,
+    frameCount,
+    fps,
+    loop,
+    priority,
+    footRows: footRowsFor(sourceFileName) ?? [],
+  })
+
   return new Map<PlayerAction, AnimationConfig>([
-    [
-      PlayerAction.IDLE,
-      {
-        action: PlayerAction.IDLE,
-        sourceFileName: 'idle.png',
-        frameCount: 12,
-        fps: 10,
-        loop: true,
-        priority: 0,
-      },
-    ],
-    [
-      PlayerAction.WALK,
-      {
-        action: PlayerAction.WALK,
-        sourceFileName: 'walk.png',
-        frameCount: 12,
-        fps: 12,
-        loop: true,
-        priority: 1,
-      },
-    ],
-    [
-      PlayerAction.ATTACK,
-      {
-        action: PlayerAction.ATTACK,
-        sourceFileName: 'idle.png',
-        frameCount: 8,
-        fps: 16,
-        loop: false,
-        priority: 3,
-      },
-    ],
-    [
-      PlayerAction.HEAVY_ATTACK,
-      {
-        action: PlayerAction.HEAVY_ATTACK,
-        sourceFileName: 'idle.png',
-        frameCount: 10,
-        fps: 14,
-        loop: false,
-        priority: 4,
-      },
-    ],
-    [
-      PlayerAction.BLOCK,
-      {
-        action: PlayerAction.BLOCK,
-        sourceFileName: 'idle.png',
-        frameCount: 6,
-        fps: 12,
-        loop: true,
-        priority: 2,
-      },
-    ],
-    [
-      PlayerAction.DASH,
-      {
-        action: PlayerAction.DASH,
-        sourceFileName: 'idle.png',
-        frameCount: 6,
-        fps: 15,
-        loop: false,
-        priority: 5,
-      },
-    ],
-    [
-      PlayerAction.JUMP,
-      {
-        action: PlayerAction.JUMP,
-        sourceFileName: 'walk.png',
-        frameCount: 12,
-        fps: 8,
-        loop: false,
-        priority: 1,
-      },
-    ],
-    [
-      PlayerAction.HURT,
-      {
-        action: PlayerAction.HURT,
-        sourceFileName: 'idle.png',
-        frameCount: 4,
-        fps: 12,
-        loop: false,
-        priority: 6,
-      },
-    ],
-    [
-      PlayerAction.DEATH,
-      {
-        action: PlayerAction.DEATH,
-        sourceFileName: 'idle.png',
-        frameCount: 8,
-        fps: 8,
-        loop: false,
-        priority: 10,
-      },
-    ],
+    [PlayerAction.IDLE, config(PlayerAction.IDLE, 'idle.png', 12, 10, true, 0)],
+    [PlayerAction.WALK, config(PlayerAction.WALK, 'walk.png', 12, 12, true, 1)],
+    [PlayerAction.ATTACK, config(PlayerAction.ATTACK, 'idle.png', 8, 16, false, 3)],
+    [PlayerAction.HEAVY_ATTACK, config(PlayerAction.HEAVY_ATTACK, 'idle.png', 10, 14, false, 4)],
+    [PlayerAction.BLOCK, config(PlayerAction.BLOCK, 'idle.png', 6, 12, true, 2)],
+    [PlayerAction.DASH, config(PlayerAction.DASH, 'idle.png', 6, 15, false, 5)],
+    [PlayerAction.JUMP, config(PlayerAction.JUMP, 'walk.png', 12, 8, false, 1)],
+    [PlayerAction.HURT, config(PlayerAction.HURT, 'idle.png', 4, 12, false, 6)],
+    [PlayerAction.DEATH, config(PlayerAction.DEATH, 'idle.png', 8, 8, false, 10)],
   ])
 }

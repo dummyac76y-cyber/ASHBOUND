@@ -26,6 +26,17 @@ class SpriteSheet(
         return frameRects[clamped]
     }
 
+    /**
+     * Bottom-most opaque source row of a frame. The sprite cells are not filled to the
+     * bottom edge, and the walk cycle's contact row drifts by a few rows, so this is
+     * read per frame rather than baked into a single constant. Frames with no measured
+     * row fall back to the idle rest pose.
+     */
+    fun footRowForFrame(frameIndex: Int): Int {
+        val clamped = frameIndex.coerceIn(0, frameCount - 1)
+        return config.footRows.getOrNull(clamped) ?: SpriteMetrics.DEFAULT_FOOT_ROW
+    }
+
     companion object {
         private const val TAG = "SpriteSheet"
 

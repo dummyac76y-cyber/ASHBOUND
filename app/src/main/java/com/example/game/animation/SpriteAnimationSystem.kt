@@ -71,6 +71,17 @@ class SpriteAnimationSystem(
 
     fun getSheet(action: PlayerAction): SpriteSheet? = sheets[action]
 
+    /**
+     * Distance the current frame's draw-rect bottom must sit below the ground plane
+     * for that frame's *visible* feet to land on it. Resolved per frame because the
+     * walk cycle's contact row moves; a single constant leaves those frames off the
+     * floor.
+     */
+    fun footOffsetForCurrentFrame(displaySize: Float): Float {
+        val sheet = sheets[currentAction] ?: sheets[PlayerAction.IDLE] ?: return 0f
+        return SpriteMetrics.footOffsetForRow(sheet.footRowForFrame(currentFrameIndex), displaySize)
+    }
+
     fun getAllActions(): List<PlayerAction> = PlayerAction.entries
 
     /**

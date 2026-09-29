@@ -12,6 +12,7 @@ import android.util.Log
 import com.example.game.animation.DefaultAnimationConfigs
 import com.example.game.animation.PlayerAction
 import com.example.game.animation.SpriteAnimationSystem
+import com.example.game.animation.SpriteMetrics
 import com.example.game.controller.PlayerController
 import com.example.game.model.DamageText
 import com.example.game.model.SparkParticle
@@ -31,51 +32,53 @@ class GameWorld(val context: Context) {
 
         /**
          * Native pixel height of the arena backdrop (img_arena_bg_hd.png).
-         * The backdrop is drawn scaled to fill LOGICAL_HEIGHT, so any row in the
-         * artwork maps to logical Y via: row * LOGICAL_HEIGHT / this.
+         * The backdrop is drawn with a single uniform scale, so any source row maps
+         * to logical Y via: row * LOGICAL_HEIGHT / this.
          */
         const val BACKGROUND_HEIGHT = 864f
 
         /**
          * Row of the visible stone floor surface, measured from the backdrop artwork.
          *
-         * The floor is a hard horizontal edge running the full width of the image:
-         * a dark ledge seam at row 618 (168/192 sampled columns agree) with the lit
-         * flagstone surface starting at row 620 (111/158 columns; the remainder are
-         * pillars and props occluding the edge). There is no perspective slope, so a
-         * single world-space plane is exact across the whole arena.
+         * Row statistics across the image width show a hard horizon: row 532 is still
+         * dark wall (mean 21.6, 18.5% lit, 43.9% of sampled columns agreeing), while
+         * row 533 is the first lit floor row (mean 31.5, 51.2% lit, 68.9% coherent).
+         * The edge is horizontal, so one world-space plane is exact across the arena.
+         * The bright seam further down at row 620 is a flagstone joint *inside* the
+         * floor, not its top edge, and using it left the knight standing in front of
+         * the wall.
          */
-        const val BACKGROUND_FLOOR_ROW = 620f
+        const val BACKGROUND_FLOOR_ROW = 533f
 
         /**
          * World-space ground / collision plane, in logical pixels.
          *
-         * The player's feet rest exactly on this Y at all times, and it is the Y the
+         * The player's visible feet rest exactly on this Y at all times, and it is the Y the
          * jump impulse starts from and gravity returns to. Derived from the backdrop
          * rather than guessed, so the knight stands on the drawn stone floor instead
          * of an arbitrary line near the bottom of the screen.
          */
         val FLOOR_Y: Float = BACKGROUND_FLOOR_ROW * (LOGICAL_HEIGHT / BACKGROUND_HEIGHT)
 
-        /** Native height of one sprite sheet cell, in source pixels. */
-        const val SPRITE_CELL_HEIGHT = 128f
-
         /**
-         * Fully transparent rows below the character's feet inside a 128px cell.
-         * Measured from the art: opaque content ends at row 111 in every frame of
-         * both idle.png and walk.png, leaving 16 empty rows.
+         * Uniform scale the backdrop is drawn at. 360 / 864 is exactly 5/12, which
+         * maps the 1536x864 art to the 640x360 logical viewport with no distortion
+         * and no letterboxing. Because the same factor drives both the drawing and
+         * [FLOOR_Y] above, the floor can never drift away from the feet.
          */
-        const val SPRITE_FOOT_PADDING = 16f
+        val BACKGROUND_SCALE: Float = LOGICAL_HEIGHT / BACKGROUND_HEIGHT
 
-        /** Logical size a 128px sprite cell is drawn at. */
+        /** Logical size a 128px sprite cell is drawn at (aspect preserved). */
         const val SPRITE_DISPLAY_SIZE = 100f
 
         /**
-         * How far below [FLOOR_Y] the sprite's draw-rect bottom must sit so that the
-         * visible feet — not the transparent padding — land on the ground plane.
-         * Without this the knight floats by this amount every frame.
+         * Rest-pose foot offset, i.e. the padding below the opaque pixels of the idle
+         * sheet's frames. Kept for diagnostics and tests; the renderer uses the
+         * per-frame value from the animation system instead, since the walk cycle's
+         * contact row is not constant.
          */
-        val SPRITE_FOOT_OFFSET: Float = SPRITE_FOOT_PADDING / SPRITE_CELL_HEIGHT * SPRITE_DISPLAY_SIZE
+        val SPRITE_FOOT_OFFSET: Float =
+            SpriteMetrics.footOffsetForRow(SpriteMetrics.DEFAULT_FOOT_ROW, SPRITE_DISPLAY_SIZE)
     }
 
     val animationSystem = SpriteAnimationSystem(context, DefaultAnimationConfigs.createDefaults())
@@ -209,43 +212,63 @@ class GameWorld(val context: Context) {
     }
 
     /**
+     * Draws the character sprite and nothing else, in the caller's (already camera
+     * translated) coordinate space.
+     *
+     * Split out of [render] so instrumentation can run the real drawing path onto a
+     * transparent surface and read the foot line straight off the alpha channel,
+     * instead of inferring it from a difference against the backdrop.
+     */
+    fun renderCharacter(canvas: Canvas) {
+        // The 128x128 cell is drawn at 100x100 logical pixels (no stretching, aspect
+        // preserved). The cell's transparent lower edge is corrected per frame so
+        // the visible feet — and therefore the collision bottom — land exactly on
+        // FLOOR_Y.
+        val spriteDisplaySize = SPRITE_DISPLAY_SIZE
+        animationSystem.render(
+            canvas = canvas,
+            centerX = player.x,
+            bottomY = player.groundY + animationSystem.footOffsetForCurrentFrame(spriteDisplaySize),
+            displayWidth = spriteDisplaySize,
+            displayHeight = spriteDisplaySize,
+            isFacingRight = player.isFacingRight,
+            paint = pixelPaint
+        )
+    }
+
+    /**
      * Renders the game world onto the scaled canvas at logical coordinates.
      */
     fun render(canvas: Canvas) {
-        canvas.save()
-        // Translate world by negative camera position
-        canvas.translate(-cameraX, 0f)
-
-        // 1. Parallax background
+        // 1. Backdrop, drawn in screen space before the camera translate.
+        //
+        // The backdrop is a fixed 1536x864 plate that exactly covers the 640x360
+        // viewport at BACKGROUND_SCALE, so it is not panned by the camera. That is
+        // deliberate: the floor is baked into the plate, and keeping the plate out
+        // of the camera transform means the floor cannot slide relative to the feet
+        // as the player walks. FLOOR_Y is derived from the same scale, so the two
+        // agree by construction at every camera offset.
         val bg = bgBitmap
         if (bg != null) {
             val bgSrc = Rect(0, 0, bg.width, bg.height)
-            // Parallax factor 0.3f
-            val bgX = cameraX * 0.3f
-            val bgDst = RectF(bgX, 0f, bgX + LOGICAL_WIDTH * 1.5f, LOGICAL_HEIGHT)
+            val bgDst = RectF(0f, 0f, bg.width * BACKGROUND_SCALE, bg.height * BACKGROUND_SCALE)
             canvas.drawBitmap(bg, bgSrc, bgDst, pixelPaint)
         } else {
             // Fallback dark castle gradient
             pixelPaint.color = Color.rgb(18, 20, 28)
-            canvas.drawRect(0f, 0f, WORLD_WIDTH, LOGICAL_HEIGHT, pixelPaint)
+            canvas.drawRect(0f, 0f, LOGICAL_WIDTH, LOGICAL_HEIGHT, pixelPaint)
         }
 
-        // 2. Stone Arena Ground
-        pixelPaint.color = Color.rgb(36, 40, 52)
-        canvas.drawRect(0f, FLOOR_Y, WORLD_WIDTH, LOGICAL_HEIGHT, pixelPaint)
+        canvas.save()
+        // Translate world by negative camera position
+        canvas.translate(-cameraX, 0f)
 
-        // Flagstone ground texture lines
-        pixelPaint.color = Color.rgb(55, 62, 80)
-        canvas.drawRect(0f, FLOOR_Y, WORLD_WIDTH, FLOOR_Y + 4f, pixelPaint)
-
-        for (x in 0..WORLD_WIDTH.toInt() step 60) {
-            pixelPaint.color = Color.rgb(28, 31, 40)
-            canvas.drawLine(x.toFloat(), FLOOR_Y + 4f, x.toFloat(), LOGICAL_HEIGHT, pixelPaint)
-            pixelPaint.color = Color.rgb(48, 54, 70)
-            canvas.drawLine(x.toFloat() + 30f, FLOOR_Y + 24f, x.toFloat() + 30f, LOGICAL_HEIGHT, pixelPaint)
-        }
-
-        // Arena boundary stone pillars
+        // 2. Arena boundary stone pillars.
+        //
+        // No ground slab or flagstone grid is drawn here on purpose: the backdrop
+        // already renders a detailed stone floor starting at FLOOR_Y, and painting
+        // an opaque rectangle over that area is what previously hid the very
+        // surface the player has to stand on.
         pixelPaint.color = Color.rgb(50, 55, 70)
         canvas.drawRect(0f, 0f, 24f, FLOOR_Y, pixelPaint)
         canvas.drawRect(WORLD_WIDTH - 24f, 0f, WORLD_WIDTH, FLOOR_Y, pixelPaint)
@@ -255,25 +278,12 @@ class GameWorld(val context: Context) {
             dummy.render(canvas, pixelPaint)
         }
 
-        // 4. Character Shadow
-        pixelPaint.color = Color.argb(120, 0, 0, 0)
-        canvas.drawOval(player.x - 22f, FLOOR_Y - 4f, player.x + 22f, FLOOR_Y + 4f, pixelPaint)
+        // 4. Character contact shadow, seated on the floor line.
+        pixelPaint.color = Color.argb(82, 0, 0, 0)
+        canvas.drawOval(player.x - 18f, FLOOR_Y - 2f, player.x + 18f, FLOOR_Y + 4f, pixelPaint)
 
         // 5. Render Character Sprite
-        // The 128x128 cell is drawn at 100x100 logical pixels (no stretching, aspect
-        // preserved). The cell carries 16px of transparent padding below the feet, so
-        // the draw-rect bottom is offset by SPRITE_FOOT_OFFSET to put the visible
-        // feet — and therefore the collision bottom — exactly on FLOOR_Y.
-        val spriteDisplaySize = SPRITE_DISPLAY_SIZE
-        animationSystem.render(
-            canvas = canvas,
-            centerX = player.x,
-            bottomY = player.groundY + SPRITE_FOOT_OFFSET,
-            displayWidth = spriteDisplaySize,
-            displayHeight = spriteDisplaySize,
-            isFacingRight = player.isFacingRight,
-            paint = pixelPaint
-        )
+        renderCharacter(canvas)
 
         // 6. Render Particles
         for (p in particles) {
