@@ -77,11 +77,17 @@ object DefaultAnimationConfigs {
         PlayerAction.HEAVY_ATTACK to AnimationConfig(
             action = PlayerAction.HEAVY_ATTACK,
             sourceFileName = "heavy_attack.png",
-            frameCount = 10,
-            fps = 14,
+            frameCount = 25,
+            fps = 20,
             loop = false,
             priority = 4,
-            canBeCancelledByMovement = false
+            canBeCancelledByMovement = false,
+            // Packed as a 5x5 grid of 256px cells rather than a strip of 128px
+            // ones, so the cell geometry is declared explicitly. displayScale
+            // keeps the character the same on-screen size as the strip sheets.
+            columns = 5,
+            cellSize = 256,
+            displayScale = 1.268f
         ),
         PlayerAction.BLOCK to AnimationConfig(
             action = PlayerAction.BLOCK,

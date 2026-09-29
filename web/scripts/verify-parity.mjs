@@ -14,6 +14,7 @@ const CASES = [
   { name: 'walk.png', w: 1536, h: 128, frameCount: 12, columns: null, cellSize: null },
   { name: 'jump.png', w: 1280, h: 128, frameCount: 10, columns: null, cellSize: null },
   { name: 'attack.png', w: 1024, h: 1024, frameCount: 16, columns: 4, cellSize: 256 },
+  { name: 'heavy_attack.png', w: 1280, h: 1280, frameCount: 25, columns: 5, cellSize: 256 },
 ]
 
 /** web/src/game/SpriteSheet.ts */
@@ -27,7 +28,7 @@ function webGeometry(c) {
   const frameCount = Math.max(1, Math.min(c.frameCount ?? available, available))
   const frameWidth = Math.max(1, Math.trunc(c.w / columns))
   return {
-    columns, cellHeight, frameCount, frameWidth,
+    columns, cellHeight, frameCount, frameWidth, rows,
     rect: (i) => {
       const clamped = Math.min(Math.max(i, 0), frameCount - 1)
       return { sx: (clamped % columns) * frameWidth, sy: Math.floor(clamped / columns) * cellHeight, sw: frameWidth, sh: cellHeight }
@@ -46,7 +47,7 @@ function androidGeometry(c) {
   const frameWidth = Math.max(1, Math.trunc(c.w / columns))
   const cellHeight = cellSide
   return {
-    columns, cellHeight, frameCount, frameWidth,
+    columns, cellHeight, frameCount, frameWidth, rows,
     rect: (i) => {
       const clamped = Math.min(Math.max(i, 0), frameCount - 1)
       const col = clamped % columns
@@ -80,15 +81,22 @@ for (const c of CASES) {
   check(`${c.name}: all ${w.frameCount + 3} probed frame rects identical`, mismatch === 0, `${mismatch} mismatches`)
 }
 
-console.log('ATTACK GRID: the 4x4 layout tiles the sheet exactly')
-const atk = webGeometry(CASES[3])
-let oob = 0
-for (let i = 0; i < atk.frameCount; i++) {
-  const r = atk.rect(i)
-  if (r.sx + r.sw > CASES[3].w || r.sy + r.sh > CASES[3].h) oob++
+console.log('GRID SHEETS: each grid tiles its sheet exactly')
+for (const c of CASES.filter((c) => c.cellSize)) {
+  const g = webGeometry(c)
+  let oob = 0
+  for (let i = 0; i < g.frameCount; i++) {
+    const r = g.rect(i)
+    if (r.sx + r.sw > c.w || r.sy + r.sh > c.h) oob++
+  }
+  const area = g.frameWidth * g.cellHeight * g.frameCount
+  check(`${c.name}: every cell lies inside the ${c.w}x${c.h} sheet`, oob === 0, `${oob} out of bounds`)
+  check(
+    `${c.name}: ${g.columns}x${g.rows} cells of ${g.frameWidth}x${g.cellHeight} tile the sheet with no gap or overlap`,
+    area === c.w * c.h,
+    `${g.frameCount} cells, ${area}px of ${c.w * c.h}px`,
+  )
 }
-check('every cell lies inside the 1024x1024 sheet', oob === 0, `${oob} out of bounds`)
-check('16 cells of 256x256 tile the sheet with no gap or overlap', atk.frameWidth === 256 && atk.cellHeight === 256 && atk.frameCount === 16, `${atk.frameCount} cells of ${atk.frameWidth}x${atk.cellHeight}`)
 
 console.log('FOOT OFFSET: the 256px cell seats the sprite where the 128px one did')
 // Both engines call footOffsetForRow(row, displaySize, cellHeight); the attack

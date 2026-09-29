@@ -139,50 +139,74 @@ await page.evaluate(() => {
 })
 
 const floorY = await page.evaluate(() => window.__game.GameWorld.FLOOR_Y)
-console.log(`ATTACK: 16 grid frames render with their feet on FLOOR_Y (${floorY.toFixed(2)})`)
-
-const boxes = []
-for (let f = 0; f < 16; f++) {
-  const box = await page.evaluate((fr) => window.__game.measureCharacter('ATTACK', fr), f)
-  boxes.push(box)
-  if (box === null) {
-    check(`frame ${String(f).padStart(2)} renders`, false, 'no pixels differ from the backdrop')
-    continue
-  }
-  // The soft contact shadow hangs a little below the feet by design, so the
-  // threshold allows a small tail rather than demanding pixel-exact contact.
-  const footErr = box.maxY - floorY
-  check(
-    `frame ${String(f).padStart(2)}: feet reach the floor`,
-    footErr > -1 && footErr < 6,
-    `bottom ${box.maxY.toFixed(1)}, ${footErr >= 0 ? '+' : ''}${footErr.toFixed(1)} vs floor, height ${(box.maxY - box.minY).toFixed(1)}`,
-  )
-}
-
-// Duplicated silhouettes would mean the grid is slicing the same cell twice.
-const sigs = boxes.filter(Boolean).map((b) => `${b.minX.toFixed(0)},${b.minY.toFixed(0)},${b.maxX.toFixed(0)},${b.maxY.toFixed(0)}`)
-const distinct = new Set(sigs).size
-check('the 16 frames render as distinct poses', distinct >= 12, `${distinct}/16 distinct silhouettes`)
-
-// The display scale is what keeps a 256px-cell sheet looking the same size as
-// the 128px strip sheets. Frame 0 is compared rather than a mid-swing frame,
-// because frames 4..7 bound the raised weapon and are legitimately taller than
-// the character alone.
 const idle = await page.evaluate(() => window.__game.measureCharacter('IDLE', 0))
-if (idle && boxes[0]) {
-  const aH = boxes[0].maxY - boxes[0].minY
-  const iH = idle.maxY - idle.minY
-  check(
-    'attack character matches idle on-screen height',
-    aH / iH > 0.85 && aH / iH < 1.15,
-    `attack ${aH.toFixed(1)}px vs idle ${iH.toFixed(1)}px (ratio ${(aH / iH).toFixed(3)})`,
-  )
-} else {
+if (idle === null) {
   check('idle renders for the size comparison', false, 'no idle pixels')
 }
+const idleH = idle ? idle.maxY - idle.minY : 0
 
-await page.evaluate(() => window.__game.setFrame('ATTACK', 8))
-await page.screenshot({ path: join(shotsDir, 'attack-frame-8.png') })
+// Every grid-packed sheet, discovered from the running game rather than hardcoded,
+// so adding another one is covered without editing this harness.
+//
+// `columns` is frames-per-row, which is legitimately >1 for a plain strip too, so
+// the marker for a grid is the configured cellSize. Only grids are checked here:
+// a strip's slicing is a single row and is covered by the logic tests, and the
+// distinct-pose bar below is a statement about grid addressing, since mis-slicing
+// a grid is what makes the renderer repeat a cell.
+const grids = await page.evaluate(() => {
+  const out = []
+  for (const [action, sheet] of window.__game.animations.loadedSheets) {
+    if (sheet.config.cellSize) {
+      out.push({ action, frames: sheet.frameCount, columns: sheet.columns, cell: sheet.cellHeight, scale: sheet.displayScale, file: sheet.config.sourceFileName })
+    }
+  }
+  return out
+})
+check('both attack sheets load as grids', grids.length === 2, `${grids.length} grids: ${grids.map((g) => g.file).join(', ')}`)
+
+for (const g of grids) {
+  console.log(`\n${g.action} (${g.file}): ${g.frames} frames, ${g.columns} columns of ${g.cell}px cells, scale ${g.scale}`)
+  const boxes = []
+  for (let f = 0; f < g.frames; f++) {
+    const box = await page.evaluate(([a, fr]) => window.__game.measureCharacter(a, fr), [g.action, f])
+    boxes.push(box)
+    if (box === null) {
+      check(`frame ${String(f).padStart(2)} renders`, false, 'no pixels differ from the backdrop')
+      continue
+    }
+    // The soft contact shadow hangs a little below the feet by design, so the
+    // threshold allows a small tail rather than demanding pixel-exact contact.
+    const footErr = box.maxY - floorY
+    check(
+      `frame ${String(f).padStart(2)}: feet reach the floor`,
+      footErr > -1 && footErr < 6,
+      `bottom ${box.maxY.toFixed(1)}, ${footErr >= 0 ? '+' : ''}${footErr.toFixed(1)} vs floor, height ${(box.maxY - box.minY).toFixed(1)}`,
+    )
+  }
+
+  // Duplicated silhouettes would mean the grid is slicing the same cell twice.
+  // Held frames are legitimate, so the bar is high but not absolute.
+  const sigs = boxes.filter(Boolean).map((b) => `${b.minX.toFixed(0)},${b.minY.toFixed(0)},${b.maxX.toFixed(0)},${b.maxY.toFixed(0)}`)
+  const distinct = new Set(sigs).size
+  check(`the ${g.frames} frames render as distinct poses`, distinct >= Math.ceil(g.frames * 0.75), `${distinct}/${g.frames} distinct silhouettes`)
+
+  // The display scale is what keeps a 256px-cell sheet looking the same size as
+  // the 128px strip sheets. Frame 0 is compared rather than a mid-swing frame,
+  // because later frames bound the swung weapon and are legitimately taller than
+  // the character alone.
+  if (idle && boxes[0]) {
+    const h = boxes[0].maxY - boxes[0].minY
+    check(
+      `${g.action} character matches idle on-screen height`,
+      h / idleH > 0.85 && h / idleH < 1.15,
+      `${g.action} ${h.toFixed(1)}px vs idle ${idleH.toFixed(1)}px (ratio ${(h / idleH).toFixed(3)})`,
+    )
+  }
+
+  await page.evaluate(([a, fr]) => window.__game.setFrame(a, fr), [g.action, Math.floor(g.frames / 2)])
+  await page.screenshot({ path: join(shotsDir, `${g.action.toLowerCase()}-frame-mid.png`) })
+}
+
 await browser.close()
 server.close()
 

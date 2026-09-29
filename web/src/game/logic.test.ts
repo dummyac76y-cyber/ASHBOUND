@@ -431,6 +431,64 @@ console.log('GRID PACKED SHEETS: a 4x4 grid of 256px cells slices correctly')
   )
 }
 
+console.log('GRID PACKED SHEET: a 5x5 grid of 256px cells slices correctly')
+{
+  const stubImage = { width: 1280, height: 1280 } as unknown as HTMLCanvasElement
+  const config = createDefaultConfigs().get(PlayerAction.HEAVY_ATTACK)!
+  const sheet = new SpriteSheet(PlayerAction.HEAVY_ATTACK, stubImage, config)
+
+  check('heavy attack uses its own sheet', config.sourceFileName === 'heavy_attack.png', config.sourceFileName)
+  check('heavy attack has 25 frames', sheet.frameCount === 25, `got ${sheet.frameCount}`)
+  check('heavy attack reads 5 columns', sheet.columns === 5, `got ${sheet.columns}`)
+  check('heavy attack cell is 256px', sheet.cellHeight === 256, `got ${sheet.cellHeight}`)
+
+  // 5x5 addressing: the last frame is the bottom-right cell, and wrapping happens
+  // at 5, not at 4 as the attack sheet does.
+  check('frame 4 is the end of the first row', JSON.stringify(sheet.frameRect(4)) === JSON.stringify({ sx: 1024, sy: 0, sw: 256, sh: 256 }), JSON.stringify(sheet.frameRect(4)))
+  check('frame 5 wraps to the start of row two', JSON.stringify(sheet.frameRect(5)) === JSON.stringify({ sx: 0, sy: 256, sw: 256, sh: 256 }), JSON.stringify(sheet.frameRect(5)))
+  check('frame 24 is the bottom-right cell', JSON.stringify(sheet.frameRect(24)) === JSON.stringify({ sx: 1024, sy: 1024, sw: 256, sh: 256 }), JSON.stringify(sheet.frameRect(24)))
+
+  const seen = new Set<string>()
+  let outside = 0
+  for (let f = 0; f < sheet.frameCount; f++) {
+    const r = sheet.frameRect(f)
+    seen.add(JSON.stringify(r))
+    if (r.sx + r.sw > 1280 || r.sy + r.sh > 1280) outside++
+  }
+  check('all 25 frames address distinct cells', seen.size === 25, `got ${seen.size} unique`)
+  check('no frame rect falls outside the sheet', outside === 0, `${outside} outside`)
+  check('the 25 cells cover the sheet exactly', sheet.frameWidth * sheet.cellHeight * sheet.frameCount === 1280 * 1280, `${sheet.frameCount} cells of ${sheet.frameWidth}x${sheet.cellHeight}`)
+
+  // The heavy sheet is a different grid shape to the light one, so it carries its
+  // own scale. Both are 256px cells measured the same way, so comparing them to
+  // each other is apples-to-apples: their scaled body heights should agree. The
+  // absolute on-screen size against the 128px strip sheets is checked against
+  // real rendered pixels by scripts/verify-attack.mjs, which measures far more
+  // reliably than a formula over source-pixel bounds can.
+  const size = GameWorld.SPRITE_DISPLAY_SIZE
+  const heavyChar = (153 / 256) * (size * sheet.displayScale)
+  const attackSheet = new SpriteSheet(
+    PlayerAction.ATTACK,
+    { width: 1024, height: 1024 } as unknown as HTMLCanvasElement,
+    createDefaultConfigs().get(PlayerAction.ATTACK)!,
+  )
+  const attackChar = (143 / 256) * (size * attackSheet.displayScale)
+  check(
+    'heavy attack character renders the same on-screen size as light attack',
+    Math.abs(heavyChar - attackChar) < 1,
+    `heavy ${heavyChar.toFixed(1)} vs light ${attackChar.toFixed(1)}`,
+  )
+
+  const scaled = size * sheet.displayScale
+  let worst = 0
+  for (let frame = 0; frame < sheet.frameCount; frame++) {
+    const rectBottom = GameWorld.FLOOR_Y + footOffsetForRow(sheet.footRowForFrame(frame), scaled, sheet.cellHeight)
+    const visibleFeet = rectBottom - footOffsetForRow(sheet.footRowForFrame(frame), scaled, sheet.cellHeight)
+    worst = Math.max(worst, Math.abs(visibleFeet - GameWorld.FLOOR_Y))
+  }
+  check('all 25 heavy attack frames put their visible feet on FLOOR_Y', worst < 1e-9, `worst ${worst}`)
+}
+
 console.log("the sprite cell is anchored on each frame's own opaque bottom")
 {
   // SpriteSheet only reads image.width/height here, so a plain stub is enough.

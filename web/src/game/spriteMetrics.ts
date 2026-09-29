@@ -35,6 +35,13 @@ export const FOOT_ROWS_BY_SHEET: Readonly<Record<string, readonly number[]>> = {
   // on the same row, so the constant 198 keeps the whole swing seated on the
   // floor. These are rows within a 256 cell, not a 128 one.
   'attack.png': [198, 198, 198, 198, 198, 198, 198, 198, 198, 198, 198, 198, 198, 198, 198, 198],
+  // The heavy attack sheet is a 5x5 grid of 256px cells. Its foot row is likewise
+  // constant across all 25 frames, so the whole windup, swing and recovery stay
+  // planted while the character moves through them.
+  'heavy_attack.png': [
+    196, 196, 196, 196, 196, 196, 196, 196, 196, 196, 196, 196, 196,
+    196, 196, 196, 196, 196, 196, 196, 196, 196, 196, 196, 196,
+  ],
 }
 
 /** Per-frame foot rows for a sheet, or null when it has no measured data. */

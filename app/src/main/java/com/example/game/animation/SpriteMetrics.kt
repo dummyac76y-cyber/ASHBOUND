@@ -37,7 +37,11 @@ object SpriteMetrics {
         // The attack sheet is a 4x4 grid of 256px cells and every frame plants its
         // feet on the same row, so the constant 198 keeps the whole swing seated on
         // the floor. These are rows within a 256 cell, not a 128 one.
-        "attack.png" to List(16) { 198 }
+        "attack.png" to List(16) { 198 },
+        // The heavy attack sheet is a 5x5 grid of 256px cells. Its foot row is
+        // likewise constant across all 25 frames, so the whole windup, swing and
+        // recovery stay planted while the character moves through them.
+        "heavy_attack.png" to List(25) { 196 }
     )
 
     /** Per-frame foot rows for a sheet, or an empty list when it has no measured data. */

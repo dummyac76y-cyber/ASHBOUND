@@ -37,6 +37,15 @@ export class SpriteAnimationSystem {
   }
 
   /**
+   * The sheets that actually loaded, keyed by action. Actions whose art is
+   * missing simply have no entry, which is how callers tell a real sheet from a
+   * configured-but-absent one.
+   */
+  get loadedSheets(): ReadonlyMap<PlayerAction, SpriteSheet> {
+    return this.sheets
+  }
+
+  /**
    * Loads or reloads all sprite sheets according to activeConfigs.
    * Must be awaited before the first update() call.
    */

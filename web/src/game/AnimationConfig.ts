@@ -44,12 +44,16 @@ export interface AnimationConfig {
 
 /**
  * Frame counts match the sprite sheets shipped in app/src/main/assets/sprites
- * (12 frames for idle, 12 for walk, 10 for jump). The attack sheet is packed as a
- * 4x4 grid of 256px cells rather than a horizontal strip of 128px ones, so it
- * declares `columns`, `cellSize` and a `displayScale` that keeps its character
- * the same on-screen size as the strip sheets. HEAVY_ATTACK / DASH / HURT /
- * DEATH / BLOCK sheets are not present yet, so those actions fall back to the
- * idle sheet and reuse the same 12 frames until new art is added.
+ * (12 frames for idle, 12 for walk, 10 for jump).
+ *
+ * The two attack sheets are packed as grids of 256px cells rather than horizontal
+ * strips of 128px ones, so they declare `columns`, `cellSize` and a `displayScale`
+ * that keeps their character the same on-screen size as the strip sheets. Their
+ * cells are square, so the cell size doubles with the resolution and the scale
+ * partly offsets that.
+ *
+ * DASH / HURT / DEATH / BLOCK sheets are not present yet, so those actions fall
+ * back to the idle sheet and reuse its 12 frames until new art is added.
  */
 export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
   const config = (
@@ -77,7 +81,7 @@ export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
     [PlayerAction.IDLE, config(PlayerAction.IDLE, 'idle.png', 12, 10, true, 0)],
     [PlayerAction.WALK, config(PlayerAction.WALK, 'walk.png', 12, 12, true, 1)],
     [PlayerAction.ATTACK, config(PlayerAction.ATTACK, 'attack.png', 16, 24, false, 3, { columns: 4, cellSize: 256, displayScale: 1.366 })],
-    [PlayerAction.HEAVY_ATTACK, config(PlayerAction.HEAVY_ATTACK, 'idle.png', 10, 14, false, 4)],
+    [PlayerAction.HEAVY_ATTACK, config(PlayerAction.HEAVY_ATTACK, 'heavy_attack.png', 25, 20, false, 4, { columns: 5, cellSize: 256, displayScale: 1.268 })],
     [PlayerAction.BLOCK, config(PlayerAction.BLOCK, 'idle.png', 6, 12, true, 2)],
     [PlayerAction.DASH, config(PlayerAction.DASH, 'idle.png', 6, 15, false, 5)],
     [PlayerAction.JUMP, config(PlayerAction.JUMP, 'jump.png', 10, 12, false, 1)],
