@@ -246,7 +246,13 @@ fun ActionButtonsCluster(
     onDash: () -> Unit,
     onJump: () -> Unit
 ) {
+    // 39x39 RGBA artwork from app/src/main/assets/ui, mirrored to web/public by
+    // web/scripts/sync-assets.mjs so both platforms render the same pixels.
     val attackIcon = rememberAssetIcon("ui/btn_attack.png")
+    val heavyIcon = rememberAssetIcon("ui/btn_heavy_attack.png")
+    val blockIcon = rememberAssetIcon("ui/btn_block.png")
+    val dashIcon = rememberAssetIcon("ui/btn_dash.png")
+    val jumpIcon = rememberAssetIcon("ui/btn_jump.png")
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -258,12 +264,14 @@ fun ActionButtonsCluster(
                 label = "HEAVY",
                 sublabel = "ATK",
                 testTag = "button_heavy_attack",
+                icon = heavyIcon,
                 onClick = onHeavyAttack
             )
             ActionButton(
                 label = "JUMP",
                 sublabel = "UP",
                 testTag = "button_jump",
+                icon = jumpIcon,
                 onClick = onJump
             )
         }
@@ -274,6 +282,7 @@ fun ActionButtonsCluster(
                 label = "DASH",
                 sublabel = "ROLL",
                 testTag = "button_dash",
+                icon = dashIcon,
                 onClick = onDash
             )
 
@@ -282,6 +291,7 @@ fun ActionButtonsCluster(
                 label = "BLOCK",
                 sublabel = "GUARD",
                 testTag = "button_block",
+                icon = blockIcon,
                 onPressedChange = onBlockChange
             )
 
@@ -359,6 +369,7 @@ fun HoldActionButton(
     sublabel: String,
     testTag: String,
     size: Int = 54,
+    icon: ImageBitmap? = null,
     onPressedChange: (Boolean) -> Unit
 ) {
     var isPressed by remember { mutableStateOf(false) }
@@ -383,25 +394,38 @@ fun HoldActionButton(
         color = if (isPressed) NeutralButtonColor else NeutralButtonColor.copy(alpha = 0.85f),
         shadowElevation = if (isPressed) 2.dp else 6.dp
     ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                text = label,
-                color = Color.White,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Black,
-                textAlign = TextAlign.Center
+        if (icon != null && !isPressed) {
+            // 90% of the 54px button is ~49px. ContentScale.Fit keeps the square
+            // artwork at its natural aspect ratio, so it is never cropped.
+            Image(
+                bitmap = icon,
+                contentDescription = label,
+                modifier = Modifier.fillMaxSize(0.9f),
+                contentScale = ContentScale.Fit
             )
-            Text(
-                text = if (isPressed) "HELD" else sublabel,
-                color = Color(0xCCFFFFFF),
-                fontSize = 8.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
+        } else {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = label,
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Black,
+                    textAlign = TextAlign.Center
+                )
+                // The held state swaps the icon for this so the press still reads
+                // as active rather than looking identical to the resting button.
+                Text(
+                    text = if (isPressed) "HELD" else sublabel,
+                    color = Color(0xCCFFFFFF),
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+            }
         }
     }
 }

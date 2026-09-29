@@ -712,6 +712,32 @@ console.log('every action button shares one neutral fill')
   // The attack icon itself must still be red-free and correctly sized.
   const atk = res.find((b) => b.tag === 'button_attack')
   if (atk && !atk.missing) {
+    // Every button must carry artwork rather than falling back to text.
+    for (const b of res.filter((x) => !x.missing)) {
+      check(
+        `button ${b.tag} renders its icon, not the text fallback`,
+        b.iconSize !== null,
+        b.iconSize ? `${b.iconSize[0]}x${b.iconSize[1]}` : 'no <img>',
+      )
+      check(
+        `button ${b.tag} icon file loaded (no broken image)`,
+        b.iconSize !== null && b.iconNatural[0] > 0,
+        b.iconSize ? `natural ${b.iconNatural[0]}x${b.iconNatural[1]}` : 'not loaded',
+      )
+      check(
+        `button ${b.tag} icon keeps its 39x39 square aspect`,
+        b.iconSize !== null && b.iconNatural[0] === b.iconNatural[1],
+        b.iconSize ? `natural ${b.iconNatural[0]}x${b.iconNatural[1]}` : 'not loaded',
+      )
+      // The icon fills 90% of the button and stays square.
+      const expected = Math.round(b.buttonSize[0] * 0.9)
+      check(
+        `button ${b.tag} icon is centred at 90% of the button`,
+        b.iconSize !== null && Math.abs(b.iconSize[0] - expected) <= 2 && b.iconSize[0] === b.iconSize[1],
+        `icon ${b.iconSize?.[0]}px in a ${b.buttonSize[0]}px button (expected ~${expected})`,
+      )
+    }
+
     const iconRed = await page.evaluate(() => {
       const img = document.querySelector('[data-testid="button_attack"] img')
       const c = document.createElement('canvas')

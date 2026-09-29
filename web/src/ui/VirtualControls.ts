@@ -84,8 +84,19 @@ class VirtualJoystick {
   }
 }
 
-/** Icon shown on the attack button instead of the text labels. */
+/**
+ * Action button icons, shown instead of the text labels.
+ *
+ * All five are 39x39 RGBA artwork from app/src/main/assets/ui, which the build
+ * syncs into web/public (see scripts/sync-assets.mjs), so both platforms render
+ * the same pixels. The label stays on the button as its accessible name, so
+ * replacing the visible text with an icon loses nothing for assistive tech.
+ */
 const ATTACK_ICON_URL = assetUrl('ui/btn_attack.png')
+const HEAVY_ICON_URL = assetUrl('ui/btn_heavy_attack.png')
+const BLOCK_ICON_URL = assetUrl('ui/btn_block.png')
+const DASH_ICON_URL = assetUrl('ui/btn_dash.png')
+const JUMP_ICON_URL = assetUrl('ui/btn_jump.png')
 
 /**
  * Neutral medieval slate used by the icon button.
@@ -184,15 +195,21 @@ export class VirtualControls {
     const cluster = el('div', 'action-cluster')
     const topRow = el('div', 'action-row')
     topRow.append(
-      new ActionButton('HEAVY', 'ATK', 'button_heavy_attack', 54, callbacks.onHeavyAttack).root,
-      new ActionButton('JUMP', 'UP', 'button_jump', 54, callbacks.onJump).root,
+      new ActionButton('HEAVY', 'ATK', 'button_heavy_attack', 54, callbacks.onHeavyAttack, undefined, HEAVY_ICON_URL).root,
+      new ActionButton('JUMP', 'UP', 'button_jump', 54, callbacks.onJump, undefined, JUMP_ICON_URL).root,
     )
 
     const midRow = el('div', 'action-row')
     midRow.append(
-      new ActionButton('DASH', 'ROLL', 'button_dash', 54, callbacks.onDash).root,
-      new ActionButton('BLOCK', 'GUARD', 'button_block', 54, callbacks.onBlockChange.bind(null, true), () =>
-        callbacks.onBlockChange(false),
+      new ActionButton('DASH', 'ROLL', 'button_dash', 54, callbacks.onDash, undefined, DASH_ICON_URL).root,
+      new ActionButton(
+        'BLOCK',
+        'GUARD',
+        'button_block',
+        54,
+        callbacks.onBlockChange.bind(null, true),
+        () => callbacks.onBlockChange(false),
+        BLOCK_ICON_URL,
       ).root,
       new ActionButton('ATK', 'SLASH', 'button_attack', 62, callbacks.onAttack, undefined, ATTACK_ICON_URL).root,
     )
