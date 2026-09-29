@@ -55,13 +55,12 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * Neutral medieval slate used by the icon button.
+ * Shared fill for every action button.
  *
- * The attack button is the one control that carries artwork instead of a text
- * label, so it is given the dark stone treatment rather than a saturated fill.
- * Painting a colour behind a sword icon reads as a coloured disc behind the
- * artwork; this is the source of the red circle, and it is removed rather than
- * covered over.
+ * There is no per-button colour: controls are distinguished by their label or
+ * icon, not by a coloured disc painted behind the artwork. Painting a saturated
+ * colour behind a button reads as a coloured circle, which is the red circle
+ * this removes. Mirrors the single `--btn-color` in web/src/style.css.
  */
 private val NeutralButtonColor = Color(0xFF39405A)
 
@@ -258,14 +257,12 @@ fun ActionButtonsCluster(
             ActionButton(
                 label = "HEAVY",
                 sublabel = "ATK",
-                baseColor = Color(0xFFC8452B),
                 testTag = "button_heavy_attack",
                 onClick = onHeavyAttack
             )
             ActionButton(
                 label = "JUMP",
                 sublabel = "UP",
-                baseColor = Color(0xFF2D7BC7),
                 testTag = "button_jump",
                 onClick = onJump
             )
@@ -276,7 +273,6 @@ fun ActionButtonsCluster(
             ActionButton(
                 label = "DASH",
                 sublabel = "ROLL",
-                baseColor = Color(0xFF389E82),
                 testTag = "button_dash",
                 onClick = onDash
             )
@@ -285,7 +281,6 @@ fun ActionButtonsCluster(
             HoldActionButton(
                 label = "BLOCK",
                 sublabel = "GUARD",
-                baseColor = Color(0xFF9E7A26),
                 testTag = "button_block",
                 onPressedChange = onBlockChange
             )
@@ -293,7 +288,6 @@ fun ActionButtonsCluster(
             ActionButton(
                 label = "ATK",
                 sublabel = "SLASH",
-                baseColor = NeutralButtonColor,
                 testTag = "button_attack",
                 size = 62,
                 icon = attackIcon,
@@ -307,7 +301,6 @@ fun ActionButtonsCluster(
 fun ActionButton(
     label: String,
     sublabel: String,
-    baseColor: Color,
     testTag: String,
     size: Int = 54,
     icon: ImageBitmap? = null,
@@ -322,7 +315,7 @@ fun ActionButton(
                 detectTapGestures(onTap = { onClick() })
             },
         shape = CircleShape,
-        color = baseColor.copy(alpha = 0.85f),
+        color = NeutralButtonColor.copy(alpha = 0.85f),
         shadowElevation = 6.dp
     ) {
         if (icon != null) {
@@ -364,7 +357,6 @@ fun ActionButton(
 fun HoldActionButton(
     label: String,
     sublabel: String,
-    baseColor: Color,
     testTag: String,
     size: Int = 54,
     onPressedChange: (Boolean) -> Unit
@@ -388,7 +380,7 @@ fun HoldActionButton(
                 )
             },
         shape = CircleShape,
-        color = if (isPressed) baseColor else baseColor.copy(alpha = 0.85f),
+        color = if (isPressed) NeutralButtonColor else NeutralButtonColor.copy(alpha = 0.85f),
         shadowElevation = if (isPressed) 2.dp else 6.dp
     ) {
         Column(

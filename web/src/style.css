@@ -293,7 +293,13 @@ body {
   gap: 14px;
 }
 
+/*
+ * One shared fill for every action button. There is no per-button colour:
+ * controls are distinguished by their label or icon, not by a coloured disc
+ * painted behind the artwork.
+ */
 .action-btn {
+  --btn-color: #39405a;
   display: flex;
   flex-direction: column;
   align-items: center;

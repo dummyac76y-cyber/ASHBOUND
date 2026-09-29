@@ -638,63 +638,117 @@ console.log('player spawns at the arena centre')
   )
 }
 
-// --- 10. Attack button has no red ------------------------------------------
-console.log('attack button carries no red circle')
+// --- 10. Action buttons carry no coloured circle -----------------------------
+console.log('every action button shares one neutral fill')
 {
+  // Checked across all five buttons, not just the attack button: a per-button
+  // colour is what produces a coloured disc behind a label or an icon.
   const res = await page.evaluate(() => {
-    const btn = document.querySelector('[data-testid="button_attack"]')
-    const img = btn.querySelector('img')
-    const cs = getComputedStyle(btn)
-    const rect = btn.getBoundingClientRect()
-    const irect = img.getBoundingClientRect()
-
-    // Icon asset must be red-free too.
-    const ac = document.createElement('canvas')
-    ac.width = img.naturalWidth
-    ac.height = img.naturalHeight
-    const ax = ac.getContext('2d')
-    ax.drawImage(img, 0, 0)
-    const ad = ax.getImageData(0, 0, ac.width, ac.height).data
-    let iconRed = 0
-    for (let i = 0; i < ad.length; i += 4) {
-      if (ad[i + 3] < 16) continue
-      if (ad[i] > 90 && ad[i] > ad[i + 1] * 1.5 && ad[i] > ad[i + 2] * 1.5) iconRed++
-    }
-
-    const parse = (css) => {
-      const m = css.match(/[\d.]+/g)
-      return m ? m.slice(0, 3).map(Number) : null
-    }
-    return {
-      bgImage: cs.backgroundImage,
-      bgColor: cs.backgroundColor,
-      varColor: cs.getPropertyValue('--btn-color').trim(),
-      radius: cs.borderRadius,
-      boxShadow: cs.boxShadow,
-      buttonSize: [Math.round(rect.width), Math.round(rect.height)],
-      iconSize: [Math.round(irect.width), Math.round(irect.height)],
-      iconNatural: [img.naturalWidth, img.naturalHeight],
-      iconRedPixels: iconRed,
-      bgRgb: parse(cs.backgroundColor),
-    }
+    const tags = ['button_attack', 'button_heavy_attack', 'button_jump', 'button_dash', 'button_block']
+    return tags.map((tag) => {
+      const btn = document.querySelector(`[data-testid="${tag}"]`)
+      if (!btn) return { tag, missing: true }
+      const cs = getComputedStyle(btn)
+      const rect = btn.getBoundingClientRect()
+      const img = btn.querySelector('img')
+      const irect = img ? img.getBoundingClientRect() : null
+      return {
+        tag,
+        missing: false,
+        bgImage: cs.backgroundImage,
+        bgColor: cs.backgroundColor,
+        varColor: cs.getPropertyValue('--btn-color').trim(),
+        inlineColor: btn.style.getPropertyValue('--btn-color').trim(),
+        radius: cs.borderRadius,
+        buttonSize: [Math.round(rect.width), Math.round(rect.height)],
+        iconSize: irect ? [Math.round(irect.width), Math.round(irect.height)] : null,
+        iconNatural: img ? [img.naturalWidth, img.naturalHeight] : null,
+        label: btn.textContent.trim(),
+      }
+    })
   })
 
-  const [br, bgc, bb] = res.bgRgb ?? [0, 0, 0]
-  check('button background is not a background image', res.bgImage === 'none', res.bgImage)
-  check('no red anywhere in the button fill', !(br > 90 && br > bgc * 1.5 && br > bb * 1.5), `rgb(${res.bgRgb})`)
-  check('button fill is the dark slate, not red', res.varColor.toLowerCase() === '#39405a', res.varColor)
-  check('attack icon asset contains no red pixels', res.iconRedPixels === 0, `${res.iconRedPixels} red pixels`)
+  const parse = (css) => {
+    const m = (css ?? '').match(/[\d.]+/g)
+    return m ? m.slice(0, 3).map(Number) : null
+  }
+  const isReddish = (rgb) => rgb && rgb[0] > 90 && rgb[0] > rgb[1] * 1.5 && rgb[0] > rgb[2] * 1.5
+
+  for (const b of res) {
+    check(`button ${b.tag} exists`, !b.missing, b.missing ? 'not found' : '')
+    if (b.missing) continue
+    check(`button ${b.tag} background is not a background image`, b.bgImage === 'none', b.bgImage)
+    check(`button ${b.tag} fill has no red`, !isReddish(parse(b.bgColor)), b.bgColor)
+    check(`button ${b.tag} fill is the dark slate`, b.varColor.toLowerCase() === '#39405a', b.varColor)
+    check(
+      `button ${b.tag} sets no inline colour override`,
+      b.inlineColor === '',
+      b.inlineColor || 'none',
+    )
+  }
+
+  // All five must resolve to one identical computed fill.
+  const colors = new Set(res.filter((b) => !b.missing).map((b) => b.bgColor))
+  check('all five buttons share one identical fill', colors.size === 1, [...colors].join(' | '))
+
+  // The pressed state is a separate rule; it must stay neutral too.
+  const pressed = await page.evaluate(() => {
+    const tags = ['button_attack', 'button_heavy_attack', 'button_jump', 'button_dash', 'button_block']
+    return tags.map((tag) => {
+      const btn = document.querySelector(`[data-testid="${tag}"]`)
+      btn.classList.add('is-pressed')
+      const bg = getComputedStyle(btn).backgroundColor
+      btn.classList.remove('is-pressed')
+      return { tag, bg }
+    })
+  })
+  const pressedColors = new Set(pressed.map((b) => b.bg))
   check(
-    'sword icon is about 56x56 and keeps its square aspect',
-    Math.abs(res.iconSize[0] - 56) <= 2 && Math.abs(res.iconSize[1] - 56) <= 2 && res.iconSize[0] === res.iconSize[1],
-    `rendered ${res.iconSize[0]}x${res.iconSize[1]}, natural ${res.iconNatural[0]}x${res.iconNatural[1]}`,
+    'pressed state stays neutral on all five buttons',
+    pressedColors.size === 1 && !isReddish(parse([...pressedColors][0])),
+    [...pressedColors].join(' | '),
   )
-  check(
-    'sword icon is centred inside the button',
-    Math.abs(res.iconSize[0] - res.buttonSize[0] * 0.9) <= 2,
-    `icon ${res.iconSize[0]}px in a ${res.buttonSize[0]}px button`,
-  )
-  check('button touch area unchanged', res.buttonSize[0] === 62 && res.buttonSize[1] === 62, `${res.buttonSize}`)
+
+  // The attack icon itself must still be red-free and correctly sized.
+  const atk = res.find((b) => b.tag === 'button_attack')
+  if (atk && !atk.missing) {
+    const iconRed = await page.evaluate(() => {
+      const img = document.querySelector('[data-testid="button_attack"] img')
+      const c = document.createElement('canvas')
+      c.width = img.naturalWidth
+      c.height = img.naturalHeight
+      const x = c.getContext('2d')
+      x.drawImage(img, 0, 0)
+      const d = x.getImageData(0, 0, c.width, c.height).data
+      let n = 0
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] < 16) continue
+        if (d[i] > 90 && d[i] > d[i + 1] * 1.5 && d[i] > d[i + 2] * 1.5) n++
+      }
+      return n
+    })
+    check('attack icon asset contains no red pixels', iconRed === 0, `${iconRed} red pixels`)
+    check(
+      'sword icon is about 56x56 and keeps its square aspect',
+      Math.abs(atk.iconSize[0] - 56) <= 2 && Math.abs(atk.iconSize[1] - 56) <= 2 && atk.iconSize[0] === atk.iconSize[1],
+      `rendered ${atk.iconSize[0]}x${atk.iconSize[1]}, natural ${atk.iconNatural[0]}x${atk.iconNatural[1]}`,
+    )
+    check(
+      'sword icon is centred inside the button',
+      Math.abs(atk.iconSize[0] - atk.buttonSize[0] * 0.9) <= 2,
+      `icon ${atk.iconSize[0]}px in a ${atk.buttonSize[0]}px button`,
+    )
+    check('attack button touch area unchanged', atk.buttonSize[0] === 62 && atk.buttonSize[1] === 62, `${atk.buttonSize}`)
+  }
+
+  // The other four keep their 54px touch areas.
+  for (const b of res.filter((x) => !x.missing && x.tag !== 'button_attack')) {
+    check(
+      `button ${b.tag} touch area unchanged at 54px`,
+      b.buttonSize[0] === 54 && b.buttonSize[1] === 54,
+      `${b.buttonSize}`,
+    )
+  }
 }
 
 // --- 6. Visual proof -----------------------------------------------------------

@@ -96,11 +96,14 @@ const ATTACK_ICON_URL = assetUrl('ui/btn_attack.png')
  * artwork; this is the source of the red circle, and it is removed rather than
  * covered over.
  */
-const NEUTRAL_BUTTON_COLOR = '#39405a'
-
 /**
  * Circular action button. `hold` buttons report press and release separately.
  * When `iconUrl` is supplied the artwork replaces the text labels.
+ *
+ * The button takes no colour argument. Every action button shares one dark slate
+ * fill defined in style.css, so each control is told apart by its label or icon
+ * rather than by a coloured disc behind it. A saturated fill reads as a coloured
+ * circle sitting on top of the artwork, which is the red circle this removes.
  */
 class ActionButton {
   readonly root: HTMLButtonElement
@@ -108,7 +111,6 @@ class ActionButton {
   constructor(
     label: string,
     sublabel: string,
-    color: string,
     testTag: string,
     size: number,
     onPress: () => void,
@@ -119,7 +121,6 @@ class ActionButton {
     this.root.type = 'button'
     this.root.dataset.testid = testTag
     this.root.setAttribute('aria-label', label)
-    this.root.style.setProperty('--btn-color', color)
     this.root.style.width = `${size}px`
     this.root.style.height = `${size}px`
 
@@ -183,17 +184,17 @@ export class VirtualControls {
     const cluster = el('div', 'action-cluster')
     const topRow = el('div', 'action-row')
     topRow.append(
-      new ActionButton('HEAVY', 'ATK', '#c8452b', 'button_heavy_attack', 54, callbacks.onHeavyAttack).root,
-      new ActionButton('JUMP', 'UP', '#2d7bc7', 'button_jump', 54, callbacks.onJump).root,
+      new ActionButton('HEAVY', 'ATK', 'button_heavy_attack', 54, callbacks.onHeavyAttack).root,
+      new ActionButton('JUMP', 'UP', 'button_jump', 54, callbacks.onJump).root,
     )
 
     const midRow = el('div', 'action-row')
     midRow.append(
-      new ActionButton('DASH', 'ROLL', '#389e82', 'button_dash', 54, callbacks.onDash).root,
-      new ActionButton('BLOCK', 'GUARD', '#9e7a26', 'button_block', 54, callbacks.onBlockChange.bind(null, true), () =>
+      new ActionButton('DASH', 'ROLL', 'button_dash', 54, callbacks.onDash).root,
+      new ActionButton('BLOCK', 'GUARD', 'button_block', 54, callbacks.onBlockChange.bind(null, true), () =>
         callbacks.onBlockChange(false),
       ).root,
-      new ActionButton('ATK', 'SLASH', NEUTRAL_BUTTON_COLOR, 'button_attack', 62, callbacks.onAttack, undefined, ATTACK_ICON_URL).root,
+      new ActionButton('ATK', 'SLASH', 'button_attack', 62, callbacks.onAttack, undefined, ATTACK_ICON_URL).root,
     )
 
     cluster.append(topRow, midRow)
