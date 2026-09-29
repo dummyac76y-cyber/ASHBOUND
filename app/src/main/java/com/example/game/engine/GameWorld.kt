@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
+import android.util.Log
 import com.example.game.animation.DefaultAnimationConfigs
 import com.example.game.animation.PlayerAction
 import com.example.game.animation.SpriteAnimationSystem
@@ -68,13 +69,23 @@ class GameWorld(val context: Context) {
     }
 
     private fun loadArenaBackground() {
-        try {
-            val resId = context.resources.getIdentifier("img_arena_bg", "drawable", context.packageName)
-            if (resId != 0) {
-                val opts = BitmapFactory.Options().apply { inScaled = false }
-                bgBitmap = BitmapFactory.decodeResource(context.resources, resId, opts)
-            }
-        } catch (_: Exception) {}
+        // Prefer the high-res backdrop; fall back to the legacy jpg if it is absent.
+        val names = listOf("img_arena_bg_hd", "img_arena_bg")
+        for (name in names) {
+            try {
+                val resId = context.resources.getIdentifier(name, "drawable", context.packageName)
+                if (resId != 0) {
+                    val opts = BitmapFactory.Options().apply { inScaled = false }
+                    val bitmap = BitmapFactory.decodeResource(context.resources, resId, opts)
+                    if (bitmap != null) {
+                        bgBitmap = bitmap
+                        Log.i("GameWorld", "Arena background: $name (${bitmap.width}x${bitmap.height})")
+                        return
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        Log.w("GameWorld", "No arena background found; using the gradient fallback")
     }
 
     fun update(dt: Float) {

@@ -1,0 +1,544 @@
+/* Exiled Knight — web build.
+   Colour values mirror the Compose UI in app/src/main/java/com/example/game/ui. */
+
+:root {
+  --bg: #0c0e14;
+  --panel: rgba(16, 18, 28, 0.85);
+  --panel-solid: #161822;
+  --border: rgba(255, 255, 255, 0.2);
+  --text: #d4dae8;
+  --text-dim: #a0a5b8;
+  --accent: #6b8aff;
+  --hp: #e63946;
+  --sta: #00b4d8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  /* Stop iOS from bouncing / double-tap-zooming the game surface. */
+  overscroll-behavior: none;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#app {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---------- Game surface ---------- */
+
+.game-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.loading-error {
+  color: #ff8e8e;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 24px;
+  text-align: center;
+}
+
+/* ---------- HUD ---------- */
+
+.hud {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  pointer-events: none;
+}
+
+.hud-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.hud-monitor {
+  background: rgba(16, 18, 28, 0.87);
+  border-color: rgba(107, 138, 255, 0.27);
+  text-align: center;
+}
+
+.hud-title {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  margin-bottom: 3px;
+}
+
+.hud-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.hud-label {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-dim);
+  min-width: 28px;
+}
+
+.hud-label-hp {
+  color: #ff6b6b;
+}
+
+.hud-label-sta {
+  color: #48cae4;
+}
+
+.hud-state {
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.hud-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  color: #ccd2e3;
+  white-space: nowrap;
+}
+
+.bar {
+  width: 100px;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.bar-sta {
+  height: 6px;
+  border-radius: 3px;
+}
+
+.bar-hp {
+  background: #2c1414;
+}
+
+.bar-sta {
+  background: #0f2537;
+}
+
+.bar-fill {
+  height: 100%;
+  width: 100%;
+  transition: width 80ms linear;
+}
+
+.bar-fill-hp {
+  background: var(--hp);
+}
+
+.bar-fill-sta {
+  background: var(--sta);
+}
+
+.hud-buttons {
+  display: flex;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+/* ---------- Buttons ---------- */
+
+.btn {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: rgba(42, 46, 68, 0.8);
+  color: #fff;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.btn:hover {
+  filter: brightness(1.15);
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn-primary {
+  background: rgba(57, 75, 123, 0.93);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: #88a0df;
+}
+
+.btn-step {
+  background: #262a3c;
+  min-width: 28px;
+  line-height: 1;
+}
+
+/* ---------- Virtual controls ---------- */
+
+.controls {
+  position: absolute;
+  inset: 0;
+  padding: 16px 24px;
+  pointer-events: none;
+}
+
+.joystick {
+  position: absolute;
+  left: 24px;
+  bottom: 16px;
+  width: 130px;
+  height: 130px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(34, 38, 56, 0.4), rgba(16, 18, 28, 0.2));
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.joystick-ring {
+  position: absolute;
+  inset: 4px;
+  border: 2px solid rgba(255, 255, 255, 0.27);
+  border-radius: 50%;
+}
+
+.joystick-arrow {
+  position: absolute;
+  top: 50%;
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  transform: translateY(-50%);
+}
+
+.joystick-arrow-left {
+  left: 12px;
+  border-right: 8px solid rgba(255, 255, 255, 0.47);
+}
+
+.joystick-arrow-right {
+  right: 12px;
+  border-left: 8px solid rgba(255, 255, 255, 0.47);
+}
+
+.joystick-thumb {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, #5b6998, #282e47);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
+}
+
+.action-cluster {
+  position: absolute;
+  right: 24px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.action-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.action-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  border: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--btn-color) 85%, transparent);
+  box-shadow: 0 6px 10px rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+  touch-action: none;
+  padding: 0;
+}
+
+.action-btn.is-pressed {
+  background: var(--btn-color);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.45);
+}
+
+.action-btn-label {
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.action-btn-sub {
+  font-size: 8px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.8);
+  line-height: 1;
+}
+
+/* ---------- Key hints (desktop only) ---------- */
+
+.key-hints {
+  position: absolute;
+  left: 24px;
+  bottom: 156px;
+  display: none;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  max-width: 260px;
+  pointer-events: none;
+}
+
+.key-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.key-hint kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  color: var(--text);
+  background: rgba(42, 46, 68, 0.9);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .key-hints {
+    display: flex;
+  }
+}
+
+/* ---------- Inspector modal ---------- */
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 10;
+  padding: 16px;
+}
+
+.modal-card {
+  width: min(680px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-solid);
+  border-radius: 16px;
+  padding: 16px;
+  gap: 12px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 900;
+  color: #e2e7f5;
+}
+
+.modal-body {
+  display: flex;
+  gap: 12px;
+  min-height: 0;
+  flex: 1;
+}
+
+.tab-list {
+  width: 130px;
+  flex: 0 0 130px;
+  overflow-y: auto;
+  background: #0f1018;
+  border-radius: 8px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tab {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  padding: 6px 8px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tab.is-selected {
+  background: #2c3554;
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.tab-name {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tab-meta {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  color: #7de392;
+}
+
+.tab:not(.is-selected) .tab-meta {
+  color: #7de392;
+}
+
+.inspector-details {
+  flex: 1;
+  min-width: 0;
+  background: #0f1018;
+  border-radius: 8px;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.inspector-line {
+  margin: 0 0 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: #c4cadb;
+}
+
+.inspector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+  gap: 8px;
+}
+
+.inspector-label {
+  font-size: 11px;
+  color: #fff;
+}
+
+.inspector-empty {
+  color: #888;
+  font-size: 12px;
+  text-align: center;
+  margin-top: 24px;
+}
+
+.slider {
+  width: 100%;
+  margin: 6px 0 0;
+  accent-color: var(--accent);
+}
+
+.stepper {
+  display: flex;
+  gap: 4px;
+}
+
+/* ---------- Small screens ---------- */
+
+@media (max-width: 560px) {
+  .hud {
+    padding: 8px 10px;
+    gap: 6px;
+  }
+
+  .hud-monitor {
+    display: none;
+  }
+
+  .controls {
+    padding: 10px 12px;
+  }
+
+  .joystick {
+    left: 12px;
+    bottom: 12px;
+    width: 112px;
+    height: 112px;
+  }
+
+  .action-cluster {
+    right: 12px;
+    bottom: 12px;
+  }
+
+  .modal-body {
+    flex-direction: column;
+  }
+
+  .tab-list {
+    width: 100%;
+    flex: 0 0 auto;
+    flex-direction: row;
+    overflow-x: auto;
+  }
+}

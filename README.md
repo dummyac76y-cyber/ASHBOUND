@@ -1,0 +1,122 @@
+# Exiled Knight
+
+2D retro action platformer. The same game builds as an **Android APK** and as a **web app** from this one repository.
+
+| Target | Directory | Stack |
+| --- | --- | --- |
+| Android | `app/` | Kotlin + Jetpack Compose (Android Gradle Plugin) |
+| Web | `web/` | TypeScript + Canvas 2D (Vite) |
+
+## Quick start
+
+### Web
+
+```bash
+npm run web:install     # once
+npm run web:dev         # http://localhost:5173
+```
+
+Production build into `web/dist/`:
+
+```bash
+npm run web:build
+npm run web:preview     # serve the production build locally
+```
+
+`web/dist/` is a static bundle — drop it on any static host (GitHub Pages, Netlify,
+Cloudflare Pages, an S3 bucket). Asset URLs are relative, so it also works from a
+sub-path without reconfiguration.
+
+### Android
+
+```bash
+./gradlew :app:assembleDebug     # debug APK
+./gradlew :app:assembleRelease   # release APK (needs KEYSTORE_PATH / STORE_PASSWORD / KEY_PASSWORD)
+```
+
+Requires a JDK 17+ and the Android SDK. The release build is wired to the keystore
+described in `.env.example` / `gradle.properties`.
+
+## Controls
+
+| Action | Touch | Keyboard |
+| --- | --- | --- |
+| Move | Left thumbstick | `A` / `D` or `←` / `→` |
+| Jump | `JUMP` button | `Space` or `W` |
+| Attack | `ATK` button | `J` |
+| Heavy attack | `HEAVY` button | `K` |
+| Block (hold) | `BLOCK` button | `L` |
+| Dash | `DASH` button | `Shift` |
+
+Keyboard bindings are web-only; the Android build is touch-driven. `CONFIG` in the
+HUD opens the animation inspector (live FPS tuning, frame-count stepping, per-action
+preview) on both platforms.
+
+## Shared assets
+
+The Android app is the **source of truth** for art. The web build never stores its
+own copy:
+
+```
+app/src/main/assets/sprites/*.png   ──┐
+                                       ├──▶  web/public/  (generated, git-ignored)
+app/src/main/res/drawable/img_arena_bg_hd.png  ──┘
+```
+
+`npm run sync-assets` performs the copy and runs automatically before `web:dev` and
+`web:build`. Edit or add a sprite under `app/src/main/assets/sprites/`, re-run the
+web build, and both targets pick it up.
+
+Sprite sheets are named after the action they drive, because `SpriteAnimationConfig.kt`
+looks them up by filename:
+
+| File | Frames | Used by |
+| --- | --- | --- |
+| `idle.png` | 12 | `IDLE` (and currently as the fallback art for the other actions) |
+| `walk.png` | 12 | `WALK`, `JUMP` |
+| `exiled_knight_portrait.png` | 1 | unused placeholder / reference still |
+
+Only `idle.png` and `walk.png` exist so far. `ATTACK`, `HEAVY_ATTACK`, `BLOCK`,
+`DASH`, `HURT` and `DEATH` are configured but have no sheet, so they temporarily
+render the idle art. Add `attack.png` etc. and point the matching entry in
+`DefaultAnimationConfigs` at them.
+
+The arena backdrop lives in `res/drawable/` rather than `assets/` on Android, so the
+sync script copies it explicitly to `web/public/bg/arena_bg.png`. `GameWorld` looks up
+`img_arena_bg_hd` first and falls back to the legacy `img_arena_bg.jpg`.
+
+## Verifying
+
+```bash
+npm run web:check     # TypeScript typecheck + headless game-logic tests
+```
+
+`web/src/game/logic.test.ts` runs the physics, animation state machine, hit detection
+and damage rules in plain Node (60 assertions) — it needs no browser.
+
+## Repository layout
+
+```
+app/                      Android application module
+  src/main/java/.../game/
+    animation/            SpriteAnimationSystem, SpriteSheet, PlayerAction, configs
+    controller/           PlayerController (physics + state machine)
+    engine/               GameWorld (world, camera, arena, particles)
+    model/                TrainingDummy, DamageText, SparkParticle
+    ui/                   Compose HUD, virtual controls, animation inspector
+  src/main/assets/sprites/   sprite sheets (source of truth)
+  src/main/res/drawable/     arena backgrounds
+
+web/                      Web application (Vite + TypeScript)
+  src/game/               TypeScript port of the modules above
+  src/ui/                 DOM-based HUD, virtual controls, inspector
+  scripts/sync-assets.mjs copies Android art into web/public
+```
+
+### Note on the two implementations
+
+The game logic is implemented **twice** — once in Kotlin, once in TypeScript — because
+Jetpack Compose's `Canvas`/`nativeCanvas` rendering in `GameScreen.kt` has no web
+equivalent. Only the *artwork* is genuinely shared. Behavioural changes therefore have
+to be made in both `app/src/main/java/com/example/game/` and `web/src/game/`; the logic
+test is the fastest way to confirm the web side after a change.
