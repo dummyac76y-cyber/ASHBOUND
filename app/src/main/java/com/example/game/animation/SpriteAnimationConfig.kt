@@ -19,6 +19,11 @@ package com.example.game.animation
  *   sheet is a strip of square cells as wide as it is tall.
  * @param displayScale On-screen size multiplier, used to keep a grid-packed sheet's
  *   character the same on-screen size as the strip sheets.
+ * @param hitFrames First and last frame of the window in which the attack is live, as
+ *   [first, last] inclusive, or null for a sheet that deals no damage. Damage is dealt
+ *   when the animation enters this window rather than on the input frame, so the hit
+ *   lands while the blade is actually out. Measured from the artwork by finding where
+ *   the sword reaches furthest from the body.
  */
 data class AnimationConfig(
     val action: PlayerAction,
@@ -31,7 +36,8 @@ data class AnimationConfig(
     val footRows: List<Int> = SpriteMetrics.footRowsFor(sourceFileName),
     val columns: Int? = null,
     val cellSize: Int? = null,
-    val displayScale: Float = 1f
+    val displayScale: Float = 1f,
+    val hitFrames: List<Int>? = null
 )
 
 object DefaultAnimationConfigs {
@@ -70,9 +76,12 @@ object DefaultAnimationConfigs {
             // Packed as a 4x4 grid of 256px cells rather than a strip of 128px
             // ones, so the cell geometry is declared explicitly. displayScale
             // keeps the character the same on-screen size as the strip sheets.
+            // The blade is furthest out on frames 8 and 9 and stays out through
+            // 11, so that is the window in which the hit is live.
             columns = 4,
             cellSize = 256,
-            displayScale = 1.366f
+            displayScale = 1.461f,
+            hitFrames = listOf(8, 11)
         ),
         PlayerAction.HEAVY_ATTACK to AnimationConfig(
             action = PlayerAction.HEAVY_ATTACK,
@@ -83,11 +92,13 @@ object DefaultAnimationConfigs {
             priority = 4,
             canBeCancelledByMovement = false,
             // Packed as a 5x5 grid of 256px cells rather than a strip of 128px
-            // ones, so the cell geometry is declared explicitly. displayScale
-            // keeps the character the same on-screen size as the strip sheets.
+            // ones, so the cell geometry is declared explicitly. The long windup
+            // occupies frames 0..13; the blade first reaches full extension on
+            // frame 14 and is still out through 19.
             columns = 5,
             cellSize = 256,
-            displayScale = 1.268f
+            displayScale = 1.364f,
+            hitFrames = listOf(14, 18)
         ),
         PlayerAction.BLOCK to AnimationConfig(
             action = PlayerAction.BLOCK,

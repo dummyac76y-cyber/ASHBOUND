@@ -41,8 +41,9 @@ class PlayerController(
 
     // Internal state timers
     private var dashTimer: Float = 0f
-    private var attackHitboxProcessed: Boolean = false
-    private var heavyAttackHitboxProcessed: Boolean = false
+
+    /** Attacks whose hit window has already fired, so one swing hits at most once. */
+    private val hitWindowConsumed: MutableSet<PlayerAction> = mutableSetOf()
 
     // Input buffer
     private var inputMoveX: Float = 0f
@@ -97,7 +98,7 @@ class PlayerController(
 
     fun onAttack(): Boolean {
         if (dashTimer > 0 || !isGrounded) return false
-        attackHitboxProcessed = false
+        hitWindowConsumed.remove(PlayerAction.ATTACK)
         val switched = animationSystem.playAction(PlayerAction.ATTACK, restartIfSame = true)
         if (switched) vx = (if (isFacingRight) 40f else -40f) // slight forward lunge
         return switched
@@ -106,7 +107,7 @@ class PlayerController(
     fun onHeavyAttack(): Boolean {
         if (dashTimer > 0 || !isGrounded || stamina < 20f) return false
         stamina -= 20f
-        heavyAttackHitboxProcessed = false
+        hitWindowConsumed.remove(PlayerAction.HEAVY_ATTACK)
         val switched = animationSystem.playAction(PlayerAction.HEAVY_ATTACK, restartIfSame = true)
         if (switched) vx = 0f
         return switched
@@ -249,25 +250,30 @@ class PlayerController(
     /**
      * Checks if the attack has reached its active damage frame.
      */
-    fun shouldCheckAttackHit(): Boolean {
-        if (animationSystem.currentAction == PlayerAction.ATTACK) {
-            val frame = animationSystem.currentFrameIndex
-            if (frame in 3..5 && !attackHitboxProcessed) {
-                attackHitboxProcessed = true
-                return true
-            }
-        }
-        return false
-    }
+    fun shouldCheckAttackHit(): Boolean = consumeHitWindow(PlayerAction.ATTACK)
 
-    fun shouldCheckHeavyAttackHit(): Boolean {
-        if (animationSystem.currentAction == PlayerAction.HEAVY_ATTACK) {
-            val frame = animationSystem.currentFrameIndex
-            if (frame in 4..7 && !heavyAttackHitboxProcessed) {
-                heavyAttackHitboxProcessed = true
-                return true
-            }
-        }
-        return false
+    fun shouldCheckHeavyAttackHit(): Boolean = consumeHitWindow(PlayerAction.HEAVY_ATTACK)
+
+    /**
+     * Reports whether the given attack's blade is live on the current frame.
+     *
+     * The window comes from the sheet's config rather than being hardcoded here, so
+     * it stays correct when the artwork changes: it is the frame range over which the
+     * sword is actually extended, measured from the sheet. The window is consumed on
+     * the first frame it covers, so one swing can only ever hit once even though the
+     * window spans several frames.
+     */
+    private fun consumeHitWindow(action: PlayerAction): Boolean {
+        if (animationSystem.currentAction != action) return false
+        if (hitWindowConsumed.contains(action)) return false
+
+        val window = animationSystem.getConfig(action)?.hitFrames ?: return false
+        if (window.size != 2) return false
+
+        val frame = animationSystem.currentFrameIndex
+        if (frame < window[0] || frame > window[1]) return false
+
+        hitWindowConsumed.add(action)
+        return true
     }
 }

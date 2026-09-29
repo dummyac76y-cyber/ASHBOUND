@@ -52,8 +52,8 @@ export class PlayerController {
 
   // Internal state timers
   private dashTimer = 0
-  private attackHitboxProcessed = false
-  private heavyAttackHitboxProcessed = false
+  /** Attacks whose hit window has already fired, so one swing hits at most once. */
+  private readonly hitWindowConsumed = new Set<PlayerAction>()
 
   // Input buffer
   private inputMoveX = 0
@@ -102,7 +102,7 @@ export class PlayerController {
 
   onAttack(): boolean {
     if (this.dashTimer > 0 || !this.isGrounded) return false
-    this.attackHitboxProcessed = false
+    this.hitWindowConsumed.delete(PlayerAction.ATTACK)
     const switched = this.animationSystem.playAction(PlayerAction.ATTACK, true)
     if (switched) this.vx = this.isFacingRight ? 40 : -40 // slight forward lunge
     return switched
@@ -111,7 +111,7 @@ export class PlayerController {
   onHeavyAttack(): boolean {
     if (this.dashTimer > 0 || !this.isGrounded || this.stamina < 20) return false
     this.stamina -= 20
-    this.heavyAttackHitboxProcessed = false
+    this.hitWindowConsumed.delete(PlayerAction.HEAVY_ATTACK)
     const switched = this.animationSystem.playAction(PlayerAction.HEAVY_ATTACK, true)
     if (switched) this.vx = 0
     return switched
@@ -247,24 +247,33 @@ export class PlayerController {
 
   /** True exactly once, when the attack reaches its active damage frame. */
   shouldCheckAttackHit(): boolean {
-    if (this.animationSystem.currentAction === PlayerAction.ATTACK) {
-      const frame = this.animationSystem.currentFrameIndex
-      if (frame >= 3 && frame <= 5 && !this.attackHitboxProcessed) {
-        this.attackHitboxProcessed = true
-        return true
-      }
-    }
-    return false
+    return this.consumeHitWindow(PlayerAction.ATTACK)
   }
 
   shouldCheckHeavyAttackHit(): boolean {
-    if (this.animationSystem.currentAction === PlayerAction.HEAVY_ATTACK) {
-      const frame = this.animationSystem.currentFrameIndex
-      if (frame >= 4 && frame <= 7 && !this.heavyAttackHitboxProcessed) {
-        this.heavyAttackHitboxProcessed = true
-        return true
-      }
-    }
-    return false
+    return this.consumeHitWindow(PlayerAction.HEAVY_ATTACK)
+  }
+
+  /**
+   * Reports whether the given attack's blade is live on the current frame.
+   *
+   * The window comes from the sheet's config rather than being hardcoded here, so
+   * it stays correct when the artwork changes: it is the frame range over which
+   * the sword is actually extended, measured from the sheet. The window is
+   * consumed on the first frame it covers, so one swing can only ever hit once
+   * even though the window spans several frames.
+   */
+  private consumeHitWindow(action: PlayerAction): boolean {
+    if (this.animationSystem.currentAction !== action) return false
+    if (this.hitWindowConsumed.has(action)) return false
+
+    const window = this.animationSystem.getConfig(action)?.hitFrames
+    if (!window) return false
+
+    const frame = this.animationSystem.currentFrameIndex
+    if (frame < window[0] || frame > window[1]) return false
+
+    this.hitWindowConsumed.add(action)
+    return true
   }
 }

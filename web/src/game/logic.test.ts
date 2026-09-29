@@ -41,8 +41,10 @@ function stubAnimations() {
     getSheet() {
       return undefined
     },
-    getConfig() {
-      return undefined
+    getConfig(action: PlayerAction) {
+      // The real config, so tests exercise the shipped hit windows and frame
+      // counts rather than invented ones.
+      return createDefaultConfigs().get(action)
     },
     getAllActions() {
       return Object.values(PlayerAction)
@@ -120,24 +122,74 @@ player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
 const dummy = world.dummies[0]
 player.x = dummy.x - 30
 player.isFacingRight = true
+const attackCfg = createDefaultConfigs().get(PlayerAction.ATTACK)!
+const attackWindow = attackCfg.hitFrames!
+const heavyCfg = createDefaultConfigs().get(PlayerAction.HEAVY_ATTACK)!
+const heavyWindow = heavyCfg.hitFrames!
+check('attack has a hit window', Array.isArray(attackWindow) && attackWindow.length === 2, `${attackWindow}`)
+check('heavy attack has a hit window', Array.isArray(heavyWindow) && heavyWindow.length === 2, `${heavyWindow}`)
+
 check('attack accepted', player.onAttack())
 check('ATTACK state active', anim.currentAction === PlayerAction.ATTACK, `got ${anim.currentAction}`)
 
 const hpBefore = dummy.hp
 // The world owns the hit check, so the active frame must be current *before*
 // update() runs — that is how the real game loop drives it.
-anim.currentFrameIndex = 4
+anim.currentFrameIndex = attackWindow[0]
 world.update(1 / 60)
 check('dummy took light damage', dummy.hp === hpBefore - 18, `got ${dummy.hp} from ${hpBefore}`)
 check('hitbox consumed once', !player.shouldCheckAttackHit())
 check('damage text spawned', world.damageTexts.length > 0)
 check('sparks spawned', world.particles.length > 0)
 
-console.log('heavy attack')
+console.log('the hit waits for the blade instead of landing on the windup')
+// Every frame before the window is a windup frame: the swing must not have
+// connected yet, so no damage and no effect.
+for (let f = 0; f < attackWindow[0]; f++) {
+  player.resetPlayer(dummy.x - 30, GameWorld.FLOOR_Y)
+  player.isFacingRight = true
+  player.onAttack()
+  const hp = dummy.hp
+  anim.currentFrameIndex = f
+  world.update(1 / 60)
+  check(`light attack deals no damage on windup frame ${f}`, dummy.hp === hp, `took ${hp - dummy.hp} too early`)
+}
+
+// The last frame of the window still connects.
 player.resetPlayer(dummy.x - 30, GameWorld.FLOOR_Y)
+player.isFacingRight = true
+player.onAttack()
+const lateHp = dummy.hp
+anim.currentFrameIndex = attackWindow[1]
+world.update(1 / 60)
+check('light attack still connects on the last window frame', dummy.hp === lateHp - 18, `got ${dummy.hp} from ${lateHp}`)
+
+// One swing connects once, even though the window spans several frames.
+check('a swing cannot hit twice', !player.shouldCheckAttackHit())
+for (let f = attackWindow[0]; f <= attackWindow[1]; f++) anim.currentFrameIndex = f
+check('a swing cannot hit twice across the window', !player.shouldCheckAttackHit())
+player.resetPlayer(dummy.x - 30, GameWorld.FLOOR_Y)
+player.isFacingRight = true
+player.onAttack()
+anim.currentFrameIndex = attackWindow[0]
+world.update(1 / 60)
+check('a second swing hits again', dummy.hp < lateHp, `got ${dummy.hp} from ${lateHp}`)
+
+console.log('heavy attack')
+for (let f = 0; f < heavyWindow[0]; f++) {
+  player.resetPlayer(dummy.x - 30, GameWorld.FLOOR_Y)
+  player.isFacingRight = true
+  player.onHeavyAttack()
+  const hp = dummy.hp
+  anim.currentFrameIndex = f
+  world.update(1 / 60)
+  check(`heavy attack deals no damage on windup frame ${f}`, dummy.hp === hp, `took ${hp - dummy.hp} too early`)
+}
+player.resetPlayer(dummy.x - 30, GameWorld.FLOOR_Y)
+player.isFacingRight = true
+player.onHeavyAttack()
 const heavyBefore = dummy.hp
-check('heavy attack accepted', player.onHeavyAttack())
-anim.currentFrameIndex = 5
+anim.currentFrameIndex = heavyWindow[0]
 world.update(1 / 60)
 check('dummy took heavy damage', dummy.hp === heavyBefore - 45, `got ${dummy.hp} from ${heavyBefore}`)
 
@@ -145,7 +197,7 @@ console.log('attack out of range')
 player.resetPlayer(dummy.x - 300, GameWorld.FLOOR_Y)
 const missBefore = dummy.hp
 check('attack still animates out of range', player.onAttack())
-anim.currentFrameIndex = 4
+anim.currentFrameIndex = attackWindow[0]
 world.update(1 / 60)
 check('dummy untouched out of range', dummy.hp === missBefore, `got ${dummy.hp}`)
 
@@ -422,11 +474,14 @@ console.log('GRID PACKED SHEETS: a 4x4 grid of 256px cells slices correctly')
 
   // A 256px cell drawn unscaled would shrink the character to ~57px against
   // idle's ~78px, so the sheet must carry a scale that restores the size.
-  const attackChar = (147.1 / 256) * scaled
-  const idleChar = (100.5 / 128) * size
+  // The character is the same on-screen size in every sheet, including the
+  // grid-packed ones. These are the standing heights measured from each sheet's
+  // frame 0 opaque bounds; see the calibration note in AnimationConfig.ts.
+  const attackChar = (141 / 256) * scaled
+  const idleChar = (103 / 128) * size
   check(
     'attack character renders the same on-screen height as idle',
-    Math.abs(attackChar - idleChar) < 1,
+    Math.abs(attackChar - idleChar) < 0.5,
     `attack ${attackChar.toFixed(1)} vs idle ${idleChar.toFixed(1)}`,
   )
 }
@@ -466,16 +521,16 @@ console.log('GRID PACKED SHEET: a 5x5 grid of 256px cells slices correctly')
   // real rendered pixels by scripts/verify-attack.mjs, which measures far more
   // reliably than a formula over source-pixel bounds can.
   const size = GameWorld.SPRITE_DISPLAY_SIZE
-  const heavyChar = (153 / 256) * (size * sheet.displayScale)
+  const heavyChar = (151 / 256) * (size * sheet.displayScale)
   const attackSheet = new SpriteSheet(
     PlayerAction.ATTACK,
     { width: 1024, height: 1024 } as unknown as HTMLCanvasElement,
     createDefaultConfigs().get(PlayerAction.ATTACK)!,
   )
-  const attackChar = (143 / 256) * (size * attackSheet.displayScale)
+  const attackChar = (141 / 256) * (size * attackSheet.displayScale)
   check(
     'heavy attack character renders the same on-screen size as light attack',
-    Math.abs(heavyChar - attackChar) < 1,
+    Math.abs(heavyChar - attackChar) < 0.5,
     `heavy ${heavyChar.toFixed(1)} vs light ${attackChar.toFixed(1)}`,
   )
 

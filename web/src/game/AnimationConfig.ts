@@ -30,8 +30,8 @@ export interface AnimationConfig {
   columns: number | null
   /**
    * Native size of one cell, in sheet pixels. Null means the sheet is a single
-   * strip whose cells are as tall as the image. The attack sheet is a 4x4 grid
-   * of 256px cells rather than a strip of 128px ones.
+   * strip whose cells are as tall as the image. The attack sheets are grids of
+   * 256px cells rather than strips of 128px ones.
    */
   cellSize: number | null
   /**
@@ -40,6 +40,16 @@ export interface AnimationConfig {
    * on-screen size as every other action.
    */
   displayScale: number
+  /**
+   * First and last frame of the window in which the attack is live, as
+   * `[first, last]` inclusive, or null for a sheet that deals no damage.
+   *
+   * Damage is dealt when the animation enters this window rather than on the
+   * input frame, so the hit lands while the blade is actually out. The window is
+   * measured from the artwork by finding where the sword reaches furthest from
+   * the body, which is the frame of contact.
+   */
+  hitFrames: readonly [number, number] | null
 }
 
 /**
@@ -47,10 +57,16 @@ export interface AnimationConfig {
  * (12 frames for idle, 12 for walk, 10 for jump).
  *
  * The two attack sheets are packed as grids of 256px cells rather than horizontal
- * strips of 128px ones, so they declare `columns`, `cellSize` and a `displayScale`
- * that keeps their character the same on-screen size as the strip sheets. Their
- * cells are square, so the cell size doubles with the resolution and the scale
- * partly offsets that.
+ * strips of 128px ones, so they declare `columns`, `cellSize` and a `displayScale`.
+ *
+ * The scale is calibrated on the character's standing height in the sheet's first
+ * frame, measured from the artwork's opaque bounds: idle stands 103px tall in a
+ * 128px cell (80.5% of the cell), while attack stands 141px in 256 (55.1%) and
+ * heavy 151px in 256 (59.0%). The scale is the ratio that renders those at the
+ * same on-screen height, so the character is the same size in every animation.
+ * Calibrating on frame 0 rather than the tallest frame matters, because in these
+ * sheets the tallest frame is the one with the sword raised overhead, which would
+ * measure the weapon rather than the character.
  *
  * DASH / HURT / DEATH / BLOCK sheets are not present yet, so those actions fall
  * back to the idle sheet and reuse its 12 frames until new art is added.
@@ -63,7 +79,12 @@ export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
     fps: number,
     loop: boolean,
     priority: number,
-    grid: { columns?: number; cellSize?: number; displayScale?: number } = {},
+    opts: {
+      columns?: number
+      cellSize?: number
+      displayScale?: number
+      hitFrames?: readonly [number, number]
+    } = {},
   ): AnimationConfig => ({
     action,
     sourceFileName,
@@ -72,16 +93,25 @@ export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
     loop,
     priority,
     footRows: footRowsFor(sourceFileName) ?? [],
-    columns: grid.columns ?? null,
-    cellSize: grid.cellSize ?? null,
-    displayScale: grid.displayScale ?? 1,
+    columns: opts.columns ?? null,
+    cellSize: opts.cellSize ?? null,
+    displayScale: opts.displayScale ?? 1,
+    hitFrames: opts.hitFrames ?? null,
   })
 
   return new Map<PlayerAction, AnimationConfig>([
     [PlayerAction.IDLE, config(PlayerAction.IDLE, 'idle.png', 12, 10, true, 0)],
     [PlayerAction.WALK, config(PlayerAction.WALK, 'walk.png', 12, 12, true, 1)],
-    [PlayerAction.ATTACK, config(PlayerAction.ATTACK, 'attack.png', 16, 24, false, 3, { columns: 4, cellSize: 256, displayScale: 1.366 })],
-    [PlayerAction.HEAVY_ATTACK, config(PlayerAction.HEAVY_ATTACK, 'heavy_attack.png', 25, 20, false, 4, { columns: 5, cellSize: 256, displayScale: 1.268 })],
+    // 4x4 grid of 256px cells. The blade is furthest out on frames 8 and 9, and
+    // stays out through 11, so that is the window in which the hit is live.
+    [PlayerAction.ATTACK, config(PlayerAction.ATTACK, 'attack.png', 16, 24, false, 3, {
+      columns: 4, cellSize: 256, displayScale: 1.461, hitFrames: [8, 11],
+    })],
+    // 5x5 grid of 256px cells. The long windup occupies frames 0..13; the blade
+    // first reaches full extension on frame 14 and is still out through 19.
+    [PlayerAction.HEAVY_ATTACK, config(PlayerAction.HEAVY_ATTACK, 'heavy_attack.png', 25, 20, false, 4, {
+      columns: 5, cellSize: 256, displayScale: 1.364, hitFrames: [14, 18],
+    })],
     [PlayerAction.BLOCK, config(PlayerAction.BLOCK, 'idle.png', 6, 12, true, 2)],
     [PlayerAction.DASH, config(PlayerAction.DASH, 'idle.png', 6, 15, false, 5)],
     [PlayerAction.JUMP, config(PlayerAction.JUMP, 'jump.png', 10, 12, false, 1)],

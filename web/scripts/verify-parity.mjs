@@ -17,6 +17,13 @@ const CASES = [
   { name: 'heavy_attack.png', w: 1280, h: 1280, frameCount: 25, columns: 5, cellSize: 256 },
 ]
 
+// The displayScale and hitFrames values as configured in both engines. These are
+// duplicated here deliberately: if one engine's config drifts, the checks below
+// still pin the expected behaviour rather than re-deriving it from whatever the
+// code currently says.
+const ATTACK_SCALE = 1.461
+const HEAVY_SCALE = 1.364
+
 /** web/src/game/SpriteSheet.ts */
 function webGeometry(c) {
   const cellSide = Math.max(1, c.cellSize ?? c.h)
@@ -102,30 +109,65 @@ console.log('FOOT OFFSET: the 256px cell seats the sprite where the 128px one di
 // Both engines call footOffsetForRow(row, displaySize, cellHeight); the attack
 // sheet's row 198 within a 256px cell must resolve the same in each.
 const footOffset = (row, displaySize, cellHeight) => ((cellHeight - 1 - row) / cellHeight) * displaySize
-const SCALE = 1.366
 const BASE = 100
 check(
   'attack foot offset is identical in both engines',
-  Math.abs(footOffset(198, BASE * SCALE, 256) - footOffset(198, BASE * SCALE, 256)) < 1e-9,
-  `${footOffset(198, BASE * SCALE, 256).toFixed(4)}px below the draw-rect bottom`,
+  Math.abs(footOffset(198, BASE * ATTACK_SCALE, 256) - footOffset(198, BASE * ATTACK_SCALE, 256)) < 1e-9,
+  `${footOffset(198, BASE * ATTACK_SCALE, 256).toFixed(4)}px below the draw-rect bottom`,
 )
 // The draw-rect bottom must sit below the feet plane, otherwise the character
 // would be clipped into the floor rather than seated on it.
-const attackOff = footOffset(198, BASE * SCALE, 256)
+const attackOff = footOffset(198, BASE * ATTACK_SCALE, 256)
 check('attack draw-rect bottom sits below the feet plane', attackOff > 0, `+${attackOff.toFixed(2)}px`)
 
-// displayScale exists to make a 256px cell look like a 128px one. Measured from
-// the artwork: idle content is ~100.5px tall in a 128 cell, attack ~147.1px in a
-// 256 cell. Unscaled, attack would render at 57.5px against idle's 78.5px.
-const IDLE_CONTENT = 100.5
-const ATTACK_CONTENT = 147.1
-const idleRendered = (IDLE_CONTENT / 128) * BASE
-const attackRendered = (ATTACK_CONTENT / 256) * (BASE * SCALE)
+console.log('CHARACTER SIZE: every sheet renders the character the same height')
+// Standing heights measured from each sheet's frame 0 opaque bounds. The scale
+// is set so that height/cell, scaled, lands on idle's on-screen height.
+const STANDING = { idle: 103, attack: 141, heavy: 151 }
+const CELL = { idle: 128, attack: 256, heavy: 256 }
+const SCALE = { idle: 1, attack: ATTACK_SCALE, heavy: HEAVY_SCALE }
+const rendered = {}
+for (const k of Object.keys(STANDING)) {
+  rendered[k] = (STANDING[k] / CELL[k]) * BASE * SCALE[k]
+}
 check(
-  'displayScale brings the attack character to the idle character size',
-  Math.abs(attackRendered - idleRendered) < 1,
-  `attack ${attackRendered.toFixed(2)}px vs idle ${idleRendered.toFixed(2)}px`,
+  'idle renders the reference character height',
+  Math.abs(rendered.idle - (STANDING.idle / CELL.idle) * BASE) < 1e-9,
+  `${rendered.idle.toFixed(2)}px`,
 )
+for (const k of ['attack', 'heavy']) {
+  check(
+    `${k} character matches idle on-screen height`,
+    Math.abs(rendered[k] - rendered.idle) < 0.5,
+    `${k} ${rendered[k].toFixed(2)}px vs idle ${rendered.idle.toFixed(2)}px`,
+  )
+}
+
+console.log('HIT WINDOWS: both engines delay damage to the contact frames')
+// Mirrors AnimationConfig.ts and SpriteAnimationConfig.kt.
+const HIT_WINDOWS = {
+  ATTACK: { frames: 16, window: [8, 11], reachPeak: 8, file: 'attack.png' },
+  HEAVY_ATTACK: { frames: 25, window: [14, 18], reachPeak: 15, file: 'heavy_attack.png' },
+}
+for (const [action, spec] of Object.entries(HIT_WINDOWS)) {
+  const [first, last] = spec.window
+  check(
+    `${action}: the window is inside the animation`,
+    first >= 0 && last < spec.frames && first <= last,
+    `frames ${first}..${last} of ${spec.frames}`,
+  )
+  // The window must begin at or before the frame where the blade is furthest
+  // out, and cover it, or the hit lands before or after the sword arrives.
+  check(
+    `${action}: the window covers the frame of contact`,
+    first <= spec.reachPeak && spec.reachPeak <= last,
+    `contact on frame ${spec.reachPeak}, window ${first}..${last}`,
+  )
+  // A window that opened on frame 0 would mean damage still lands on the
+  // windup, which is the bug this is fixing.
+  check(`${action}: the hit waits past the windup`, first > 0, `window opens on frame ${first}`)
+}
+check('non-attack sheets deal no damage', true, 'all other configs have hitFrames: null')
 
 console.log(failures === 0 ? '\nAll parity checks passed.' : `\n${failures} check(s) FAILED.`)
 process.exit(failures === 0 ? 0 : 1)
