@@ -663,6 +663,7 @@ console.log('every action button shares one neutral fill')
         buttonSize: [Math.round(rect.width), Math.round(rect.height)],
         iconSize: irect ? [Math.round(irect.width), Math.round(irect.height)] : null,
         iconNatural: img ? [img.naturalWidth, img.naturalHeight] : null,
+        iconSrc: img ? img.getAttribute('src') : null,
         label: btn.textContent.trim(),
       }
     })
@@ -709,6 +710,15 @@ console.log('every action button shares one neutral fill')
     [...pressedColors].join(' | '),
   )
 
+  // Each button must resolve to a distinct fingerprint, otherwise two buttons
+  // are pointing at the same cached bytes.
+  const fingerprints = res.filter((b) => !b.missing).map((b) => b.iconSrc?.match(/\?v=([0-9a-f]+)/)?.[1])
+  check(
+    'all five icons have distinct content fingerprints',
+    new Set(fingerprints).size === 5,
+    fingerprints.join(' '),
+  )
+
   // The attack icon itself must still be red-free and correctly sized.
   const atk = res.find((b) => b.tag === 'button_attack')
   if (atk && !atk.missing) {
@@ -728,6 +738,14 @@ console.log('every action button shares one neutral fill')
         `button ${b.tag} icon keeps its 39x39 square aspect`,
         b.iconSize !== null && b.iconNatural[0] === b.iconNatural[1],
         b.iconSize ? `natural ${b.iconNatural[0]}x${b.iconNatural[1]}` : 'not loaded',
+      )
+      // Stable filenames mean a byte swap leaves the URL identical, so caches
+      // would keep serving the previous artwork. The ?v= fingerprint must ride
+      // along, and must be unique per icon.
+      check(
+        `button ${b.tag} icon URL is cache-busted`,
+        b.iconSrc !== null && /\?v=[0-9a-f]{6,}$/.test(b.iconSrc),
+        b.iconSrc ?? 'no <img>',
       )
       // The icon fills 90% of the button and stays square.
       const expected = Math.round(b.buttonSize[0] * 0.9)

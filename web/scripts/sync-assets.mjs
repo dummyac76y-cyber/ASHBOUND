@@ -1,4 +1,5 @@
-import { cp, mkdir, readdir, stat } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { cp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -6,6 +7,9 @@ const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..', '..')
 const androidRes = join(repoRoot, 'app', 'src', 'main')
 const webPublic = join(repoRoot, 'web', 'public')
+
+/** Generated content-fingerprint map, consumed by src/assetUrl.ts. */
+const ASSET_MANIFEST = join(repoRoot, 'web', 'src', 'generated', 'asset-manifest.json')
 
 /**
  * Single source of truth for the arena backdrop.
@@ -27,7 +31,7 @@ async function exists(path) {
   }
 }
 
-async function syncDir(from, to) {
+async function syncDir(from, to, copiedPaths = []) {
   if (!(await exists(from))) {
     console.warn(`[sync-assets] missing source directory, skipped: ${relative(repoRoot, from)}`)
     return 0
@@ -39,10 +43,12 @@ async function syncDir(from, to) {
     const src = join(from, entry.name)
     const dst = join(to, entry.name)
     if (entry.isDirectory()) {
-      copied += await syncDir(src, dst)
+      copied += await syncDir(src, dst, copiedPaths)
     } else if (/\.(png|jpe?g|gif|webp|mp3|ogg|wav)$/i.test(entry.name)) {
       await mkdir(dirname(dst), { recursive: true })
       await cp(src, dst)
+      // Record the public-relative path so it can be fingerprinted below.
+      copiedPaths.push(relative(webPublic, dst).split('\\').join('/'))
       copied++
     }
   }
@@ -67,7 +73,8 @@ async function main() {
     process.exit(1)
   }
 
-  const assetCount = await syncDir(assetsSource, webPublic)
+  const copiedPaths = []
+  const assetCount = await syncDir(assetsSource, webPublic, copiedPaths)
   if (assetCount === 0) {
     console.error('[sync-assets] FATAL: no asset files found under app/src/main/assets')
     process.exit(1)
@@ -81,6 +88,24 @@ async function main() {
   } else {
     console.warn(`[sync-assets] arena background not found, web will render the gradient fallback`)
   }
+
+  // 3. Content fingerprints for every synced public asset.
+  //
+  // The asset filenames are stable, so swapping the bytes behind one (for example
+  // permuting the button icons) leaves the requested URL identical and any
+  // cache - browser, CDN or Vercel edge - keeps serving the old image. Appending
+  // a short content hash as a query string makes the URL change exactly when the
+  // bytes change, so a new build can never be served stale artwork.
+  const manifest = {}
+  for (const rel of [...copiedPaths].sort()) {
+    const buf = await readFile(join(webPublic, rel))
+    manifest[`./${rel}`] = createHash('sha256').update(buf).digest('hex').slice(0, 8)
+  }
+  await mkdir(dirname(ASSET_MANIFEST), { recursive: true })
+  await writeFile(ASSET_MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+  console.log(
+    `[sync-assets] ${Object.keys(manifest).length} asset fingerprint(s) written to ${relative(repoRoot, ASSET_MANIFEST)}`,
+  )
 
   console.log(`[sync-assets] ${assetCount} asset file(s) synced from ${relative(repoRoot, androidRes)}/assets`)
 }
