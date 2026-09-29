@@ -119,8 +119,10 @@ export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
     })],
     // 5x5 grid of 256px cells. The long windup occupies frames 0..13; the blade
     // first reaches full extension on frame 14 and is still out through 19.
+    // Scaled a little past the size every other sheet renders at, so the heavy
+    // swing reads as more weight than a light one; see verify-attack.mjs.
     [PlayerAction.HEAVY_ATTACK, config(PlayerAction.HEAVY_ATTACK, 'heavy_attack.png', 25, 20, false, 4, {
-      columns: 5, cellSize: 256, displayScale: 1.569, hitFrames: [14, 18],
+      columns: 5, cellSize: 256, displayScale: 1.68, hitFrames: [14, 18],
     })],
     [PlayerAction.BLOCK, config(PlayerAction.BLOCK, 'idle.png', 6, 12, true, 2)],
     [PlayerAction.DASH, config(PlayerAction.DASH, 'idle.png', 6, 15, false, 5)],

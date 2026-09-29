@@ -96,10 +96,11 @@ object DefaultAnimationConfigs {
             // Packed as a 5x5 grid of 256px cells rather than a strip of 128px
             // ones, so the cell geometry is declared explicitly. The long windup
             // occupies frames 0..13; the blade first reaches full extension on
-            // frame 14 and is still out through 19.
+            // frame 14 and is still out through 19. Scaled a little past the size
+            // every other sheet renders at, so the heavy swing reads as more weight.
             columns = 5,
             cellSize = 256,
-            displayScale = 1.569f,
+            displayScale = 1.68f,
             hitFrames = listOf(14, 18)
         ),
         PlayerAction.BLOCK to AnimationConfig(

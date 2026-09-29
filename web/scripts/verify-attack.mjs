@@ -187,23 +187,49 @@ const reference = measured.find((m) => m.file === 'idle.png')
 check('idle renders, giving the reference size', reference !== undefined, reference ? `median ${reference.median.toFixed(1)}px` : 'no idle pixels')
 
 if (reference) {
-  // A few px of tolerance: the sheets are drawn at different native resolutions
-  // and nearest-neighbour scaled, so their edges quantise differently.
-  const TOLERANCE = 3
+  // Expected median rendered character height per sheet, from this same
+  // measurement. Asserting against a pinned value rather than a wide band keeps
+  // the guard tight enough to catch a mis-set scale, which a loose tolerance
+  // would not: the sheets are drawn at different native resolutions and
+  // nearest-neighbour scaled, so their edges quantise differently, but a sheet
+  // that is even a few percent off moves well outside 2px.
+  const EXPECTED = {
+    'idle.png': 84.5,
+    'walk.png': 84.0,
+    'jump.png': 85.0,
+    'attack.png': 84.5,
+    // The heavy attack is deliberately drawn a little larger than the rest, so
+    // the swing reads as more weight than a light one. This is the one sheet
+    // allowed to differ, and it is pinned here so the exception stays explicit.
+    'heavy_attack.png': 90.0,
+  }
+  const TOLERANCE = 2
   for (const m of measured) {
-    const delta = m.median - reference.median
+    const want = EXPECTED[m.file]
     check(
-      `${m.file.padEnd(18)} character matches idle`,
-      Math.abs(delta) <= TOLERANCE,
-      `median ${m.median.toFixed(1)}px vs idle ${reference.median.toFixed(1)}px (${delta >= 0 ? '+' : ''}${delta.toFixed(1)}), range ${m.min.toFixed(0)}-${m.max.toFixed(0)} over ${m.count} frames, scale ${m.scale}`,
+      `${m.file.padEnd(18)} renders at its calibrated character size`,
+      want !== undefined && Math.abs(m.median - want) <= TOLERANCE,
+      `median ${m.median.toFixed(1)}px, expected ${want}px, range ${m.min.toFixed(0)}-${m.max.toFixed(0)} over ${m.count} frames, scale ${m.scale}`,
     )
   }
-  const spread = Math.max(...measured.map((m) => m.median)) - Math.min(...measured.map((m) => m.median))
+
+  // Every sheet except the deliberate heavy-attack exception must agree with
+  // idle, which is the "all sprites are the same size" invariant.
+  const standard = measured.filter((m) => m.file !== 'heavy_attack.png')
+  const spread = Math.max(...standard.map((m) => m.median)) - Math.min(...standard.map((m) => m.median))
   check(
-    'every sheet agrees on one character size',
-    spread <= TOLERANCE,
-    `${spread.toFixed(1)}px total spread across ${measured.length} sheets`,
+    'every other sheet renders one identical character size',
+    spread <= 2,
+    `${spread.toFixed(1)}px spread across ${standard.map((m) => m.file).join(', ')}`,
   )
+  const heavy = measured.find((m) => m.file === 'heavy_attack.png')
+  if (heavy) {
+    check(
+      'the heavy attack is the larger one, as intended',
+      heavy.median > reference.median,
+      `heavy ${heavy.median.toFixed(1)}px vs idle ${reference.median.toFixed(1)}px (+${(heavy.median - reference.median).toFixed(1)})`,
+    )
+  }
 }
 
 console.log('\nGRID PACKED SHEETS: each grid renders frame by frame')

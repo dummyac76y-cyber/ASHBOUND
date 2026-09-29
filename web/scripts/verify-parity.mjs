@@ -22,7 +22,7 @@ const CASES = [
 // still pin the expected behaviour rather than re-deriving it from whatever the
 // code currently says.
 const ATTACK_SCALE = 1.461
-const HEAVY_SCALE = 1.569
+const HEAVY_SCALE = 1.68
 const WALK_SCALE = 1.091
 const JUMP_SCALE = 0.918
 
@@ -126,23 +126,28 @@ console.log('CHARACTER SIZE: every sheet renders the character the same height')
 // Median rendered heights measured off the real canvas, per sheet, by
 // scripts/verify-attack.mjs. Duplicated here so the parity check fails if either
 // engine's config drifts from the values those measurements were calibrated on.
-const MEDIAN_RENDERED = { idle: 84.5, walk: 84.0, jump: 85.0, attack: 84.5, heavy: 84.0 }
+// The heavy attack is deliberately the larger one; the rest are one size.
+const MEDIAN_RENDERED = { idle: 84.5, walk: 84.0, jump: 85.0, attack: 84.5, heavy: 90.0 }
 const SCALE = { idle: 1, walk: WALK_SCALE, jump: JUMP_SCALE, attack: ATTACK_SCALE, heavy: HEAVY_SCALE }
 const CELL = { idle: 128, walk: 128, jump: 128, attack: 256, heavy: 256 }
-for (const k of Object.keys(MEDIAN_RENDERED)) {
-  const others = Object.entries(MEDIAN_RENDERED).filter(([n]) => n !== k)
-  const spread = Math.max(...others.map(([, v]) => v)) - Math.min(...others.map(([, v]) => v))
-  check(
-    `${k} renders the same character size as every other sheet`,
-    spread <= 3,
-    `median ${MEDIAN_RENDERED[k]}px in a ${CELL[k]}px cell at scale ${SCALE[k]}; sheets span ${spread.toFixed(1)}px`,
-  )
-}
+
+const standard = Object.entries(MEDIAN_RENDERED).filter(([name]) => name !== 'heavy')
+const spread = Math.max(...standard.map(([, v]) => v)) - Math.min(...standard.map(([, v]) => v))
+check(
+  'every sheet but heavy renders one identical character size',
+  spread <= 2,
+  `${spread.toFixed(1)}px spread across ${standard.map(([n]) => `${n} ${MEDIAN_RENDERED[n]}px @${CELL[n]}x${SCALE[n]}`).join(', ')}`,
+)
+check(
+  'heavy is the deliberate exception, drawn larger',
+  MEDIAN_RENDERED.heavy > MEDIAN_RENDERED.idle,
+  `heavy ${MEDIAN_RENDERED.heavy}px vs idle ${MEDIAN_RENDERED.idle}px (+${(MEDIAN_RENDERED.heavy - MEDIAN_RENDERED.idle).toFixed(1)})`,
+)
 // Scaling is what makes a 256px-cell sheet match a 128px one: unscaled, attack
 // would render at 55% of its cell against idle's 80%.
 check(
   'a grid sheet carries enough scale to compensate for its larger cell',
-  ATTACK_SCALE > 1.2 && HEAVY_SCALE > 1.2 && WALK_SCALE > 1 && JUMP_SCALE < 1,
+  ATTACK_SCALE > 1.2 && HEAVY_SCALE > ATTACK_SCALE && WALK_SCALE > 1 && JUMP_SCALE < 1,
   `attack ${ATTACK_SCALE}, heavy ${HEAVY_SCALE}, walk ${WALK_SCALE}, jump ${JUMP_SCALE}`,
 )
 
