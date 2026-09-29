@@ -27,6 +27,31 @@ npm run web:preview     # serve the production build locally
 Cloudflare Pages, an S3 bucket). Asset URLs are relative, so it also works from a
 sub-path without reconfiguration.
 
+### Deploying to Vercel
+
+The web app lives in a sub-directory of a repo whose root is an Android project, so
+Vercel needs to be told what to build. A root `vercel.json` already does this:
+
+| Setting | Value |
+| --- | --- |
+| Framework Preset | **Other** |
+| Root Directory | **leave empty** (the repository root — *not* `web`) |
+| Install Command | `npm --prefix web ci` |
+| Build Command | `npm --prefix web run build` |
+| Output Directory | `web/dist` |
+
+Import the Git repository and accept those defaults, or run `vercel` from the repo
+root. All of the values above are committed in `vercel.json`, so a fresh import
+works with no dashboard configuration.
+
+> **Root Directory must not be set to `web`.** The build syncs artwork out of
+> `app/src/main/assets`, which lives outside `web/`. If the project root is
+> `web`, that directory is not in the build context and `npm run sync-assets`
+> fails the build with an explicit error rather than deploying a broken site.
+
+Other static hosts need the equivalent mapping: install and build inside `web/`,
+then publish `web/dist`.
+
 ### Android
 
 ```bash
@@ -111,6 +136,7 @@ web/                      Web application (Vite + TypeScript)
   src/game/               TypeScript port of the modules above
   src/ui/                 DOM-based HUD, virtual controls, inspector
   scripts/sync-assets.mjs copies Android art into web/public
+vercel.json               Vercel build config (root, not web/)
 ```
 
 ### Note on the two implementations

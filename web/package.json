@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "description": "Web build of Exiled Knight. Shares sprite assets with the Android app.",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "sync-assets": "node scripts/sync-assets.mjs",
     "predev": "npm run sync-assets",

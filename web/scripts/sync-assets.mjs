@@ -51,7 +51,27 @@ async function syncDir(from, to) {
 
 async function main() {
   // 1. app/src/main/assets/** -> web/public/  (sprites/, etc.)
-  const assetCount = await syncDir(join(androidRes, 'assets'), webPublic)
+  //
+  // These live outside web/, so this only works when the whole repository is the
+  // build root. On Vercel that means Project Settings > Root Directory must be
+  // left empty (or set to the repo root), NOT "web". Fail loudly rather than
+  // shipping a build with no sprites.
+  const assetsSource = join(androidRes, 'assets')
+  if (!(await exists(assetsSource))) {
+    console.error(
+      '[sync-assets] FATAL: could not find app/src/main/assets relative to this script.\n' +
+        '               The web build needs the Android art as its source of truth.\n' +
+        '               On Vercel, set Project Settings > Root Directory to the repository root\n' +
+        '               (leave it blank) — do not set it to "web".',
+    )
+    process.exit(1)
+  }
+
+  const assetCount = await syncDir(assetsSource, webPublic)
+  if (assetCount === 0) {
+    console.error('[sync-assets] FATAL: no asset files found under app/src/main/assets')
+    process.exit(1)
+  }
 
   // 2. Arena backdrop lives in res/drawable on Android.
   if (await exists(BACKGROUND.from)) {
