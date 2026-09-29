@@ -201,6 +201,105 @@ const solo = new PlayerController(anim, 200, 260)
 check('solo controller defaults sane', solo.width === 44 && solo.height === 70 && solo.maxHp === 100)
 
 // ---------------------------------------------------------------------------
+// World space: the dummies are arena fixtures, not screen or player-relative.
+// ---------------------------------------------------------------------------
+
+console.log('player spawns at the arena centre')
+// A fresh world, so these read the real match-start state rather than whatever
+// the earlier blocks left the shared `world` in.
+{
+const spawnWorld = new GameWorld(stubAnimations(), null)
+check(
+  'ARENA_CENTER_X is derived from WORLD_WIDTH, not the screen',
+  GameWorld.ARENA_CENTER_X === GameWorld.WORLD_WIDTH / 2,
+  `got ${GameWorld.ARENA_CENTER_X}`,
+)
+check('spawn X is the arena centre', GameWorld.SPAWN_X === GameWorld.ARENA_CENTER_X, `got ${GameWorld.SPAWN_X}`)
+check('player starts at the spawn X', Math.abs(spawnWorld.player.x - GameWorld.SPAWN_X) < 1e-9, `got ${spawnWorld.player.x}`)
+check(
+  'spawn leaves room to walk in both directions',
+  spawnWorld.player.x - spawnWorld.player.width / 2 > 100 &&
+    GameWorld.WORLD_WIDTH - spawnWorld.player.x - spawnWorld.player.width / 2 > 100,
+  `${(spawnWorld.player.x - spawnWorld.player.width / 2).toFixed(0)} left / ${(GameWorld.WORLD_WIDTH - spawnWorld.player.x - spawnWorld.player.width / 2).toFixed(0)} right`,
+)
+check(
+  'camera starts with the player centred in the viewport',
+  Math.abs(spawnWorld.cameraX - spawnWorld.cameraXForPlayerX(spawnWorld.player.x)) < 1e-9 &&
+    Math.abs(spawnWorld.player.x - spawnWorld.cameraX - GameWorld.LOGICAL_WIDTH / 2) < 1e-9,
+  `cameraX ${spawnWorld.cameraX}`,
+)
+check(
+  'dummies sit to the right of the spawn, inside the arena',
+  spawnWorld.dummies.every((d) => d.x > GameWorld.SPAWN_X && d.x < GameWorld.WORLD_WIDTH),
+  spawnWorld.dummies.map((d) => d.x).join(', '),
+)
+check(
+  'dummies stand on the same FLOOR_Y as the player',
+  spawnWorld.dummies.every((d) => Math.abs(d.groundY - GameWorld.FLOOR_Y) < 1e-9),
+  '',
+)
+}
+
+console.log('dummies are fixed in world space while the camera follows the player')
+{
+  const dummy = world.dummies[0]
+  const worldX = dummy.x
+  const seen: Array<{ screen: number; camera: number; player: number }> = []
+
+  // Walk right, sample, walk back, sample.
+  world.player.setMovementInput(1)
+  for (let i = 0; i < 180; i++) world.update(1 / 60)
+  world.player.setMovementInput(0)
+  for (let i = 0; i < 60; i++) world.update(1 / 60)
+  seen.push({ screen: dummy.x - world.cameraX, camera: world.cameraX, player: world.player.x })
+
+  world.player.setMovementInput(-1)
+  for (let i = 0; i < 400; i++) world.update(1 / 60)
+  world.player.setMovementInput(0)
+  for (let i = 0; i < 60; i++) world.update(1 / 60)
+  seen.push({ screen: dummy.x - world.cameraX, camera: world.cameraX, player: world.player.x })
+
+  check('dummy world X is constant through the whole walk', dummy.x === worldX, `${worldX} -> ${dummy.x}`)
+  check('the camera genuinely panned', Math.abs(seen[0].camera - seen[1].camera) > 50, `${seen[0].camera.toFixed(1)} -> ${seen[1].camera.toFixed(1)}`)
+  check(
+    'screen position = worldX - cameraX in both samples',
+    Math.abs(seen[0].screen - (worldX - seen[0].camera)) < 1e-9 && Math.abs(seen[1].screen - (worldX - seen[1].camera)) < 1e-9,
+    '',
+  )
+  check(
+    'the dummy appears to move on screen by exactly the camera delta',
+    Math.abs(seen[0].screen - seen[1].screen - (seen[1].camera - seen[0].camera)) < 1e-9,
+    '',
+  )
+  check('the player actually moved', Math.abs(seen[0].player - GameWorld.SPAWN_X) > 50, `player reached ${seen[0].player.toFixed(1)}`)
+}
+
+console.log('dummy hitbox and health bar are anchored to the dummy')
+{
+  const dummy = world.dummies[0]
+  const before = { ...dummy.hitbox }
+  dummy.x += 200
+  const after = { ...dummy.hitbox }
+  dummy.x = GameWorld.DUMMY_X
+
+  check('hitbox left/right follow the dummy world X', after.left - before.left === 200 && after.right - before.right === 200, `moved ${after.left - before.left}`)
+  check('hitbox bottom is the floor plane', Math.abs(after.bottom - GameWorld.FLOOR_Y) < 1e-9, `got ${after.bottom}`)
+  check('hitbox top is the floor minus the dummy height', Math.abs(after.top - (GameWorld.FLOOR_Y - dummy.height)) < 1e-9, `got ${after.top}`)
+}
+
+console.log('backdrop is anchored in world space and repeats across the arena')
+check(
+  'the scaled plate is narrower than the arena, so it must repeat',
+  GameWorld.BACKGROUND_LOGICAL_WIDTH < GameWorld.WORLD_WIDTH,
+  `plate ${GameWorld.BACKGROUND_LOGICAL_WIDTH} vs world ${GameWorld.WORLD_WIDTH}`,
+)
+check(
+  'the plate covers the viewport at the uniform scale',
+  Math.abs(GameWorld.BACKGROUND_LOGICAL_WIDTH - GameWorld.LOGICAL_WIDTH) < 1e-9,
+  `got ${GameWorld.BACKGROUND_LOGICAL_WIDTH}`,
+)
+
+// ---------------------------------------------------------------------------
 // Ground alignment: the feet must rest on the backdrop's visible stone floor.
 // ---------------------------------------------------------------------------
 

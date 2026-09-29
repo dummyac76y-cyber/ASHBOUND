@@ -88,6 +88,17 @@ class VirtualJoystick {
 const ATTACK_ICON_URL = assetUrl('ui/btn_attack.png')
 
 /**
+ * Neutral medieval slate used by the icon button.
+ *
+ * The attack button is the one control that carries artwork instead of a text
+ * label, so it is given the dark stone treatment rather than a saturated fill.
+ * Painting a colour behind a sword icon reads as a coloured disc behind the
+ * artwork; this is the source of the red circle, and it is removed rather than
+ * covered over.
+ */
+const NEUTRAL_BUTTON_COLOR = '#39405a'
+
+/**
  * Circular action button. `hold` buttons report press and release separately.
  * When `iconUrl` is supplied the artwork replaces the text labels.
  */
@@ -182,7 +193,7 @@ export class VirtualControls {
       new ActionButton('BLOCK', 'GUARD', '#9e7a26', 'button_block', 54, callbacks.onBlockChange.bind(null, true), () =>
         callbacks.onBlockChange(false),
       ).root,
-      new ActionButton('ATK', 'SLASH', '#d6364a', 'button_attack', 62, callbacks.onAttack, undefined, ATTACK_ICON_URL).root,
+      new ActionButton('ATK', 'SLASH', NEUTRAL_BUTTON_COLOR, 'button_attack', 62, callbacks.onAttack, undefined, ATTACK_ICON_URL).root,
     )
 
     cluster.append(topRow, midRow)

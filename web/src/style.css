@@ -328,9 +328,13 @@ body {
   line-height: 1;
 }
 
+/* Sword artwork on the attack button.
+   90% of the 62px button is ~56px, the requested icon size. `contain` keeps the
+   square artwork at its natural aspect ratio, so it is never cropped or
+   stretched regardless of the button size. */
 .action-btn-icon {
-  width: 68%;
-  height: 68%;
+  width: 90%;
+  height: 90%;
   object-fit: contain;
   pointer-events: none;
   -webkit-user-drag: none;

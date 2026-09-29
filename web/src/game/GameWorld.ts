@@ -19,7 +19,30 @@ export class GameWorld {
   static readonly LOGICAL_WIDTH = 640
   static readonly LOGICAL_HEIGHT = 360
   static readonly WORLD_WIDTH = 1200
-  static readonly SPAWN_X = 300
+
+  /**
+   * Centre of the playable arena, in world units.
+   *
+   * Derived from the world, not from the screen, so the spawn scales with the
+   * arena rather than drifting with the viewport.
+   */
+  static readonly ARENA_CENTER_X = GameWorld.WORLD_WIDTH / 2
+
+  /**
+   * Initial world X for the player: the arena centre, which leaves the full
+   * half-width of arena on both sides to walk into.
+   */
+  static readonly SPAWN_X = GameWorld.ARENA_CENTER_X
+
+  /**
+   * World X of the first training dummy. Placed to the right of the spawn so the
+   * match opens as player-versus-target, and left untouched thereafter: a fixed
+   * world position, not a screen or player-relative one.
+   */
+  static readonly DUMMY_X = GameWorld.ARENA_CENTER_X + 150
+
+  /** World distance between the two training dummies. */
+  static readonly DUMMY_SPACING = 300
 
   /**
    * Native pixel height of the arena backdrop (img_arena_bg_hd.png, synced to
@@ -58,6 +81,12 @@ export class GameWorld {
    */
   static readonly BACKGROUND_SCALE = GameWorld.LOGICAL_HEIGHT / GameWorld.BACKGROUND_HEIGHT
 
+  /**
+   * Width of the backdrop once scaled, in logical pixels. 1536 x 5/12 is exactly
+   * 640, the viewport width; the arena is wider, so the plate repeats.
+   */
+  static readonly BACKGROUND_LOGICAL_WIDTH = 1536 * GameWorld.BACKGROUND_SCALE
+
   /** Logical size a 128px sprite cell is drawn at (aspect preserved). */
   static readonly SPRITE_DISPLAY_SIZE = 100
 
@@ -76,7 +105,12 @@ export class GameWorld {
 
   private background: LoadedImage | null = null
 
-  /** Camera view offset. */
+  /**
+   * Camera view offset, in world units. Everything in the arena (backdrop, player,
+   * dummies, hitboxes) lives in world space and is drawn through this single
+   * transform, so a world-fixed object stays locked to the dungeon as the player
+   * walks.
+   */
   cameraX = 0
 
   constructor(
@@ -84,11 +118,21 @@ export class GameWorld {
     background: LoadedImage | null = null,
   ) {
     this.player = new PlayerController(animationSystem, GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+    // Dummies are world fixtures at fixed world X. They are never derived from the
+    // player, and their groundY is the same FLOOR_Y the player stands on.
     this.dummies = [
-      new TrainingDummy(550, GameWorld.FLOOR_Y),
-      new TrainingDummy(850, GameWorld.FLOOR_Y),
+      new TrainingDummy(GameWorld.DUMMY_X, GameWorld.FLOOR_Y),
+      new TrainingDummy(GameWorld.DUMMY_X + GameWorld.DUMMY_SPACING, GameWorld.FLOOR_Y),
     ]
     this.background = background
+    // Start with the player already centred, instead of easing in from the left
+    // edge on the first frames of the match.
+    this.cameraX = this.cameraXForPlayerX(this.player.x)
+  }
+
+  /** Camera offset that puts a given world X at the centre of the viewport. */
+  cameraXForPlayerX(worldX: number): number {
+    return Math.min(Math.max(worldX - GameWorld.LOGICAL_WIDTH / 2, 0), GameWorld.WORLD_WIDTH - GameWorld.LOGICAL_WIDTH)
   }
 
   setBackground(background: LoadedImage | null): void {
@@ -161,6 +205,42 @@ export class GameWorld {
   }
 
   /**
+   * Draws the backdrop across the whole arena in world space.
+   *
+   * The plate is 640 logical px wide against a 1200-unit arena, so it is mirrored
+   * and repeated to fill the width. Mirroring means the join is a palindrome
+   * rather than an arbitrary cut, and because the plate's floor edge is
+   * horizontal, panning the camera cannot move the floor off FLOOR_Y.
+   */
+  private drawBackdrop(ctx: CanvasRenderingContext2D): void {
+    const bg = this.background
+    if (!bg) {
+      // Fallback dark castle gradient
+      ctx.fillStyle = 'rgb(18, 20, 28)'
+      ctx.fillRect(0, 0, GameWorld.WORLD_WIDTH, GameWorld.LOGICAL_HEIGHT)
+      return
+    }
+
+    const plateW = GameWorld.BACKGROUND_LOGICAL_WIDTH
+    const plateH = bg.height * GameWorld.BACKGROUND_SCALE
+    const count = Math.ceil(GameWorld.WORLD_WIDTH / plateW)
+
+    for (let i = 0; i < count; i++) {
+      const x = i * plateW
+      // Alternate mirrored copies so the seam falls on a symmetric join.
+      if (i % 2 === 1) {
+        ctx.save()
+        ctx.translate(x + plateW, 0)
+        ctx.scale(-1, 1)
+        ctx.drawImage(bg.image, 0, 0, bg.width, bg.height, 0, 0, plateW, plateH)
+        ctx.restore()
+      } else {
+        ctx.drawImage(bg.image, 0, 0, bg.width, bg.height, x, 0, plateW, plateH)
+      }
+    }
+  }
+
+  /**
    * Draws the character sprite and nothing else, in the caller's (already camera
    * translated) coordinate space.
    *
@@ -185,38 +265,22 @@ export class GameWorld {
 
   /** Renders the game world. The ctx is already in logical coordinates. */
   render(ctx: CanvasRenderingContext2D): void {
-    // 1. Backdrop, drawn in screen space before the camera translate.
-    //
-    // The backdrop is a fixed 1536x864 plate that exactly covers the 640x360
-    // viewport at BACKGROUND_SCALE, so it is not panned by the camera. That is
-    // deliberate: the floor is baked into the plate, and keeping the plate out of
-    // the camera transform means the floor cannot slide relative to the feet as
-    // the player walks. FLOOR_Y is derived from the same scale, so the two agree
-    // by construction at every camera offset.
-    const bg = this.background
-    if (bg) {
-      ctx.drawImage(
-        bg.image,
-        0,
-        0,
-        bg.width,
-        bg.height,
-        0,
-        0,
-        bg.width * GameWorld.BACKGROUND_SCALE,
-        bg.height * GameWorld.BACKGROUND_SCALE,
-      )
-    } else {
-      // Fallback dark castle gradient
-      ctx.fillStyle = 'rgb(18, 20, 28)'
-      ctx.fillRect(0, 0, GameWorld.LOGICAL_WIDTH, GameWorld.LOGICAL_HEIGHT)
-    }
-
     ctx.save()
-    // Translate world by negative camera position
+    // Single world -> screen transform. The backdrop, the player, the dummies and
+    // every hitbox all live in the same world space, so a world-fixed object stays
+    // locked to the dungeon while the player walks.
     ctx.translate(-this.cameraX, 0)
 
-    // 2. Arena boundary stone pillars.
+    // 1. Backdrop, drawn in world space at a single uniform scale.
+    //
+    // The plate is BACKGROUND_LOGICAL_WIDTH wide, narrower than the 1200-unit
+    // arena, so it is mirrored and repeated across the world. It is anchored to
+    // world Y, not to the viewport, which is what keeps the floor line at FLOOR_Y
+    // no matter where the camera is: the plate's floor row is horizontal, so
+    // panning X cannot move it.
+    this.drawBackdrop(ctx)
+
+    // 2. Arena boundary stone pillars, in world space at the arena edges.
     //
     // No ground slab or flagstone grid is drawn here on purpose: the backdrop
     // already renders a detailed stone floor starting at FLOOR_Y, and painting an
@@ -224,9 +288,10 @@ export class GameWorld {
     // player has to stand on.
     ctx.fillStyle = 'rgb(50, 55, 70)'
     ctx.fillRect(0, 0, 24, GameWorld.FLOOR_Y)
-    ctx.fillRect(GameWorld.WORLD_WIDTH - 24, 0, 24, GameWorld.FLOOR_Y)
+    ctx.fillRect(GameWorld.WORLD_WIDTH - 24, 0, GameWorld.WORLD_WIDTH, GameWorld.FLOOR_Y)
 
-    // 3. Render Training Dummies
+    // 3. Render Training Dummies. Their x and groundY are world values, so these
+    // draw at world position and the camera transform handles the rest.
     for (const dummy of this.dummies) {
       dummy.render(ctx)
     }
@@ -239,6 +304,7 @@ export class GameWorld {
 
     // 5. Render Character Sprite
     this.renderCharacter(ctx)
+
 
     // 6. Render Particles
     for (const p of this.particles) {

@@ -108,10 +108,42 @@ impulse launches from it, and gravity returns to it.
 > version of this file came to place the knight standing in front of the wall. The floor
 > edge has to be found with a windowed comparison, not a one-row difference.
 
-The backdrop is drawn in **screen space, before the camera translate**, so panning cannot
-slide the floor relative to the feet. Nothing opaque is painted over it: the engine's
-original stone slab and flagstone grid were removed, since covering the floor is exactly
-what hid the surface the player has to stand on. Pillars and a soft contact shadow remain.
+### World space and the camera
+
+Everything in the arena lives in **world coordinates** and is drawn through one
+`translate(-cameraX, 0)` transform: the backdrop, the player, the training dummies, and
+every hitbox. A dummy is an arena fixture at a fixed world X; it is never derived from the
+player's position and never attached to the camera. When the player walks, the camera pans
+and the dummy slides across the screen *as a fixed object in the dungeon* does, then slides
+back when the player returns.
+
+Because the plate is 640 logical px wide against a 1200-unit arena, it is **mirrored and
+repeated** across the world. Mirroring puts the join on a symmetric cut rather than an
+arbitrary one. This does not disturb the floor: the plate's floor edge is horizontal, so
+panning in X cannot move it off `FLOOR_Y`.
+
+> The backdrop used to be drawn in screen space, outside the camera transform. That kept
+> the floor perfectly aligned but meant world objects slid over a static plate, so a
+> "fixed" dummy appeared to move relative to the dungeon. Background and world objects
+> now share one coordinate system.
+
+Nothing opaque is painted over the backdrop: the engine's original stone slab and
+flagstone grid were removed, since covering the floor is what hid the surface the player
+has to stand on. Pillars and a soft contact shadow remain.
+
+### Spawn
+
+The player starts at the centre of the **world**, not the screen:
+
+```
+ARENA_CENTER_X = WORLD_WIDTH / 2 = 600
+SPAWN_X        = ARENA_CENTER_X
+```
+
+The camera is initialised to `clamp(SPAWN_X - LOGICAL_WIDTH / 2, ...)`, so the knight is
+already centred in the viewport at match start instead of easing in from the left edge.
+That leaves 578 px of arena on each side to walk into. `FLOOR_Y` is untouched, so the feet
+still land exactly on the floor.
 
 ### Per-frame foot rows
 
@@ -138,6 +170,11 @@ a `?debug=1` hook and measures the rendered canvas:
 - the plate's wall/floor horizon, found by a windowed brightness comparison
 - the character's lowest painted row, read from the alpha channel of the real draw path
   (`GameWorld.renderCharacter`, extracted from `render` for exactly this purpose)
+- that the training dummy renders at `worldX - cameraX`, that its world X never changes as
+  the player walks, and that its hitbox and health bar track its world position
+- that the player spawns at the arena centre with the camera already centred on it
+- that the attack button carries no red: no red fill, no background image, and no red
+  pixels in the icon asset
 
 ```
 cd web && npm run build && npm run verify:floor
@@ -145,8 +182,8 @@ cd web && npm run build && npm run verify:floor
 
 Current result: horizon at source row 533, feet edge at logical y 221.75 against a floor of
 222.083 — a 0.33px difference, which is one device pixel at 2× and the closest a pixel-grid
-measurement can get. Verified across idle and all walk foot-row variants, and at four camera
-offsets.
+measurement can get. Verified across idle and all walk foot-row variants, at four camera
+offsets, and for the dummy across a full walk right and back (38 rendered assertions).
 
 ## Shared assets
 
@@ -186,11 +223,19 @@ sync script copies the whole tree, so nested folders work as-is.
 | --- | --- |
 | `ui/btn_attack.png` | Icon on the `ATK` / `SLASH` button, replacing its text labels |
 
-Both builds render the icon at 68% of the button's diameter, centred, with the
-button's own circular red background, shadow and press animation unchanged. If
-the asset is missing, the Compose loader returns `null` and the button falls
-back to its `ATK` / `SLASH` text rather than drawing an empty circle; the web
-build behaves the same way because the `<img>` simply fails to load.
+The attack button is the one control carrying artwork rather than a text label, so
+it uses a **dark slate** fill (`#39405A` / `Color(0xFF39405A)`) instead of a saturated
+colour. A filled circle behind a sword reads as a coloured disc behind the artwork, and
+that fill — not the PNG — was the source of the red circle; the asset itself contains
+zero red pixels.
+
+The icon is drawn at 90% of the button's diameter, which is ~56 px on the 62 px button,
+centred, with `ContentScale.Fit` / `object-fit: contain` so the square artwork keeps its
+natural aspect ratio and is never cropped or stretched. The button's size, position, touch
+area, shadow and press animation are unchanged. If the asset is missing, the Compose
+loader returns `null` and the button falls back to its `ATK` / `SLASH` text rather than
+drawing an empty circle; the web build behaves the same way because the `<img>` simply
+fails to load.
 
 The arena backdrop lives in `res/drawable/` rather than `assets/` on Android, so the
 sync script copies it explicitly to `web/public/bg/arena_bg.png`. `GameWorld` looks up
@@ -203,7 +248,7 @@ npm run web:check     # TypeScript typecheck + headless game-logic tests
 ```
 
 `web/src/game/logic.test.ts` runs the physics, animation state machine, hit detection
-and damage rules in plain Node (60 assertions) — it needs no browser.
+and damage rules in plain Node (116 assertions) — it needs no browser.
 
 ## Repository layout
 

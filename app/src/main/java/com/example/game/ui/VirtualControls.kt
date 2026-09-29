@@ -55,6 +55,17 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
+ * Neutral medieval slate used by the icon button.
+ *
+ * The attack button is the one control that carries artwork instead of a text
+ * label, so it is given the dark stone treatment rather than a saturated fill.
+ * Painting a colour behind a sword icon reads as a coloured disc behind the
+ * artwork; this is the source of the red circle, and it is removed rather than
+ * covered over.
+ */
+private val NeutralButtonColor = Color(0xFF39405A)
+
+/**
  * On-screen touch controls independent from character rendering.
  * Left side: Virtual Analog Thumbstick for smooth horizontal movement.
  * Right side: Action diamond containing Attack, Heavy Attack, Block, Dash, Jump.
@@ -282,7 +293,7 @@ fun ActionButtonsCluster(
             ActionButton(
                 label = "ATK",
                 sublabel = "SLASH",
-                baseColor = Color(0xFFD6364A),
+                baseColor = NeutralButtonColor,
                 testTag = "button_attack",
                 size = 62,
                 icon = attackIcon,
@@ -315,10 +326,13 @@ fun ActionButton(
         shadowElevation = 6.dp
     ) {
         if (icon != null) {
+            // 90% of the 62px button is ~56px, the requested icon size.
+            // ContentScale.Fit keeps the square artwork at its natural aspect
+            // ratio, so it is never cropped or stretched.
             Image(
                 bitmap = icon,
                 contentDescription = label,
-                modifier = Modifier.fillMaxSize(0.68f),
+                modifier = Modifier.fillMaxSize(0.9f),
                 contentScale = ContentScale.Fit
             )
         } else {

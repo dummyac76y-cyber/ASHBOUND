@@ -63,7 +63,22 @@ page.on('console', (m) => {
 })
 await page.goto(`${base}/?debug=1`, { waitUntil: 'networkidle' })
 await page.waitForFunction(() => window.__game !== undefined, { timeout: 15000 })
-await page.evaluate(() => window.__game.pause())
+await page.evaluate(() => {
+  window.__game.pause()
+  // Snapshot the untouched match-start state. Later sections move the player, so
+  // the spawn checks have to read this rather than live mutated state.
+  const g = window.__game
+  window.__spawn = {
+    playerX: g.world.player.x,
+    cameraX: g.world.cameraX,
+    spawnX: g.GameWorld.SPAWN_X,
+    arenaCenter: g.GameWorld.ARENA_CENTER_X,
+    worldWidth: g.GameWorld.WORLD_WIDTH,
+    logicalWidth: g.GameWorld.LOGICAL_WIDTH,
+    playerWidth: g.world.player.width,
+    dummyX: g.world.dummies[0].x,
+  }
+})
 
 /**
  * Installs helpers in the page: a logical->device mapping, a bare-plate renderer
@@ -78,9 +93,12 @@ await page.evaluate(() => {
   g.offX = () => (canvas.width - g.GameWorld.LOGICAL_WIDTH * g.scale()) / 2
   g.offY = () => (canvas.height - g.GameWorld.LOGICAL_HEIGHT * g.scale()) / 2
 
-  /** The backdrop alone, at exactly the scale the game draws it. */
+  /**
+   * The backdrop alone, drawn exactly as the game draws it: same world-space
+   * camera transform, same uniform scale, same mirrored tiling. Used as the
+   * subtraction reference so only world objects are measured.
+   */
   g.barePlate = () => {
-    const s = g.scale()
     const c = document.createElement('canvas')
     c.width = canvas.width
     c.height = canvas.height
@@ -88,12 +106,99 @@ await page.evaluate(() => {
     b.imageSmoothingEnabled = false
     b.fillStyle = '#0c0e14'
     b.fillRect(0, 0, c.width, c.height)
+    const s = g.scale()
+    b.setTransform(1, 0, 0, 1, 0, 0)
+    b.translate(g.offX(), g.offY())
+    b.scale(s, s)
+    b.translate(-g.world.cameraX, 0)
+    // Mirror the real drawBackdrop() so the reference matches pixel for pixel.
     const bg = g.world.background
-    // Logical dest size is the plate at BACKGROUND_SCALE; the device scale s maps
-    // logical pixels onto the canvas backing store.
-    const k = g.GameWorld.BACKGROUND_SCALE * s
-    b.drawImage(bg.image, 0, 0, bg.width, bg.height, g.offX(), g.offY(), bg.width * k, bg.height * k)
+    const plateW = g.GameWorld.BACKGROUND_LOGICAL_WIDTH
+    const plateH = bg.height * g.GameWorld.BACKGROUND_SCALE
+    const count = Math.ceil(g.GameWorld.WORLD_WIDTH / plateW)
+    for (let i = 0; i < count; i++) {
+      const x = i * plateW
+      if (i % 2 === 1) {
+        b.save()
+        b.translate(x + plateW, 0)
+        b.scale(-1, 1)
+        b.drawImage(bg.image, 0, 0, bg.width, bg.height, 0, 0, plateW, plateH)
+        b.restore()
+      } else {
+        b.drawImage(bg.image, 0, 0, bg.width, bg.height, x, 0, plateW, plateH)
+      }
+    }
     return b.getImageData(0, 0, c.width, c.height).data
+  }
+
+  /**
+   * Horizontal profile of a colour, used to locate the dummy's straw torso.
+   * Returns logical screen X positions where the pixel is close to the given rgb.
+   */
+  g.strawColumns = (cr, cg, cb, tol = 26) => {
+    const s = g.scale()
+    const d = g.pixels()
+    const width = canvas.width
+    const hits = new Set()
+    for (let ly = 0; ly < g.GameWorld.LOGICAL_HEIGHT; ly++) {
+      const y = Math.round(g.offY() + ly * s)
+      for (let lx = 0; lx < g.GameWorld.LOGICAL_WIDTH; lx++) {
+        const x = Math.round(g.offX() + lx * s)
+        const i = (y * width + x) * 4
+        if (Math.abs(d[i] - cr) <= tol && Math.abs(d[i + 1] - cg) <= tol && Math.abs(d[i + 2] - cb) <= tol) {
+          hits.add(lx)
+        }
+      }
+    }
+    return [...hits].sort((a, c) => a - c)
+  }
+
+  /**
+  /** Longest contiguous run in a sorted column list, as its midpoint and width. */
+  g.strawRun = (cols) => {
+    if (!cols.length) return { mid: NaN, width: 0 }
+    let best = [cols[0], cols[0]]
+    let start = cols[0]
+    for (let i = 1; i < cols.length; i++) {
+      if (cols[i] !== cols[i - 1] + 1) {
+        if (cols[i - 1] - start > best[1] - best[0]) best = [start, cols[i - 1]]
+        start = cols[i]
+      }
+    }
+    if (cols[cols.length - 1] - start > best[1] - best[0]) best = [start, cols[cols.length - 1]]
+    return { mid: (best[0] + best[1]) / 2, width: best[1] - best[0] }
+  }
+
+  /**
+   * Lowest logical row of the dummy's solid body, using the real draw path.
+   *
+   * The threshold is 128 rather than 16 so the soft contact shadow (alpha ~0.39)
+   * is excluded: the shadow hangs a few px below groundY by design and is not a foot.
+   */
+  g.dummyFootRow = (dummy) => {
+    const s = g.scale()
+    const c = document.createElement('canvas')
+    c.width = canvas.width
+    c.height = canvas.height
+    const b = c.getContext('2d')
+    b.imageSmoothingEnabled = false
+    b.setTransform(1, 0, 0, 1, 0, 0)
+    b.translate(g.offX(), g.offY())
+    b.scale(s, s)
+    b.translate(-g.world.cameraX, 0)
+    dummy.render(b)
+    const d = b.getImageData(0, 0, c.width, c.height).data
+    const lx = dummy.x - g.world.cameraX
+    const x0 = Math.round(g.offX() + (lx - dummy.width / 2 - 4) * s)
+    const x1 = Math.round(g.offX() + (lx + dummy.width / 2 + 4) * s)
+    for (let ly = g.GameWorld.LOGICAL_HEIGHT - 1; ly >= 0; ly--) {
+      const y = Math.round(g.offY() + ly * s)
+      for (let x = x0; x <= x1; x++) {
+        if (x < 0 || x >= c.width || y < 0 || y >= c.height) continue
+        if (d[(y * c.width + x) * 4 + 3] >= 128) return ly
+      }
+    }
+    return null
   }
 
   g.pixels = () => ctx.getImageData(0, 0, canvas.width, canvas.height).data
@@ -383,13 +488,239 @@ console.log('backdrop is not painted over')
   )
 }
 
+// --- 6. Training dummies live in world space ----------------------------------
+console.log('training dummy is a world fixture')
+{
+  const res = await page.evaluate(async () => {
+    const g = window.__game
+    g.resume()
+    const out = []
+
+    // Walk right for a while and sample the dummy's world and screen position.
+    g.world.player.setMovementInput(1)
+    for (let i = 0; i < 240; i++) await new Promise((r) => requestAnimationFrame(r))
+    g.world.player.setMovementInput(0)
+    for (let i = 0; i < 60; i++) await new Promise((r) => requestAnimationFrame(r))
+
+    const d = g.world.dummies[0]
+    out.push({
+      phase: 'walked right',
+      dummyWorldX: d.x,
+      cameraX: g.world.cameraX,
+      playerWorldX: g.world.player.x,
+      screenX: d.x - g.world.cameraX,
+      footRow: g.dummyFootRow(d),
+      floorY: g.GameWorld.FLOOR_Y,
+    })
+
+    // Walk back and confirm the dummy returns to where it started on screen.
+    const startScreen = out[0].screenX
+    g.world.player.setMovementInput(-1)
+    for (let i = 0; i < 400; i++) await new Promise((r) => requestAnimationFrame(r))
+    g.world.player.setMovementInput(0)
+    for (let i = 0; i < 60; i++) await new Promise((r) => requestAnimationFrame(r))
+    out.push({
+      phase: 'walked back',
+      dummyWorldX: d.x,
+      cameraX: g.world.cameraX,
+      screenX: d.x - g.world.cameraX,
+      footRow: g.dummyFootRow(d),
+      startScreen,
+    })
+    return out
+  })
+
+  const walked = res[0]
+  const back = res[1]
+  check(
+    'dummy world X never changes as the player walks',
+    walked.dummyWorldX === back.dummyWorldX && walked.dummyWorldX === 750,
+    `world X stayed ${walked.dummyWorldX}`,
+  )
+  check(
+    'camera actually panned while the player walked',
+    Math.abs(walked.cameraX - back.cameraX) > 50,
+    `cameraX ${walked.cameraX.toFixed(1)} -> ${back.cameraX.toFixed(1)}`,
+  )
+  check(
+    'dummy screen X tracks the camera (world object, screen-follows)',
+    Math.abs(walked.screenX - back.screenX) > 50,
+    `screenX ${walked.screenX.toFixed(1)} -> ${back.screenX.toFixed(1)}`,
+  )
+  check(
+    'dummy feet sit on FLOOR_Y',
+    walked.footRow !== null && Math.abs(walked.footRow - walked.floorY) <= 1.5,
+    `feet at y=${walked.footRow}, floor ${walked.floorY.toFixed(3)}`,
+  )
+}
+
+// --- 7. The dummy is a fixed object in the rendered frame --------------------
+console.log('dummy drawn in world space, not screen space')
+{
+  // Both samples keep the dummy on screen: its world X is 750 and the camera is
+  // clamped to 0..560, so the camera must be past ~110 for it to be visible.
+  const samples = [
+    { playerX: 900, cameraX: 300 },
+    { playerX: 1100, cameraX: 560 },
+  ]
+  const res = await page.evaluate(async (samples) => {
+    const g = window.__game
+    g.resume()
+    const out = []
+    for (const s of samples) {
+      g.pause()
+      g.world.player.x = s.playerX
+      g.world.cameraX = s.cameraX
+      g.world.player.groundY = g.GameWorld.FLOOR_Y
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+      const cols = g.strawColumns(180, 150, 90)
+      const best = g.strawRun(cols)
+      out.push({ ...s, mid: best.mid, width: best.width, dummyWorldX: g.world.dummies[0].x })
+    }
+    return out
+  }, samples)
+
+  for (const r of res) {
+    const expected = r.dummyWorldX - r.cameraX
+    check(
+      `cameraX=${r.cameraX}: dummy renders at worldX - cameraX`,
+      Math.abs(r.mid - expected) < 3,
+      `rendered at screen x ${r.mid.toFixed(1)}, expected ${expected}`,
+    )
+  }
+  const delta = res[0].mid - res[1].mid
+  check(
+    'dummy shifts on screen by exactly the camera delta',
+    Math.abs(delta - 260) < 1,
+    `moved ${delta.toFixed(1)}px for a 260px camera move`,
+  )
+}
+
+// --- 8. Dummy hitbox and HP bar follow the dummy ----------------------------
+console.log('hitbox and health bar are anchored to the dummy')
+{
+  const res = await page.evaluate(() => {
+    const g = window.__game
+    const d = g.world.dummies[0]
+    d.hp = 40
+    const before = { ...d.hitbox }
+    d.x = 900
+    const after = { ...d.hitbox }
+    d.x = 750
+    d.hp = 100
+    return { before, after, floorY: g.GameWorld.FLOOR_Y, width: d.width, height: d.height }
+  })
+  check(
+    'hitbox follows the dummy world X',
+    Math.abs(res.after.left - (res.before.left + 150)) < 1e-6 && Math.abs(res.after.right - (res.before.right + 150)) < 1e-6,
+    `moved ${(res.after.left - res.before.left).toFixed(1)}px for a 150px move`,
+  )
+  check(
+    'hitbox bottom is the floor plane',
+    Math.abs(res.after.bottom - res.floorY) < 1e-6,
+    `bottom ${res.after.bottom}, floor ${res.floorY.toFixed(3)}`,
+  )
+  check(
+    'hitbox top is anchored to the dummy height',
+    Math.abs(res.after.top - (res.floorY - res.height)) < 1e-6,
+    `top ${res.after.top}, expected ${(res.floorY - res.height).toFixed(3)}`,
+  )
+}
+
+// --- 9. Spawn at the arena centre -------------------------------------------
+console.log('player spawns at the arena centre')
+{
+  const res = await page.evaluate(() => ({
+    ...window.__spawn,
+    playerScreenX: window.__spawn.playerX - window.__spawn.cameraX,
+  }))
+  check('spawn X is the arena centre, not a screen constant', res.spawnX === res.arenaCenter && res.spawnX === 600, `spawnX ${res.spawnX}`)
+  check('player starts at the spawn X', Math.abs(res.playerX - res.spawnX) < 1e-6, `playerX ${res.playerX}`)
+  check(
+    'spawn leaves room to walk both ways',
+    res.playerX - res.playerWidth / 2 > 100 && res.worldWidth - res.playerX - res.playerWidth / 2 > 100,
+    `${(res.playerX - res.playerWidth / 2).toFixed(0)}px to the left wall, ${(res.worldWidth - res.playerX - res.playerWidth / 2).toFixed(0)}px to the right`,
+  )
+  check(
+    'camera starts centred on the player',
+    Math.abs(res.playerScreenX - res.logicalWidth / 2) < 1e-6,
+    `player at screen x ${res.playerScreenX.toFixed(1)}, centre ${res.logicalWidth / 2}`,
+  )
+  check(
+    'a dummy sits to the right of the player, inside the arena',
+    res.dummyX > res.spawnX && res.dummyX < res.worldWidth,
+    `dummy at world x ${res.dummyX}`,
+  )
+}
+
+// --- 10. Attack button has no red ------------------------------------------
+console.log('attack button carries no red circle')
+{
+  const res = await page.evaluate(() => {
+    const btn = document.querySelector('[data-testid="button_attack"]')
+    const img = btn.querySelector('img')
+    const cs = getComputedStyle(btn)
+    const rect = btn.getBoundingClientRect()
+    const irect = img.getBoundingClientRect()
+
+    // Icon asset must be red-free too.
+    const ac = document.createElement('canvas')
+    ac.width = img.naturalWidth
+    ac.height = img.naturalHeight
+    const ax = ac.getContext('2d')
+    ax.drawImage(img, 0, 0)
+    const ad = ax.getImageData(0, 0, ac.width, ac.height).data
+    let iconRed = 0
+    for (let i = 0; i < ad.length; i += 4) {
+      if (ad[i + 3] < 16) continue
+      if (ad[i] > 90 && ad[i] > ad[i + 1] * 1.5 && ad[i] > ad[i + 2] * 1.5) iconRed++
+    }
+
+    const parse = (css) => {
+      const m = css.match(/[\d.]+/g)
+      return m ? m.slice(0, 3).map(Number) : null
+    }
+    return {
+      bgImage: cs.backgroundImage,
+      bgColor: cs.backgroundColor,
+      varColor: cs.getPropertyValue('--btn-color').trim(),
+      radius: cs.borderRadius,
+      boxShadow: cs.boxShadow,
+      buttonSize: [Math.round(rect.width), Math.round(rect.height)],
+      iconSize: [Math.round(irect.width), Math.round(irect.height)],
+      iconNatural: [img.naturalWidth, img.naturalHeight],
+      iconRedPixels: iconRed,
+      bgRgb: parse(cs.backgroundColor),
+    }
+  })
+
+  const [br, bgc, bb] = res.bgRgb ?? [0, 0, 0]
+  check('button background is not a background image', res.bgImage === 'none', res.bgImage)
+  check('no red anywhere in the button fill', !(br > 90 && br > bgc * 1.5 && br > bb * 1.5), `rgb(${res.bgRgb})`)
+  check('button fill is the dark slate, not red', res.varColor.toLowerCase() === '#39405a', res.varColor)
+  check('attack icon asset contains no red pixels', res.iconRedPixels === 0, `${res.iconRedPixels} red pixels`)
+  check(
+    'sword icon is about 56x56 and keeps its square aspect',
+    Math.abs(res.iconSize[0] - 56) <= 2 && Math.abs(res.iconSize[1] - 56) <= 2 && res.iconSize[0] === res.iconSize[1],
+    `rendered ${res.iconSize[0]}x${res.iconSize[1]}, natural ${res.iconNatural[0]}x${res.iconNatural[1]}`,
+  )
+  check(
+    'sword icon is centred inside the button',
+    Math.abs(res.iconSize[0] - res.buttonSize[0] * 0.9) <= 2,
+    `icon ${res.iconSize[0]}px in a ${res.buttonSize[0]}px button`,
+  )
+  check('button touch area unchanged', res.buttonSize[0] === 62 && res.buttonSize[1] === 62, `${res.buttonSize}`)
+}
+
 // --- 6. Visual proof -----------------------------------------------------------
 await page.evaluate(async () => {
-  await window.__game.pin({ action: 'IDLE', frame: 0, playerX: 300, cameraX: 0 })
+  const g = window.__game
+  await g.pin({ action: 'IDLE', frame: 0, playerX: window.__spawn.playerX, cameraX: window.__spawn.cameraX })
 })
 await page.screenshot({ path: join(shotsDir, 'floor-idle.png') })
 await page.evaluate(async () => {
-  await window.__game.pin({ action: 'WALK', frame: 8, playerX: 300, cameraX: 0 })
+  const g = window.__game
+  await g.pin({ action: 'WALK', frame: 8, playerX: window.__spawn.playerX, cameraX: window.__spawn.cameraX })
 })
 await page.screenshot({ path: join(shotsDir, 'floor-walk.png') })
 console.log(`  screenshots: ${join(shotsDir, 'floor-idle.png')}, ${join(shotsDir, 'floor-walk.png')}`)

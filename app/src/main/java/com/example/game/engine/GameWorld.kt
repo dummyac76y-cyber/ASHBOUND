@@ -17,6 +17,7 @@ import com.example.game.controller.PlayerController
 import com.example.game.model.DamageText
 import com.example.game.model.SparkParticle
 import com.example.game.model.TrainingDummy
+import kotlin.math.ceil
 import kotlin.random.Random
 
 /**
@@ -29,6 +30,30 @@ class GameWorld(val context: Context) {
         const val LOGICAL_WIDTH = 640f
         const val LOGICAL_HEIGHT = 360f
         const val WORLD_WIDTH = 1200f
+
+        /**
+         * Centre of the playable arena, in world units.
+         *
+         * Derived from the world, not from the screen, so the spawn scales with the
+         * arena rather than drifting with the viewport.
+         */
+        val ARENA_CENTER_X: Float = WORLD_WIDTH / 2f
+
+        /**
+         * Initial world X for the player: the arena centre, which leaves the full
+         * half-width of arena on both sides to walk into.
+         */
+        val SPAWN_X: Float = ARENA_CENTER_X
+
+        /**
+         * World X of the first training dummy. Placed to the right of the spawn so
+         * the match opens as player-versus-target, and left untouched thereafter: a
+         * fixed world position, not a screen or player-relative one.
+         */
+        val DUMMY_X: Float = ARENA_CENTER_X + 150f
+
+        /** World distance between the two training dummies. */
+        val DUMMY_SPACING = 300f
 
         /**
          * Native pixel height of the arena backdrop (img_arena_bg_hd.png).
@@ -68,6 +93,12 @@ class GameWorld(val context: Context) {
          */
         val BACKGROUND_SCALE: Float = LOGICAL_HEIGHT / BACKGROUND_HEIGHT
 
+        /**
+         * Width of the backdrop once scaled, in logical pixels. 1536 x 5/12 is
+         * exactly 640, the viewport width; the arena is wider, so the plate repeats.
+         */
+        val BACKGROUND_LOGICAL_WIDTH: Float = 1536f * BACKGROUND_SCALE
+
         /** Logical size a 128px sprite cell is drawn at (aspect preserved). */
         const val SPRITE_DISPLAY_SIZE = 100f
 
@@ -82,12 +113,13 @@ class GameWorld(val context: Context) {
     }
 
     val animationSystem = SpriteAnimationSystem(context, DefaultAnimationConfigs.createDefaults())
-    val player = PlayerController(animationSystem, x = 300f, groundY = FLOOR_Y)
+    val player = PlayerController(animationSystem, x = SPAWN_X, groundY = FLOOR_Y)
 
-    // Interactive training dummy targets
+    // Interactive training dummy targets. World fixtures at fixed world X: never
+    // derived from the player, and standing on the same FLOOR_Y.
     val dummies = listOf(
-        TrainingDummy(x = 550f, groundY = FLOOR_Y),
-        TrainingDummy(x = 850f, groundY = FLOOR_Y)
+        TrainingDummy(x = DUMMY_X, groundY = FLOOR_Y),
+        TrainingDummy(x = DUMMY_X + DUMMY_SPACING, groundY = FLOOR_Y)
     )
 
     // Visual particle effects
@@ -110,13 +142,23 @@ class GameWorld(val context: Context) {
         isAntiAlias = true
     }
 
-    // Camera view offset
+    // Camera view offset, in world units. Everything in the arena (backdrop,
+    // player, dummies, hitboxes) lives in world space and is drawn through this
+    // single transform, so a world-fixed object stays locked to the dungeon as the
+    // player walks.
     var cameraX: Float = 0f
         private set
 
     init {
         loadArenaBackground()
+        // Start with the player already centred, instead of easing in from the
+        // left edge on the first frames of the match.
+        cameraX = cameraXForPlayerX(player.x)
     }
+
+    /** Camera offset that puts a given world X at the centre of the viewport. */
+    fun cameraXForPlayerX(worldX: Float): Float =
+        (worldX - LOGICAL_WIDTH / 2f).coerceIn(0f, WORLD_WIDTH - LOGICAL_WIDTH)
 
     private fun loadArenaBackground() {
         // Prefer the high-res backdrop; fall back to the legacy jpg if it is absent.
@@ -212,6 +254,43 @@ class GameWorld(val context: Context) {
     }
 
     /**
+     * Draws the backdrop across the whole arena in world space.
+     *
+     * The plate is 640 logical px wide against a 1200-unit arena, so it is
+     * mirrored and repeated to fill the width. Mirroring means the join is a
+     * palindrome rather than an arbitrary cut, and because the plate's floor edge
+     * is horizontal, panning the camera cannot move the floor off FLOOR_Y.
+     */
+    private fun drawBackdrop(canvas: Canvas) {
+        val bg = bgBitmap
+        if (bg == null) {
+            // Fallback dark castle gradient
+            pixelPaint.color = Color.rgb(18, 20, 28)
+            canvas.drawRect(0f, 0f, WORLD_WIDTH, LOGICAL_HEIGHT, pixelPaint)
+            return
+        }
+
+        val src = Rect(0, 0, bg.width, bg.height)
+        val plateW = BACKGROUND_LOGICAL_WIDTH
+        val plateH = bg.height * BACKGROUND_SCALE
+        val count = ceil(WORLD_WIDTH / plateW).toInt()
+
+        for (i in 0 until count) {
+            val x = i * plateW
+            if (i % 2 == 1) {
+                // Alternate mirrored copies so the seam falls on a symmetric join.
+                canvas.save()
+                canvas.translate(x + plateW, 0f)
+                canvas.scale(-1f, 1f)
+                canvas.drawBitmap(bg, src, RectF(0f, 0f, plateW, plateH), pixelPaint)
+                canvas.restore()
+            } else {
+                canvas.drawBitmap(bg, src, RectF(x, 0f, x + plateW, plateH), pixelPaint)
+            }
+        }
+    }
+
+    /**
      * Draws the character sprite and nothing else, in the caller's (already camera
      * translated) coordinate space.
      *
@@ -240,30 +319,22 @@ class GameWorld(val context: Context) {
      * Renders the game world onto the scaled canvas at logical coordinates.
      */
     fun render(canvas: Canvas) {
-        // 1. Backdrop, drawn in screen space before the camera translate.
-        //
-        // The backdrop is a fixed 1536x864 plate that exactly covers the 640x360
-        // viewport at BACKGROUND_SCALE, so it is not panned by the camera. That is
-        // deliberate: the floor is baked into the plate, and keeping the plate out
-        // of the camera transform means the floor cannot slide relative to the feet
-        // as the player walks. FLOOR_Y is derived from the same scale, so the two
-        // agree by construction at every camera offset.
-        val bg = bgBitmap
-        if (bg != null) {
-            val bgSrc = Rect(0, 0, bg.width, bg.height)
-            val bgDst = RectF(0f, 0f, bg.width * BACKGROUND_SCALE, bg.height * BACKGROUND_SCALE)
-            canvas.drawBitmap(bg, bgSrc, bgDst, pixelPaint)
-        } else {
-            // Fallback dark castle gradient
-            pixelPaint.color = Color.rgb(18, 20, 28)
-            canvas.drawRect(0f, 0f, LOGICAL_WIDTH, LOGICAL_HEIGHT, pixelPaint)
-        }
-
         canvas.save()
-        // Translate world by negative camera position
+        // Single world -> screen transform. The backdrop, the player, the dummies
+        // and every hitbox all live in the same world space, so a world-fixed
+        // object stays locked to the dungeon while the player walks.
         canvas.translate(-cameraX, 0f)
 
-        // 2. Arena boundary stone pillars.
+        // 1. Backdrop, drawn in world space at a single uniform scale.
+        //
+        // The plate is BACKGROUND_LOGICAL_WIDTH wide, narrower than the 1200-unit
+        // arena, so it is mirrored and repeated across the world. It is anchored
+        // to world Y, not to the viewport, which is what keeps the floor line at
+        // FLOOR_Y no matter where the camera is: the plate's floor row is
+        // horizontal, so panning X cannot move it.
+        drawBackdrop(canvas)
+
+        // 2. Arena boundary stone pillars, in world space at the arena edges.
         //
         // No ground slab or flagstone grid is drawn here on purpose: the backdrop
         // already renders a detailed stone floor starting at FLOOR_Y, and painting
