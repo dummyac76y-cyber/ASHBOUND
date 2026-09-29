@@ -89,9 +89,9 @@ object DefaultAnimationConfigs {
         ),
         PlayerAction.JUMP to AnimationConfig(
             action = PlayerAction.JUMP,
-            sourceFileName = "walk.png",
-            frameCount = 12,
-            fps = 8,
+            sourceFileName = "jump.png",
+            frameCount = 10,
+            fps = 12,
             loop = false,
             priority = 1,
             canBeCancelledByMovement = true

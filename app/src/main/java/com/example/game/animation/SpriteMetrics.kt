@@ -24,10 +24,16 @@ object SpriteMetrics {
      * alpha channel. Idle is a constant 111 across all 12 frames; the walk cycle
      * ranges over 110..112 because the cloak sways, so a single global offset would
      * leave those frames up to 0.78 logical px off the floor.
+     *
+     * Jump spans 113..119 across its 10 frames. Those rows are the feet *within the
+     * cell*, and most of the jump arc is airborne, so this is the same measure taken
+     * per frame: it keeps the launch and landing frames seated on the floor plane
+     * while the rise in between is genuine vertical motion rather than drift.
      */
     private val FOOT_ROWS_BY_SHEET: Map<String, List<Int>> = mapOf(
         "idle.png" to listOf(111, 111, 111, 111, 111, 111, 111, 111, 111, 111, 111, 111),
-        "walk.png" to listOf(111, 111, 110, 110, 110, 111, 110, 111, 112, 112, 112, 112)
+        "walk.png" to listOf(111, 111, 110, 110, 110, 111, 110, 111, 112, 112, 112, 112),
+        "jump.png" to listOf(115, 113, 115, 119, 119, 119, 119, 119, 119, 119)
     )
 
     /** Per-frame foot rows for a sheet, or an empty list when it has no measured data. */
