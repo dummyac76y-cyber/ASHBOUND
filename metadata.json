@@ -1,0 +1,6 @@
+{
+  "name": "Exiled Knight",
+  "description": "2D retro action platformer featuring an exiled knight with modular sprite animation, responsive touch controls, combat mechanics, and nearest-neighbor pixel-art rendering.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
