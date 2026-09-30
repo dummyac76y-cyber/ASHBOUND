@@ -43,18 +43,22 @@ data class AnimationConfig(
 object DefaultAnimationConfigs {
     /**
      * Standard animation mapping for the Exiled Knight character.
-     * Frame counts match the provided sprite sheets (12 frames for idle, 12 for walk).
-     * If new assets such as attack.png or death.png are introduced, they can be configured here.
+     * Frame counts match the provided sprite sheets (6 frames for idle, 12 for walk).
+     * If new assets such as death.png are introduced, they can be configured here.
      */
     fun createDefaults(): Map<PlayerAction, AnimationConfig> = mapOf(
         PlayerAction.IDLE to AnimationConfig(
             action = PlayerAction.IDLE,
             sourceFileName = "idle.png",
-            frameCount = 12,
-            fps = 10,
+            frameCount = 6,
+            fps = 5,
             loop = true,
             priority = 0,
-            canBeCancelledByMovement = true
+            canBeCancelledByMovement = true,
+            // idle.png draws its character a little smaller than the previous
+            // sheet did, so it is scaled up to keep rendering at the size every
+            // other sheet is calibrated against.
+            displayScale = 1.063f
         ),
         PlayerAction.WALK to AnimationConfig(
             action = PlayerAction.WALK,

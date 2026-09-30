@@ -31,7 +31,7 @@ object SpriteMetrics {
      * while the rise in between is genuine vertical motion rather than drift.
      */
     private val FOOT_ROWS_BY_SHEET: Map<String, List<Int>> = mapOf(
-        "idle.png" to listOf(111, 111, 111, 111, 111, 111, 111, 111, 111, 111, 111, 111),
+        "idle.png" to listOf(111, 111, 111, 111, 111, 111),
         "walk.png" to listOf(111, 111, 110, 110, 110, 111, 110, 111, 112, 112, 112, 112),
         "jump.png" to listOf(115, 113, 115, 119, 119, 119, 119, 119, 119, 119),
         // The attack sheet is a 4x4 grid of 256px cells and every frame plants its

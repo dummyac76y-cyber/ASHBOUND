@@ -106,7 +106,11 @@ export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
     // idle.png is the reference: its scale is 1 and every other sheet is scaled to
     // match it. The actions still standing in on idle.png keep scale 1 for the
     // same reason, so they render identically.
-    [PlayerAction.IDLE, config(PlayerAction.IDLE, 'idle.png', 12, 10, true, 0)],
+    // idle.png draws its character a little smaller than the previous sheet did,
+    // so it is scaled up to keep rendering at the size every other sheet is
+    // calibrated against. It is the reference the rest are measured from, so
+    // correcting it here is what stops the new art resizing the whole character.
+    [PlayerAction.IDLE, config(PlayerAction.IDLE, 'idle.png', 6, 5, true, 0, { displayScale: 1.063 })],
     // walk.png draws its character a little smaller than idle.png does, and is
     // scaled down a little further than that correction alone, so the walk cycle
     // reads as lower and lighter than standing still. This is one of two sheets
@@ -125,9 +129,11 @@ export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
     [PlayerAction.HEAVY_ATTACK, config(PlayerAction.HEAVY_ATTACK, 'heavy_attack.png', 25, 20, false, 4, {
       columns: 5, cellSize: 256, displayScale: 1.78, hitFrames: [14, 18],
     })],
-    [PlayerAction.BLOCK, config(PlayerAction.BLOCK, 'idle.png', 6, 12, true, 2)],
-    [PlayerAction.DASH, config(PlayerAction.DASH, 'idle.png', 6, 15, false, 5)],
-    [PlayerAction.HURT, config(PlayerAction.HURT, 'idle.png', 4, 12, false, 6)],
-    [PlayerAction.DEATH, config(PlayerAction.DEATH, 'idle.png', 8, 8, false, 10)],
+    // These four have no art of their own yet and stand in on idle.png, so they
+    // must carry idle's scale or they render at a different size from it.
+    [PlayerAction.BLOCK, config(PlayerAction.BLOCK, 'idle.png', 6, 12, true, 2, { displayScale: 1.063 })],
+    [PlayerAction.DASH, config(PlayerAction.DASH, 'idle.png', 6, 15, false, 5, { displayScale: 1.063 })],
+    [PlayerAction.HURT, config(PlayerAction.HURT, 'idle.png', 4, 12, false, 6, { displayScale: 1.063 })],
+    [PlayerAction.DEATH, config(PlayerAction.DEATH, 'idle.png', 6, 8, false, 10, { displayScale: 1.063 })],
   ])
 }

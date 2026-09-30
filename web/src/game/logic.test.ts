@@ -413,8 +413,12 @@ console.log('per-frame foot rows come from the artwork, not a constant')
   const idleFootRows = FOOT_ROWS_BY_SHEET['idle.png']
 
   check('walk foot rows are measured per frame, not a single constant', new Set(walkFootRows).size > 1, '')
-  check('every walk frame has a measured foot row', walkFootRows.length === 12, `got ${walkFootRows.length}`)
-  check('every idle frame has a measured foot row', idleFootRows.length === 12, `got ${idleFootRows.length}`)
+  // Derived from the configured frame count rather than hardcoded, so replacing a
+  // sheet with a different frame count cannot leave these quietly stale.
+  const idleFrames = createDefaultConfigs().get(PlayerAction.IDLE)!.frameCount
+  const walkFrames = createDefaultConfigs().get(PlayerAction.WALK)!.frameCount
+  check('every walk frame has a measured foot row', walkFootRows.length === walkFrames, `got ${walkFootRows.length} for ${walkFrames} frames`)
+  check('every idle frame has a measured foot row', idleFootRows.length === idleFrames, `got ${idleFootRows.length} for ${idleFrames} frames`)
   check('idle foot rows are the constant rest pose', idleFootRows.every((r) => r === 111), '')
 
   const size = GameWorld.SPRITE_DISPLAY_SIZE
@@ -563,9 +567,27 @@ console.log('CHARACTER SIZE: every sheet declares the scale that normalises it')
   // drawn slightly small has to scale up, and one drawn large has to scale down.
   const scaleFor = (action: PlayerAction) => configs.get(action)!.displayScale
   check('the grid attack sheets scale up past their larger cell', scaleFor(PlayerAction.ATTACK) > 1.2 && scaleFor(PlayerAction.HEAVY_ATTACK) > 1.2, `attack ${scaleFor(PlayerAction.ATTACK)}, heavy ${scaleFor(PlayerAction.HEAVY_ATTACK)}`)
-  check('idle is the unscaled reference', scaleFor(PlayerAction.IDLE) === 1, `${scaleFor(PlayerAction.IDLE)}`)
+  // Idle is the size every other sheet is calibrated against, but it is not
+  // necessarily the unscaled one: the artwork can draw its character smaller than
+  // the common size, in which case idle carries a small correction of its own.
+  const idleScale = scaleFor(PlayerAction.IDLE)
+  check('idle is normalised, not left at an arbitrary size', idleScale > 0.9 && idleScale < 1.2, `idle ${idleScale}`)
   check('walk, drawn smaller than idle, scales up', scaleFor(PlayerAction.WALK) > 1, `${scaleFor(PlayerAction.WALK)}`)
   check('jump, drawn larger than idle, scales down', scaleFor(PlayerAction.JUMP) < 1, `${scaleFor(PlayerAction.JUMP)}`)
+
+  // Every action standing in on idle.png renders that sheet, so it must render at
+  // idle's scale. Getting this wrong is invisible in the config and only shows up
+  // as those actions playing at a different size from idle.
+  const idleConfig = configs.get(PlayerAction.IDLE)!
+  for (const action of [PlayerAction.BLOCK, PlayerAction.DASH, PlayerAction.HURT, PlayerAction.DEATH]) {
+    const cfg = configs.get(action)!
+    if (cfg.sourceFileName !== idleConfig.sourceFileName) continue
+    check(
+      `${action} stands in on idle.png and matches its scale`,
+      cfg.displayScale === idleConfig.displayScale,
+      `${cfg.sourceFileName} at ${cfg.displayScale} vs idle ${idleConfig.displayScale}`,
+    )
+  }
 
   // The sheet drawn at a different native resolution must resolve the same
   // on-screen size as idle, which is the whole point of the scale.

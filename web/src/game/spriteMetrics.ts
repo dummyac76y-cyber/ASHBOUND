@@ -28,7 +28,7 @@ export const DEFAULT_FOOT_ROW = 111
  * while the rise in between is genuine vertical motion rather than drift.
  */
 export const FOOT_ROWS_BY_SHEET: Readonly<Record<string, readonly number[]>> = {
-  'idle.png': [111, 111, 111, 111, 111, 111, 111, 111, 111, 111, 111, 111],
+  'idle.png': [111, 111, 111, 111, 111, 111],
   'walk.png': [111, 111, 110, 110, 110, 111, 110, 111, 112, 112, 112, 112],
   'jump.png': [115, 113, 115, 119, 119, 119, 119, 119, 119, 119],
   // The attack sheet is a 4x4 grid of 256px cells and every frame plants its feet
