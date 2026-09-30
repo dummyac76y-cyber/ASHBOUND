@@ -54,7 +54,7 @@ await page.evaluate(() => {
     b.setTransform(1, 0, 0, 1, 0, 0)
     b.translate(g.offX(), g.offY())
     b.scale(s, s)
-    b.translate(-g.world.cameraX, 0)
+    b.translate(-g.world.cameraX, g.world.cameraY)
     g.world.renderCharacter(b)
     const d = b.getImageData(0, 0, c.width, c.height).data
     const half = g.GameWorld.SPRITE_DISPLAY_SIZE / 2
@@ -177,7 +177,7 @@ console.log('the backdrop is drawn once, unmirrored, untiled')
           b.setTransform(1, 0, 0, 1, 0, 0)
           b.translate(g.offX(), g.offY())
           b.scale(g.scale(), g.scale())
-          b.translate(-g.world.cameraX, 0)
+          b.translate(-g.world.cameraX, g.world.cameraY)
           if (pre) pre(b)
           // The game's own single-backdrop draw: one uniform scale, no flip, cropped
           // by the scene's fit.

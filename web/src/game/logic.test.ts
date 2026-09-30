@@ -11,6 +11,7 @@ import {
   SCENES,
   UNDERGROUND_CAVERN,
   fitBackdrop,
+  FOOT_TARGET_VIEWPORT_FRACTION,
   TRANSITION_TOTAL,
 } from './GameScene.ts'
 import { PlayerController, rectsIntersect } from './PlayerController.ts'
@@ -412,6 +413,104 @@ console.log('the cavern floor is one flat plane, walked and jumped on')
   )
 }
 
+// ---------------------------------------------------------------------------
+// Vertical framing.
+//
+// The two paintings put their ground at different heights inside the frame, so a
+// shared world Y would draw the knight low in one scene and high in the other.
+// Each scene therefore frames itself vertically, moving the whole world -- and
+// only the picture of it -- so the feet land on one shared screen Y. The floor
+// itself stays where the artwork puts it, and the physics is untouched.
+// ---------------------------------------------------------------------------
+
+console.log('every scene frames its floor to the same screen height')
+{
+  const target = GameWorld.LOGICAL_HEIGHT * FOOT_TARGET_VIEWPORT_FRACTION
+  check(
+    'the shared target is three quarters down the viewport',
+    Math.abs(target - 270) < 1e-9,
+    `target y ${target} of ${GameWorld.LOGICAL_HEIGHT}`,
+  )
+
+  const framed = SCENES.map((definition) => {
+    const index = SCENES.indexOf(definition)
+    const w = new GameWorld(stubAnimations())
+    w.enterScene(index)
+    return {
+      id: definition.id,
+      floorY: w.activeScene.fit.floorY,
+      cameraY: w.cameraY,
+      footScreenY: w.footScreenY,
+      drawnFootY: w.floorY + w.cameraY,
+      scale: w.activeScene.fit.scale,
+      playerGroundY: w.player.groundY,
+    }
+  })
+
+  for (const f of framed) {
+    check(
+      `${f.id}: the drawn floor lands on the shared screen target`,
+      Math.abs(f.drawnFootY - target) < 1e-6,
+      `floorY ${f.floorY.toFixed(3)} + cameraY ${f.cameraY.toFixed(3)} = ${f.drawnFootY.toFixed(3)}, target ${target}`,
+    )
+  }
+
+  const drawn = framed.map((f) => f.drawnFootY)
+  check(
+    'the two scenes place the floor at the same screen Y',
+    Math.abs(drawn[0] - drawn[1]) < 1e-6,
+    drawn.map((d) => d.toFixed(3)).join(' vs '),
+  )
+  check(
+    'the two scenes really did need different offsets to get there',
+    Math.abs(framed[0].cameraY - framed[1].cameraY) > 1,
+    framed.map((f) => `${f.id}: ${f.cameraY.toFixed(2)}`).join('  '),
+  )
+
+  // The offset is presentation only. The player still stands on the scene's own
+  // world floor, and that floor is still exactly where the artwork put it.
+  for (const f of framed) {
+    check(
+      `${f.id}: the player still stands on the artwork's own world floor`,
+      Math.abs(f.playerGroundY - f.floorY) < 1e-9,
+      `groundY ${f.playerGroundY}, artwork floorY ${f.floorY.toFixed(3)}`,
+    )
+  }
+  check(
+    'the scenes keep their own independent world floors',
+    Math.abs(framed[0].floorY - framed[1].floorY) > 1,
+    framed.map((f) => `${f.id}: ${f.floorY.toFixed(3)}`).join('  '),
+  )
+  check(
+    'framing did not touch the backdrop scale',
+    Math.abs(framed[0].scale - framed[1].scale) > 0.1,
+    framed.map((f) => `${f.id}: scale ${f.scale.toFixed(4)}`).join('  '),
+  )
+
+  // Framing is a crop, so each scene must still fill the viewport vertically.
+  for (const f of framed) {
+    const fit = fitBackdrop(
+      SCENES.find((d) => d.id === f.id)!.sourceWidth,
+      SCENES.find((d) => d.id === f.id)!.sourceHeight,
+      SCENES.find((d) => d.id === f.id)!.floorRow,
+      SCENES.find((d) => d.id === f.id)!.worldWidth,
+      GameWorld.LOGICAL_HEIGHT,
+    )
+    const top = fit.offsetY + f.cameraY
+    // Source rows visible above and below, after the framing crop.
+    const firstSourceRow = (0 - top) / fit.scale
+    const lastSourceRow = (GameWorld.LOGICAL_HEIGHT - top) / fit.scale
+    const art = SCENES.find((d) => d.id === f.id)!
+    // The framed window has to sit entirely inside the painting: any row of it
+    // outside would be a bare band rather than backdrop.
+    check(
+      `${f.id}: cropping to frame the floor leaves no bare band`,
+      firstSourceRow >= -0.5 && lastSourceRow <= art.sourceHeight + 0.5,
+      `visible source rows ${firstSourceRow.toFixed(1)}..${lastSourceRow.toFixed(1)} inside 0..${art.sourceHeight}`,
+    )
+  }
+}
+
 console.log('dt clamping')
 player.resetPlayer(SPAWN_X, FLOOR_Y)
 const xBefore = player.x
@@ -571,9 +670,21 @@ console.log('SCENES: one full-screen environment at a time')
   const cavern = world.scenes.find((x) => x.definition.id === UNDERGROUND_CAVERN.id)!
 
   check(
-    'the prison still fits its 1536x864 art at exactly 5/12, uncropped',
-    Math.abs(prison.fit.scale - 5 / 12) < 1e-12 && prison.fit.offsetX === 0 && prison.fit.offsetY === 0,
-    `scale ${prison.fit.scale}, offsets ${prison.fit.offsetX},${prison.fit.offsetY}`,
+    'the prison backdrop is still uniformly scaled, never stretched to fit the framing',
+    Math.abs(prison.fit.drawWidth / prison.fit.drawHeight - FORGOTTEN_PRISON.sourceWidth / FORGOTTEN_PRISON.sourceHeight) < 1e-9,
+    `drawn ${prison.fit.drawWidth}x${prison.fit.drawHeight}, art ${FORGOTTEN_PRISON.sourceWidth}x${FORGOTTEN_PRISON.sourceHeight}`,
+  )
+  check(
+    'the prison is cropped only vertically, and never wider than the world',
+    prison.fit.offsetY < 0 &&
+      prison.fit.drawWidth >= prison.definition.worldWidth &&
+      Math.abs(prison.fit.offsetX - (prison.definition.worldWidth - prison.fit.drawWidth) / 2) < 1e-9,
+    `offsets ${prison.fit.offsetX},${prison.fit.offsetY}, draw ${prison.fit.drawWidth}x${prison.fit.drawHeight}`,
+  )
+  check(
+    'the prison crop is only as large as the vertical framing needed',
+    prison.fit.scale > 5 / 12 && prison.fit.scale < 5 / 12 + 0.2,
+    `scale ${prison.fit.scale}, was ${5 / 12} uncropped`,
   )
   check(
     'the cavern is a world, not a fitted backdrop: it renders at its native size',
@@ -633,13 +744,14 @@ console.log('SCENES: one full-screen environment at a time')
 
 console.log('ground plane is derived from the backdrop')
 check(
-  'the opening scene floor matches the measured floor row (533 * 5/12)',
-  Math.abs(FLOOR_Y - 222.0833) < 0.01,
-  `got ${FLOOR_Y}`,
+  'the opening scene floor still comes from the measured floor row 533',
+  Math.abs(FLOOR_Y - (OPENING_FIT.offsetY + FORGOTTEN_PRISON.floorRow * OPENING_FIT.scale)) < 1e-9,
+  `got ${FLOOR_Y}, offsetY ${OPENING_FIT.offsetY}, scale ${OPENING_FIT.scale}`,
 )
 check(
   'floor is the lit surface, not the row-620 flagstone joint',
-  FORGOTTEN_PRISON.floorRow === 533 && FLOOR_Y < 230,
+  FORGOTTEN_PRISON.floorRow === 533 &&
+    Math.abs(FLOOR_Y - (OPENING_FIT.offsetY + 620 * OPENING_FIT.scale)) > 1,
   `row ${FORGOTTEN_PRISON.floorRow}, y ${FLOOR_Y}`,
 )
 check(

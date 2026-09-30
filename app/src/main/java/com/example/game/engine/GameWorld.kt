@@ -75,7 +75,8 @@ class GameWorld(val context: Context) {
                 definition.sourceHeight,
                 definition.floorRow,
                 definition.worldWidth,
-                LOGICAL_HEIGHT
+                LOGICAL_HEIGHT,
+                Framing(cameraYOffset = definition.cameraYOffset)
             )
         )
     }
@@ -173,6 +174,18 @@ class GameWorld(val context: Context) {
      * from somewhere else.
      */
     val floorY: Float get() = activeScene.fit.floorY
+
+    /**
+     * Vertical framing of the active scene, in logical pixels.
+     *
+     * Applied to the whole world at render time and nothing else. The player keeps
+     * standing on [floorY] in world coordinates -- this moves that plane up or down
+     * the screen, not the physics, so jumping, landing and hitboxes are unchanged.
+     */
+    val cameraY: Float get() = activeScene.fit.cameraYOffset
+
+    /** Screen Y the active scene's floor is drawn at. Shared by every scene. */
+    val footScreenY: Float get() = activeScene.fit.footScreenY
 
     /** Largest legal camera offset for the active scene. Always >= 0. */
     val maxCameraX: Float get() = maxOf(0f, worldWidth - LOGICAL_WIDTH)
@@ -457,7 +470,7 @@ class GameWorld(val context: Context) {
         // Single world -> screen transform. The backdrop, the player, the dummies and
         // every hitbox all live in the same world space, so a world-fixed object stays
         // locked to its scene while the player walks.
-        canvas.translate(-cameraX, 0f)
+        canvas.translate(-cameraX, cameraY)
 
         // 1. The active scene's backdrop, and only that one, uniformly scaled to cover
         // the world and cropped where it overflows. No tiling, mirroring or stretching,

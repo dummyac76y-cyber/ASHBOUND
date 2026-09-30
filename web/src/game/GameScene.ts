@@ -41,7 +41,37 @@ export interface SceneBackdropFit {
    * so it is derived from the artwork rather than chosen independently of it.
    */
   readonly floorY: number
+  /**
+   * Screen Y of the active scene's floor, i.e. where the player's feet are drawn.
+   *
+   * Every combat scene aims at the same value, so the knight's apparent height on
+   * screen does not change when the scene does.
+   */
+  readonly footScreenY: number
+  /**
+   * Vertical framing offset applied to the whole world when this scene renders.
+   *
+   * The two paintings put their floor at different heights inside the frame, so
+   * without this the same world Y would put the knight near the bottom in one
+   * scene and much higher in the other. This shifts the entire world -- backdrop,
+   * player, dummies, particles -- up or down as one, cropping excess background
+   * at the top or bottom and nothing else. It is a camera offset only: it never
+   * touches the scale, and it never moves the player relative to [floorY], which
+   * stays the world coordinate the physics works in.
+   */
+  readonly cameraYOffset: number
 }
+
+/**
+ * Where the combat floor should sit on screen, as a fraction of the viewport height.
+ *
+ * Shared by every scene. The paintings disagree about how much of their frame the
+ * ground occupies, so the floor lands at a different height in each one; pinning it
+ * to one screen position is what keeps the knight's apparent placement steady from
+ * scene to scene. Three quarters down leaves room above for the character and for
+ * the upper scenery that survives the crop.
+ */
+export const FOOT_TARGET_VIEWPORT_FRACTION = 0.75
 
 /**
  * Scales a backdrop to completely cover a scene, preserving aspect ratio.
@@ -61,17 +91,42 @@ export function fitBackdrop(
   floorRow: number,
   worldWidth: number,
   viewportHeight: number,
+  framing: { footScreenY?: number; cameraYOffset?: number } = {},
 ): SceneBackdropFit {
   // Cover on height first...
   let scale = viewportHeight / imageHeight
   // ...then raise it if that would leave the world horizontally uncovered.
   if (imageWidth * scale < worldWidth) scale = worldWidth / imageWidth
 
-  const drawWidth = imageWidth * scale
-  const drawHeight = imageHeight * scale
-  // Centred, so overflow crops evenly. Negative on any axis that overflows.
-  const offsetX = (worldWidth - drawWidth) / 2
-  const offsetY = (viewportHeight - drawHeight) / 2
+  const footScreenY = framing.footScreenY ?? viewportHeight * FOOT_TARGET_VIEWPORT_FRACTION
+
+  // Framing crops the picture, and a crop needs something left to crop. A painting
+  // whose height lands exactly on the viewport has no vertical slack at all, so
+  // framing it would slide part of the image off screen and leave a bare band. When
+  // that happens the backdrop is grown uniformly -- same factor on both axes, so the
+  // image is still not distorted -- until the framed window is fully covered.
+  let drawWidth = 0
+  let drawHeight = 0
+  let offsetX = 0
+  let offsetY = 0
+  let floorY = 0
+  let cameraYOffset = 0
+  for (let attempt = 0; attempt < 24; attempt++) {
+    drawWidth = imageWidth * scale
+    drawHeight = imageHeight * scale
+    // Centred, so overflow crops evenly. Negative on any axis that overflows.
+    offsetX = (worldWidth - drawWidth) / 2
+    offsetY = (viewportHeight - drawHeight) / 2
+    floorY = offsetY + floorRow * scale
+    cameraYOffset = framing.cameraYOffset ?? footScreenY - floorY
+
+    // Viewport window in plate space, once the framing shift is applied.
+    const top = offsetY + cameraYOffset
+    const missing = Math.max(0, top) + Math.max(0, viewportHeight - (top + drawHeight))
+    if (missing <= 1e-9) break
+    // Centred growth moves both edges by half the added height, hence the doubling.
+    scale *= (drawHeight + missing * 2) / drawHeight
+  }
 
   return {
     scale,
@@ -79,7 +134,11 @@ export function fitBackdrop(
     drawHeight,
     offsetX,
     offsetY,
-    floorY: offsetY + floorRow * scale,
+    floorY,
+    footScreenY,
+    // Derived from the artwork's own floor unless the scene overrides it, so a
+    // scene cannot end up framed inconsistently with where its ground actually is.
+    cameraYOffset,
   }
 }
 
@@ -109,6 +168,15 @@ export interface SceneDefinition {
    * begins, which is a real step in the image rather than a guessed fraction of it.
    */
   readonly floorRow: number
+  /**
+   * Optional explicit vertical framing, in logical pixels.
+   *
+   * Left unset, the scene is framed so its own floor lands on the shared target
+   * screen Y, which is what every scene here wants. It exists so a painting whose
+   * ground genuinely sits somewhere else -- a ledge fought on, say -- can hold a
+   * different height without anyone editing the shared target.
+   */
+  readonly cameraYOffset?: number
   /** Width of this scene's world, in logical pixels. Each scene bounds itself. */
   readonly worldWidth: number
   /** World X the player is placed at when this scene loads. */

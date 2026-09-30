@@ -307,21 +307,57 @@ check('the whole handover lands in the 0.6-1.0s window', totalFade >= 0.6 && tot
 // on the same wrong numbers.
 const LOGICAL_W = 640
 const LOGICAL_H = 360
+const FOOT_TARGET = LOGICAL_H * 0.75
 for (const d of ordered) {
   let scale = LOGICAL_H / d.sourceHeight
   if (d.sourceWidth * scale < d.worldWidth) scale = d.worldWidth / d.sourceWidth
-  const drawW = d.sourceWidth * scale
-  const drawH = d.sourceHeight * scale
-  const offsetX = (d.worldWidth - drawW) / 2
-  const offsetY = (LOGICAL_H - drawH) / 2
-  const floorY = offsetY + d.floorRow * scale
+  // Same framing fit the engines run: grow uniformly until the framed window is
+  // fully covered, then take the floor's own position as the vertical offset.
+  let drawW = 0
+  let drawH = 0
+  let offsetX = 0
+  let offsetY = 0
+  let floorY = 0
+  let cameraY = 0
+  for (let i = 0; i < 24; i++) {
+    drawW = d.sourceWidth * scale
+    drawH = d.sourceHeight * scale
+    offsetX = (d.worldWidth - drawW) / 2
+    offsetY = (LOGICAL_H - drawH) / 2
+    floorY = offsetY + d.floorRow * scale
+    cameraY = FOOT_TARGET - floorY
+    const top = offsetY + cameraY
+    const missing = Math.max(0, top) + Math.max(0, LOGICAL_H - (top + drawH))
+    if (missing <= 1e-9) break
+    scale *= (drawH + missing * 2) / drawH
+  }
   const tag = d.id
   check(`${tag}: the backdrop covers the full width, so no black gap can show`, drawW >= d.worldWidth, `draw ${drawW} vs world ${d.worldWidth}`)
   check(`${tag}: the backdrop covers the full height, so no black gap can show`, drawH >= LOGICAL_H, `draw ${drawH} vs ${LOGICAL_H}`)
   check(`${tag}: overflow is cropped, never inset`, offsetX <= 0 && offsetY <= 0, `offset ${offsetX},${offsetY}`)
   check(`${tag}: one uniform scale, so the artwork is not stretched`, Math.abs(drawW / d.sourceWidth - drawH / d.sourceHeight) < 1e-12, `x ${drawW / d.sourceWidth} vs y ${drawH / d.sourceHeight}`)
   check(`${tag}: the floor plane lands inside the viewport`, floorY > 0 && floorY < LOGICAL_H, `floorY ${floorY.toFixed(3)}`)
+  // Framing must not expose background, and must put the floor at the shared
+  // screen height in both engines, not merely agree on one wrong number.
+  const framedTop = offsetY + cameraY
+  check(`${tag}: the framed crop still covers the viewport, so no bare band shows`,
+    framedTop <= 1e-9 && framedTop + drawH >= LOGICAL_H - 1e-9,
+    `framed span ${framedTop.toFixed(2)}..${(framedTop + drawH).toFixed(2)} of 0..${LOGICAL_H}`)
+  check(`${tag}: the floor is drawn at the shared screen height`,
+    Math.abs(floorY + cameraY - FOOT_TARGET) < 1e-6,
+    `floorY ${floorY.toFixed(3)} + cameraY ${cameraY.toFixed(3)} = ${(floorY + cameraY).toFixed(3)}, target ${FOOT_TARGET}`)
+  check(`${tag}: the vertical framing crops rather than scales the picture non-uniformly`,
+    Math.abs(drawW / d.sourceWidth - drawH / d.sourceHeight) < 1e-12,
+    `x ${drawW / d.sourceWidth} vs y ${drawH / d.sourceHeight}`)
+  d.framed = { scale, floorY, cameraY }
 }
+const framedFloors = ordered.map((d) => d.framed && d.framed.floorY + d.framed.cameraY)
+check('every scene draws its floor at the same screen height',
+  framedFloors.every((f) => Math.abs(f - framedFloors[0]) < 1e-6),
+  framedFloors.map((f) => f.toFixed(3)).join(' vs '))
+check('the scenes needed different vertical offsets to get there',
+  Math.abs(ordered[0].framed.cameraY - ordered[1].framed.cameraY) > 1,
+  ordered.map((d) => `${d.id}: ${d.framed.cameraY.toFixed(2)}`).join('  '))
 const prisonFit = ordered[0]
 const cavernFit = ordered[1] ?? ordered[0]
 check('the prison still fills its scene at exactly 5/12, uncropped',

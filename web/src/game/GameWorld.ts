@@ -117,6 +117,7 @@ export class GameWorld {
         definition.floorRow,
         definition.worldWidth,
         GameWorld.LOGICAL_HEIGHT,
+        { cameraYOffset: definition.cameraYOffset },
       ),
     }))
     // activeIndex first: the scene's own floor plane is what the player is placed on.
@@ -150,6 +151,23 @@ export class GameWorld {
    */
   get floorY(): number {
     return this.activeScene.fit.floorY
+  }
+
+  /**
+   * Vertical framing of the active scene, in logical pixels.
+   *
+   * Applied to the whole world at render time and nothing else. The player keeps
+   * standing on [floorY] in world coordinates -- this is what moves that plane up
+   * or down the screen, not the physics, so jumping, landing and hitboxes are all
+   * unchanged by it.
+   */
+  get cameraY(): number {
+    return this.activeScene.fit.cameraYOffset
+  }
+
+  /** Screen Y the active scene's floor is drawn at. Shared by every scene. */
+  get footScreenY(): number {
+    return this.activeScene.fit.footScreenY
   }
 
   /** Largest legal camera offset for the active scene. Always >= 0. */
@@ -397,8 +415,9 @@ export class GameWorld {
     ctx.save()
     // Single world -> screen transform. The backdrop, the player, the dummies and
     // every hitbox all live in the same world space, so a world-fixed object stays
-    // locked to its scene while the player walks.
-    ctx.translate(-this.cameraX, 0)
+    // locked to its scene while the player walks. The vertical term is the scene's
+    // own framing, which lines its drawn floor up with every other scene's.
+    ctx.translate(-this.cameraX, this.cameraY)
 
     // 1. The active scene's backdrop, and only that one, uniformly scaled to cover
     // the world and cropped where it overflows. No tiling, mirroring or stretching,

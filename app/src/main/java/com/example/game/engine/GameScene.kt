@@ -37,8 +37,33 @@ data class SceneBackdropFit(
      * ends up after scaling and offsetting. This is the scene's ground plane: the
      * player's visible feet rest exactly here.
      */
-    val floorY: Float
+    val floorY: Float,
+    /**
+     * Screen Y of this scene's floor, i.e. where the player's feet are drawn. Every
+     * combat scene aims at the same value, so the knight's apparent height on
+     * screen does not change when the scene does.
+     */
+    val footScreenY: Float,
+    /**
+     * Vertical framing offset applied to the whole world when this scene renders.
+     *
+     * The two paintings put their floor at different heights inside the frame, so
+     * without this the same world Y would put the knight near the bottom in one
+     * scene and much higher in the other. This shifts the entire world -- backdrop,
+     * player, dummies, particles -- up or down as one, cropping excess background
+     * and nothing else. It is a camera offset only: it never touches the scale, and
+     * it never moves the player relative to [floorY].
+     */
+    val cameraYOffset: Float
 )
+
+/**
+ * Where the combat floor should sit on screen, as a fraction of the viewport height.
+ *
+ * Shared by every scene, so the floor lands at the same height in each one
+ * regardless of how much of its own frame the painting gives to the ground.
+ */
+const val FOOT_TARGET_VIEWPORT_FRACTION = 0.75f
 
 /**
  * Scales a backdrop to completely cover a scene, preserving aspect ratio.
@@ -57,7 +82,8 @@ fun fitBackdrop(
     imageHeight: Float,
     floorRow: Float,
     worldWidth: Float,
-    viewportHeight: Float
+    viewportHeight: Float,
+    framing: Framing = Framing()
 ): SceneBackdropFit {
     // Cover on height first...
     var scale = viewportHeight / imageHeight
@@ -70,15 +96,30 @@ fun fitBackdrop(
     val offsetX = (worldWidth - drawWidth) / 2f
     val offsetY = (viewportHeight - drawHeight) / 2f
 
+    val floorY = offsetY + floorRow * scale
+    val footScreenY = framing.footScreenY ?: viewportHeight * FOOT_TARGET_VIEWPORT_FRACTION
+
     return SceneBackdropFit(
         scale = scale,
         drawWidth = drawWidth,
         drawHeight = drawHeight,
         offsetX = offsetX,
         offsetY = offsetY,
-        floorY = offsetY + floorRow * scale
+        floorY = floorY,
+        footScreenY = footScreenY,
+        // Derived from the artwork's own floor unless the scene overrides it, so a
+        // scene cannot end up framed inconsistently with where its ground is.
+        cameraYOffset = framing.cameraYOffset ?: (footScreenY - floorY)
     )
 }
+
+/** Per-scene vertical framing: where the floor should be drawn, or an explicit offset. */
+data class Framing(
+    /** Screen Y the floor is drawn at. Defaults to the shared target. */
+    val footScreenY: Float? = null,
+    /** Explicit vertical offset, overriding the derived one. */
+    val cameraYOffset: Float? = null
+)
 
 /** Static description of one environment. */
 data class SceneDefinition(
@@ -107,6 +148,11 @@ data class SceneDefinition(
      */
     val floorRow: Float,
     /** Width of this scene's world, in logical pixels. Each scene bounds itself. */
+    /**
+     * Optional explicit vertical framing, in logical pixels. Left unset, the scene
+     * is framed so its own floor lands on the shared target screen Y.
+     */
+    val cameraYOffset: Float? = null,
     val worldWidth: Float,
     /** World X the player is placed at when this scene loads. */
     val spawnX: Float,
