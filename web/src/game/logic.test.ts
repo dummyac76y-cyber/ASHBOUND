@@ -311,6 +311,107 @@ check(
   `${world.cameraXForPlayerX(-500)} .. ${world.cameraXForPlayerX(99999)}`,
 )
 
+// ---------------------------------------------------------------------------
+// The cavern's ground plane.
+//
+// The cavern painting shows scenery standing proud of the ground: rocks, timber
+// ledges, the cave walls. None of it is walkable. The scene must therefore present
+// exactly one floor — the flat stone combat floor — and hold the player's feet on
+// it everywhere he can walk, so he can never end up standing on scenery.
+// ---------------------------------------------------------------------------
+
+console.log('the cavern floor is one flat plane, walked and jumped on')
+{
+  const cavernWorld = new GameWorld(stubAnimations())
+  const index = SCENES.findIndex((d) => d.id === UNDERGROUND_CAVERN.id)
+  cavernWorld.enterScene(index)
+  const scene = cavernWorld.activeScene
+  const plane = scene.fit.floorY
+
+  check('the cavern has its own floor plane', Number.isFinite(plane), `plane y ${plane}`)
+
+  // 1-2. Spawns on the floor, feet on it.
+  check(
+    'the cavern spawns the player standing on the floor',
+    Math.abs(cavernWorld.player.groundY - plane) < 1e-9 && cavernWorld.player.isGrounded,
+    `groundY ${cavernWorld.player.groundY}, plane ${plane}`,
+  )
+
+  // 3. Walking left and right keeps the feet on the very same plane, all the way
+  //    to both world edges. This is what makes "never on a rock" true: the plane
+  //    never moves, and the collision test is a single value, so there is no
+  //    scenery the player could be lifted onto.
+  const walkedYs = new Set<number>()
+  const halfW = cavernWorld.player.width / 2
+  for (const dir of [1, -1]) {
+    cavernWorld.player.setMovementInput(dir)
+    for (let i = 0; i < 1200; i++) {
+      cavernWorld.update(1 / 60)
+      walkedYs.add(Math.round(cavernWorld.player.groundY * 1e6))
+    }
+  }
+  cavernWorld.player.setMovementInput(0)
+  check(
+    'walking the full width in both directions never leaves the floor plane',
+    walkedYs.size === 1 && Math.abs([...walkedYs][0] / 1e6 - plane) < 1e-9,
+    `distinct groundY values while walking: ${walkedYs.size} (${[...walkedYs].slice(0, 3).join(', ')})`,
+  )
+  check(
+    'the walk covered the whole scene, so the plane was tested end to end',
+    cavernWorld.player.x - halfW <= halfW + 1 || cavernWorld.player.x + halfW >= UNDERGROUND_CAVERN.worldWidth - halfW - 1,
+    `ended at x ${cavernWorld.player.x.toFixed(1)}`,
+  )
+
+  // 4-5. A jump leaves the plane and lands back on it exactly.
+  cavernWorld.respawn()
+  const jumped = cavernWorld.player.onJump()
+  let peak = cavernWorld.player.groundY
+  let landedAt: number | null = null
+  for (let i = 0; i < 300; i++) {
+    cavernWorld.update(1 / 60)
+    peak = Math.min(peak, cavernWorld.player.groundY)
+    if (i > 5 && cavernWorld.player.isGrounded) {
+      landedAt = cavernWorld.player.groundY
+      break
+    }
+  }
+  check('a jump starts from the floor', jumped && peak < plane - 50, `jump peak y ${peak.toFixed(1)}, plane ${plane}`)
+  check(
+    'the jump lands back on exactly the same floor plane',
+    landedAt !== null && Math.abs(landedAt - plane) < 1e-9,
+    `landed at ${landedAt}, plane ${plane}`,
+  )
+
+  // The collision test is the scene's single floor value: nothing in the world
+  // supplies a second surface, which is what keeps scenery unwalkable.
+  check(
+    'the world exposes exactly one ground height, so scenery cannot become walkable',
+    cavernWorld.floorY === plane && scene.fit.floorY === plane,
+    `world ${cavernWorld.floorY}, scene fit ${scene.fit.floorY}`,
+  )
+  check(
+    'the cavern dummies stand on that same plane, not on a ledge',
+    cavernWorld.dummies.every((d) => Math.abs(d.groundY - plane) < 1e-9),
+    `dummies at ${cavernWorld.dummies.map((d) => d.groundY).join(', ')}, plane ${plane}`,
+  )
+
+  // 6. Scrolling the camera must not move the ground vertically. The camera is
+  //    horizontal only, so the feet's world Y is invariant along the whole world.
+  const footYs: number[] = []
+  for (const camX of [0, 448, UNDERGROUND_CAVERN.worldWidth - GameWorld.LOGICAL_WIDTH]) {
+    cavernWorld.enterScene(index)
+    cavernWorld.player.x = Math.min(Math.max(camX + GameWorld.LOGICAL_WIDTH / 2, halfW), UNDERGROUND_CAVERN.worldWidth - halfW)
+    cavernWorld.cameraX = cavernWorld.cameraXForPlayerX(cavernWorld.player.x)
+    cavernWorld.update(1 / 60)
+    footYs.push(cavernWorld.player.groundY)
+  }
+  check(
+    'the feet stay on the same height at every camera position',
+    footYs.every((y) => Math.abs(y - plane) < 1e-9),
+    `groundY at three camera positions: ${footYs.map((y) => y.toFixed(3)).join(', ')}, plane ${plane}`,
+  )
+}
+
 console.log('dt clamping')
 player.resetPlayer(SPAWN_X, FLOOR_Y)
 const xBefore = player.x

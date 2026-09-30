@@ -1519,6 +1519,70 @@ console.log('scrolling reveals new cavern art, never an empty edge')
   )
 }
 
+// --- 14. The cavern floor is one plane, on screen, at every camera position ----
+console.log('cavern feet sit on the stone floor at every camera position')
+{
+  const res = await page.evaluate(async () => {
+    const g = window.__game
+    g.loadScene(1)
+    const settle = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    const plane = g.world.floorY
+    const maxCamera = g.world.maxCameraX
+    const out = []
+
+    for (const [tag, x, cameraX] of [
+      ['left edge', g.world.player.width / 2 + 4, 0],
+      ['entrance', g.world.activeScene.definition.spawnX, g.world.cameraXForPlayerX(g.world.activeScene.definition.spawnX)],
+      ['right edge', g.world.worldWidth - g.world.player.width / 2 - 4, maxCamera],
+    ]) {
+      await g.pin({ action: 'IDLE', frame: 0, playerX: x, cameraX })
+      out.push({ tag, x, cameraX: g.world.cameraX, foot: g.footRow(), plane, grounded: g.world.player.isGrounded, groundY: g.world.player.groundY })
+    }
+
+    // Walking: the feet must not drift while the scene scrolls under the player.
+    // Back to the entrance first, otherwise the loop starts pinned against the
+    // right wall with no room to walk and the camera never moves.
+    g.world.respawn()
+    await settle()
+    g.resume()
+    const raf = () => new Promise((r) => requestAnimationFrame(r))
+    g.world.player.setMovementInput(1)
+    const walk = []
+    for (let i = 0; i < 400; i++) {
+      await raf()
+      if (i % 100 === 0) walk.push({ i, cam: g.world.cameraX, groundY: g.world.player.groundY })
+    }
+    g.world.player.setMovementInput(0)
+    g.pause()
+    return { out, walk, plane }
+  })
+
+  for (const r of res.out) {
+    check(
+      `${r.tag}: the feet are drawn on the stone floor, not floating or sunk`,
+      Math.abs(r.foot - r.plane) <= 1 && r.grounded,
+      `foot row ${r.foot}, floor ${r.plane}, grounded ${r.grounded}`,
+    )
+    check(
+      `${r.tag}: the player's ground is that same floor plane`,
+      Math.abs(r.groundY - r.plane) < 1e-9,
+      `groundY ${r.groundY}, floor ${r.plane}`,
+    )
+  }
+  const footRows = res.out.map((r) => r.foot)
+  check(
+    'the feet land on the identical screen row at every camera position',
+    new Set(footRows).size === 1,
+    `foot rows ${footRows.join(', ')} at cameras ${res.out.map((r) => r.cameraX).join(', ')}`,
+  )
+  const walkYs = res.walk.map((w) => w.groundY)
+  check(
+    'walking and scrolling never moves the feet off the floor',
+    walkYs.every((y) => Math.abs(y - res.plane) < 1e-9) && res.walk.at(-1).cam > res.walk[0].cam,
+    `groundY ${walkYs.join(', ')} while the camera moved ${res.walk[0].cam} -> ${res.walk.at(-1).cam}`,
+  )
+}
+
 // --- 10. Action buttons carry no coloured circle -----------------------------
 console.log('every action button shares one neutral fill')
 {
