@@ -194,6 +194,8 @@ console.log('\nSCENES: both engines declare the same environments, the same way'
 // ground in the same room.
 const WEB_SCENE_SRC = readFileSync(join(ROOT, 'web/src/game/GameScene.ts'), 'utf8')
 const KT_SCENE_SRC = readFileSync(join(ROOT, 'app/src/main/java/com/example/game/engine/GameScene.kt'), 'utf8')
+const WEB_NPC_SRC = readFileSync(join(ROOT, 'web/src/game/npcAssets.ts'), 'utf8')
+const KT_NPC_SRC = readFileSync(join(ROOT, 'app/src/main/java/com/example/game/engine/NpcAssets.kt'), 'utf8')
 const WEB_WORLD_SRC = readFileSync(join(ROOT, 'web/src/game/GameWorld.ts'), 'utf8')
 const KT_WORLD_SRC = readFileSync(join(ROOT, 'app/src/main/java/com/example/game/engine/GameWorld.kt'), 'utf8')
 
@@ -582,6 +584,69 @@ for (const [action, spec] of Object.entries(HIT_WINDOWS)) {
   check(`${action}: the hit waits past the windup`, first > 0, `window opens on frame ${first}`)
 }
 check('non-attack sheets deal no damage', true, 'all other configs have hitFrames: null')
+
+// ---------------------------------------------------------------------------
+// The NPC sprite set.
+//
+// Both engines must agree on which NPC files exist and which are still awaited,
+// or one platform would look for art the other has already been given.
+// ---------------------------------------------------------------------------
+
+console.log('\nNPC asset set is declared identically in both engines')
+{
+  // TypeScript and Kotlin spell the same fields differently, so each gets its own
+  // pattern rather than a loose search that would match unrelated text.
+  const collect = (src, re) => {
+    const out = []
+    let m
+    while ((m = re.exec(src)) !== null) out.push(m)
+    return out
+  }
+  const web = collect(WEB_NPC_SRC, /file:\s*'([^']+)'[\s\S]*?layout:\s*'(strip|grid)'[\s\S]*?frames:\s*(\d+)[\s\S]*?status:\s*'(present|pending)'/g)
+    .map((m) => ({ file: m[1], layout: m[2], frames: Number(m[3]), present: m[4] === 'present' }))
+  const kt = collect(KT_NPC_SRC, /file\s*=\s*"([^"]+)"[\s\S]*?layout\s*=\s*NpcSheetLayout\.(STRIP|GRID)[\s\S]*?frames\s*=\s*(\d+)[\s\S]*?present\s*=\s*(true|false)/g)
+    .map((m) => ({ file: m[1], layout: m[2].toLowerCase(), frames: Number(m[3]), present: m[4] === 'true' }))
+  check('both engines declare the same number of NPC sheets', web.length === kt.length && web.length > 0, `web ${web.length} vs android ${kt.length}`)
+  check('both engines use the same 128px cell size',
+    /NPC_CELL_SIZE\s*=\s*128/.test(WEB_NPC_SRC) && /NPC_CELL_SIZE\s*=\s*128/.test(KT_NPC_SRC), '128')
+
+  const byFile = new Map(kt.map((s) => [s.file, s]))
+  for (const w of web) {
+    const k = byFile.get(w.file)
+    if (!k) {
+      check(`${w.file}: declared in both engines`, false, 'missing from Kotlin')
+      continue
+    }
+    check(
+      `${w.file}: same layout, frame count and availability in both engines`,
+      k.layout === w.layout && k.frames === w.frames && k.present === w.present,
+      `web ${w.layout}/${w.frames}/${w.present} vs android ${k.layout}/${k.frames}/${k.present}`,
+    )
+  }
+  check('exactly one NPC sheet is marked present in both engines',
+    web.filter((s) => s.present).length === 1 && kt.filter((s) => s.present).length === 1,
+    `web [${web.filter((s) => s.present).map((s) => s.file)}] vs android [${kt.filter((s) => s.present).map((s) => s.file)}]`)
+
+  // The artwork itself has to be shared, not merely declared.
+  const manifest = JSON.parse(readFileSync(join(ROOT, 'web/src/generated/asset-manifest.json'), 'utf8'))
+  const present = web.filter((s) => s.present).map((s) => `./sprites/${s.file}`)
+  for (const entry of present) {
+    check(`${entry}: the shared asset manifest knows about it`, entry in manifest, manifest[entry] ?? 'absent from manifest')
+  }
+  const base = web.find((s) => s.present)
+  if (!base) {
+    check('a present NPC sheet was found in the declarations', false, 'the declarations could not be read')
+  }
+  const androidSprite = join(ROOT, 'app/src/main/assets/sprites', base?.file ?? '')
+  const webSprite = join(ROOT, 'web/public/sprites', base?.file ?? '')
+  check('the present sheet exists in the Android asset tree', existsSync(androidSprite), androidSprite)
+  check('and is synced to the web tree byte for byte',
+    existsSync(androidSprite) && existsSync(webSprite) &&
+      Buffer.compare(readFileSync(androidSprite), readFileSync(webSprite)) === 0,
+    existsSync(androidSprite) && existsSync(webSprite) ? 'identical' : 'missing a copy')
+}
+
+
 
 console.log(failures === 0 ? '\nAll parity checks passed.' : `\n${failures} check(s) FAILED.`)
 process.exit(failures === 0 ? 0 : 1)
