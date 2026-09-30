@@ -195,13 +195,15 @@ if (reference) {
   // that is even a few percent off moves well outside 2px.
   const EXPECTED = {
     'idle.png': 84.5,
-    'walk.png': 84.0,
+    // Two sheets are deliberately off the common size, in opposite directions:
+    // the walk cycle is drawn a little smaller so it reads as lower and lighter
+    // than standing still, and the heavy attack a little larger so the swing
+    // carries weight. Both are pinned here so the exceptions stay explicit rather
+    // than becoming a hole in the tolerance.
+    'walk.png': 81.0,
     'jump.png': 85.0,
     'attack.png': 84.5,
-    // The heavy attack is deliberately drawn a little larger than the rest, so
-    // the swing reads as more weight than a light one. This is the one sheet
-    // allowed to differ, and it is pinned here so the exception stays explicit.
-    'heavy_attack.png': 90.0,
+    'heavy_attack.png': 95.0,
   }
   const TOLERANCE = 2
   for (const m of measured) {
@@ -213,23 +215,30 @@ if (reference) {
     )
   }
 
-  // Every sheet except the deliberate heavy-attack exception must agree with
-  // idle, which is the "all sprites are the same size" invariant.
-  const standard = measured.filter((m) => m.file !== 'heavy_attack.png')
+  // Every sheet without an intended deviation must render one identical size.
+  const DEVIATIONS = ['heavy_attack.png', 'walk.png']
+  const standard = measured.filter((m) => !DEVIATIONS.includes(m.file))
   const spread = Math.max(...standard.map((m) => m.median)) - Math.min(...standard.map((m) => m.median))
   check(
-    'every other sheet renders one identical character size',
+    'the non-deviating sheets render one identical character size',
     spread <= 2,
     `${spread.toFixed(1)}px spread across ${standard.map((m) => m.file).join(', ')}`,
   )
+
+  // The two deviations must sit on the correct side of the common size, so a
+  // mis-set scale cannot quietly turn one into the other.
   const heavy = measured.find((m) => m.file === 'heavy_attack.png')
-  if (heavy) {
-    check(
-      'the heavy attack is the larger one, as intended',
-      heavy.median > reference.median,
-      `heavy ${heavy.median.toFixed(1)}px vs idle ${reference.median.toFixed(1)}px (+${(heavy.median - reference.median).toFixed(1)})`,
-    )
-  }
+  const walk = measured.find((m) => m.file === 'walk.png')
+  check(
+    'the heavy attack renders larger than the common size',
+    heavy !== undefined && reference !== undefined && heavy.median > reference.median + 3,
+    heavy && reference ? `heavy ${heavy.median.toFixed(1)}px vs idle ${reference.median.toFixed(1)}px (+${(heavy.median - reference.median).toFixed(1)})` : 'missing',
+  )
+  check(
+    'the walk cycle renders smaller than the common size',
+    walk !== undefined && reference !== undefined && walk.median < reference.median - 2,
+    walk && reference ? `walk ${walk.median.toFixed(1)}px vs idle ${reference.median.toFixed(1)}px (${(walk.median - reference.median).toFixed(1)})` : 'missing',
+  )
 }
 
 console.log('\nGRID PACKED SHEETS: each grid renders frame by frame')

@@ -64,8 +64,10 @@ object DefaultAnimationConfigs {
             loop = true,
             priority = 1,
             canBeCancelledByMovement = true,
-            // walk.png draws its character slightly smaller than idle.png does.
-            displayScale = 1.091f
+            // walk.png draws its character slightly smaller than idle.png does, and
+            // is scaled down a little further than that correction alone, so the
+            // walk cycle reads as lower and lighter than standing still.
+            displayScale = 1.05f
         ),
         PlayerAction.ATTACK to AnimationConfig(
             action = PlayerAction.ATTACK,
@@ -100,7 +102,7 @@ object DefaultAnimationConfigs {
             // every other sheet renders at, so the heavy swing reads as more weight.
             columns = 5,
             cellSize = 256,
-            displayScale = 1.68f,
+            displayScale = 1.78f,
             hitFrames = listOf(14, 18)
         ),
         PlayerAction.BLOCK to AnimationConfig(

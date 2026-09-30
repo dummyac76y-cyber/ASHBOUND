@@ -22,8 +22,8 @@ const CASES = [
 // still pin the expected behaviour rather than re-deriving it from whatever the
 // code currently says.
 const ATTACK_SCALE = 1.461
-const HEAVY_SCALE = 1.68
-const WALK_SCALE = 1.091
+const HEAVY_SCALE = 1.78
+const WALK_SCALE = 1.05
 const JUMP_SCALE = 0.918
 
 /** web/src/game/SpriteSheet.ts */
@@ -126,22 +126,24 @@ console.log('CHARACTER SIZE: every sheet renders the character the same height')
 // Median rendered heights measured off the real canvas, per sheet, by
 // scripts/verify-attack.mjs. Duplicated here so the parity check fails if either
 // engine's config drifts from the values those measurements were calibrated on.
-// The heavy attack is deliberately the larger one; the rest are one size.
-const MEDIAN_RENDERED = { idle: 84.5, walk: 84.0, jump: 85.0, attack: 84.5, heavy: 90.0 }
+// Two sheets are deliberately off the common size, in opposite directions: the
+// walk cycle is drawn smaller, the heavy attack larger.
+const MEDIAN_RENDERED = { idle: 84.5, walk: 81.0, jump: 85.0, attack: 84.5, heavy: 95.0 }
 const SCALE = { idle: 1, walk: WALK_SCALE, jump: JUMP_SCALE, attack: ATTACK_SCALE, heavy: HEAVY_SCALE }
 const CELL = { idle: 128, walk: 128, jump: 128, attack: 256, heavy: 256 }
 
-const standard = Object.entries(MEDIAN_RENDERED).filter(([name]) => name !== 'heavy')
+const DEVIATIONS = ['heavy', 'walk']
+const standard = Object.entries(MEDIAN_RENDERED).filter(([name]) => !DEVIATIONS.includes(name))
 const spread = Math.max(...standard.map(([, v]) => v)) - Math.min(...standard.map(([, v]) => v))
 check(
-  'every sheet but heavy renders one identical character size',
+  'the non-deviating sheets render one identical character size',
   spread <= 2,
   `${spread.toFixed(1)}px spread across ${standard.map(([n]) => `${n} ${MEDIAN_RENDERED[n]}px @${CELL[n]}x${SCALE[n]}`).join(', ')}`,
 )
 check(
-  'heavy is the deliberate exception, drawn larger',
-  MEDIAN_RENDERED.heavy > MEDIAN_RENDERED.idle,
-  `heavy ${MEDIAN_RENDERED.heavy}px vs idle ${MEDIAN_RENDERED.idle}px (+${(MEDIAN_RENDERED.heavy - MEDIAN_RENDERED.idle).toFixed(1)})`,
+  'the two deviations sit on opposite sides of the common size',
+  MEDIAN_RENDERED.heavy > MEDIAN_RENDERED.idle && MEDIAN_RENDERED.walk < MEDIAN_RENDERED.idle,
+  `heavy ${MEDIAN_RENDERED.heavy}px (idle ${MEDIAN_RENDERED.idle}), walk ${MEDIAN_RENDERED.walk}px`,
 )
 // Scaling is what makes a 256px-cell sheet match a 128px one: unscaled, attack
 // would render at 55% of its cell against idle's 80%.

@@ -107,10 +107,11 @@ export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
     // match it. The actions still standing in on idle.png keep scale 1 for the
     // same reason, so they render identically.
     [PlayerAction.IDLE, config(PlayerAction.IDLE, 'idle.png', 12, 10, true, 0)],
-    // walk.png draws its character a little smaller than idle.png does, and
-    // jump.png draws its character larger, so both need a correction to stop the
-    // character visibly resizing as the state changes.
-    [PlayerAction.WALK, config(PlayerAction.WALK, 'walk.png', 12, 12, true, 1, { displayScale: 1.091 })],
+    // walk.png draws its character a little smaller than idle.png does, and is
+    // scaled down a little further than that correction alone, so the walk cycle
+    // reads as lower and lighter than standing still. This is one of two sheets
+    // deliberately off the common size; see verify-attack.mjs.
+    [PlayerAction.WALK, config(PlayerAction.WALK, 'walk.png', 12, 12, true, 1, { displayScale: 1.05 })],
     [PlayerAction.JUMP, config(PlayerAction.JUMP, 'jump.png', 10, 12, false, 1, { displayScale: 0.918 })],
     // 4x4 grid of 256px cells. The blade is furthest out on frames 8 and 9, and
     // stays out through 11, so that is the window in which the hit is live.
@@ -122,7 +123,7 @@ export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
     // Scaled a little past the size every other sheet renders at, so the heavy
     // swing reads as more weight than a light one; see verify-attack.mjs.
     [PlayerAction.HEAVY_ATTACK, config(PlayerAction.HEAVY_ATTACK, 'heavy_attack.png', 25, 20, false, 4, {
-      columns: 5, cellSize: 256, displayScale: 1.68, hitFrames: [14, 18],
+      columns: 5, cellSize: 256, displayScale: 1.78, hitFrames: [14, 18],
     })],
     [PlayerAction.BLOCK, config(PlayerAction.BLOCK, 'idle.png', 6, 12, true, 2)],
     [PlayerAction.DASH, config(PlayerAction.DASH, 'idle.png', 6, 15, false, 5)],
