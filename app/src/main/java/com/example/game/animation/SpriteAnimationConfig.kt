@@ -109,15 +109,17 @@ object DefaultAnimationConfigs {
             displayScale = 1.78f,
             hitFrames = listOf(14, 18)
         ),
-        // block.png is 8 frames of the 128px strip. It draws the character slightly
-        // taller than idle.png, so it scales down to match, and every frame plants
-        // its feet on the same row.
+        // block.png is 8 frames of the 128px strip. It plays once and holds the
+        // last frame, so the guard settles into a stance instead of cycling; a
+        // looping guard visibly pulses for as long as it is held. It draws the
+        // character slightly taller than idle.png, so it scales down to match, and
+        // every frame plants its feet on the same row.
         PlayerAction.BLOCK to AnimationConfig(
             action = PlayerAction.BLOCK,
             sourceFileName = "block.png",
             frameCount = 8,
             fps = 12,
-            loop = true,
+            loop = false,
             priority = 2,
             canBeCancelledByMovement = true,
             displayScale = 1.031f

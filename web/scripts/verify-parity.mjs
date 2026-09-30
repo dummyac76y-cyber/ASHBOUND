@@ -61,8 +61,8 @@ const ktFoot = parseFootRows(KT_METRICS)
 function parseWeb() {
   const out = {}
   // config(action, file, frameCount, fps, loop, priority, opts)
-  const entries = [...WEB_CONFIG.matchAll(/\[(PlayerAction\.\w+),\s*config\(PlayerAction\.\w+,\s*'([^']+)',\s*(\d+),\s*(\d+),([\s\S]*?)\)\]/g)]
-  for (const [, action, file, frameCount, fps, rest] of entries) {
+  const entries = [...WEB_CONFIG.matchAll(/\[(PlayerAction\.\w+),\s*config\(PlayerAction\.\w+,\s*'([^']+)',\s*(\d+),\s*(\d+),\s*(true|false),([\s\S]*?)\)\]/g)]
+  for (const [, action, file, frameCount, fps, loop, rest] of entries) {
     const opt = (name) => {
       const m = new RegExp(`${name}\\s*:\\s*([^,}\\s]+)`).exec(rest)
       return m ? m[1].trim() : ''
@@ -72,6 +72,7 @@ function parseWeb() {
       file,
       frameCount: Number(frameCount) || null,
       fps: Number(fps),
+      loop: loop === 'true',
       columns: Number(opt('columns')) || null,
       cellSize: Number(opt('cellSize')) || null,
       displayScale: Number(opt('displayScale')) || 1,
@@ -97,6 +98,7 @@ function parseKotlin() {
       file,
       frameCount: Number(arg('frameCount')) || null,
       fps: Number(arg('fps')),
+      loop: arg('loop') === 'true',
       columns: Number(arg('columns')) || null,
       cellSize: Number(arg('cellSize')) || null,
       displayScale: Number(arg('displayScale')) || 1,
@@ -216,14 +218,14 @@ for (const s of SHEETS) {
       check(`${short}: configured in both engines`, false, 'no Kotlin entry')
       continue
     }
-    const fields = ['file', 'frameCount', 'fps', 'columns', 'cellSize', 'displayScale']
+    const fields = ['file', 'frameCount', 'fps', 'loop', 'columns', 'cellSize', 'displayScale']
     const diffs = fields.filter((f) => JSON.stringify(web[f]) !== JSON.stringify(kt[f]))
     check(
-      `${short}: same file/frameCount/fps/columns/cellSize/displayScale`,
+      `${short}: same file/frameCount/fps/loop/columns/cellSize/displayScale`,
       diffs.length === 0,
       diffs.length
         ? diffs.map((f) => `${f} web=${web[f]} kt=${kt[f]}`).join('; ')
-        : `${web.frameCount} frames @${web.fps}fps, scale ${web.displayScale}`,
+        : `${web.frameCount} frames @${web.fps}fps, ${web.loop ? 'looping' : 'plays once'}, scale ${web.displayScale}`,
     )
     const wf = web.footRows
     const kf = kt.footRows

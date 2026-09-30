@@ -263,6 +263,32 @@ for (const s of bySheet.values()) {
   )
 }
 
+console.log('\nNON-LOOPING ANIMATIONS: play once and hold the final frame')
+// A guard that loops pulses for as long as it is held, so block is configured not
+// to loop. That only holds if two things are true, and neither is visible in the
+// config: playAction must refuse to re-enter the action while it is already
+// active, and the finished animation must clamp to its last frame rather than
+// wrapping. Both are checked here because this drives the real animation system.
+{
+  const block = await page.evaluate(() => {
+    const anims = window.__game.animations
+    anims.playAction('BLOCK')
+    const started = anims.currentAction
+    const reentry = anims.playAction('BLOCK')
+    anims.update(2)
+    return { started, reentry, frame: anims.currentFrameIndex, finished: anims.isFinished }
+  })
+  check('block animation starts', block.started === 'BLOCK', `action ${block.started}`)
+  check('holding block does not restart the animation', block.reentry === false, `re-entry returned ${block.reentry}`)
+  check(
+    'a finished guard holds its last frame instead of wrapping',
+    block.frame === 7 && block.finished === true,
+    `frame ${block.frame} of 8, finished ${block.finished}`,
+  )
+  // Put it back to idle so later checks measure from a known state.
+  await page.evaluate(() => window.__game.animations.playAction('IDLE'))
+}
+
 console.log('\nGRID PACKED SHEETS: each grid renders frame by frame')
 const grids = allSheets.filter((s) => {
   // `columns` is frames-per-row, which is legitimately >1 for a plain strip too,

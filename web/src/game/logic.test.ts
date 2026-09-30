@@ -756,6 +756,20 @@ console.log('JUMP ANIMATION: uses the jump sheet and tracks the arc')
     new Set(cfg.footRows).size === 1,
     `foot rows ${[...new Set(cfg.footRows)].join(', ')} across ${cfg.footRows.length} frames`,
   )
+
+console.log('BLOCK ANIMATION: plays once and holds the stance')
+{
+  const blk = createDefaultConfigs().get(PlayerAction.BLOCK)!
+  check('block plays the block sheet, not a stand-in', blk.sourceFileName === 'block.png', blk.sourceFileName)
+  check('block frame count matches the 8-frame sheet', blk.frameCount === 8, `got ${blk.frameCount}`)
+  check('block does not loop, so a held guard settles instead of pulsing', blk.loop === false, `loop ${blk.loop}`)
+  check('block has measured foot rows for every frame', blk.footRows.length === 8, `got ${blk.footRows.length}`)
+  check(
+    'the block sheet holds one foot row, so the stance stays planted',
+    new Set(blk.footRows).size === 1,
+    `foot rows ${[...new Set(blk.footRows)].join(', ')}`,
+  )
+}
 }
 
 console.log('LANDING: repeated jumps never accumulate error')
