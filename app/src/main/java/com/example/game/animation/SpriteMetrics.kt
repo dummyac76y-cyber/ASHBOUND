@@ -25,15 +25,14 @@ object SpriteMetrics {
      * ranges over 110..112 because the cloak sways, so a single global offset would
      * leave those frames up to 0.78 logical px off the floor.
      *
-     * Jump spans 113..119 across its 10 frames. Those rows are the feet *within the
-     * cell*, and most of the jump arc is airborne, so this is the same measure taken
-     * per frame: it keeps the launch and landing frames seated on the floor plane
-     * while the rise in between is genuine vertical motion rather than drift.
+     * Jump is a constant 115 across all 8 frames: that sheet draws the character
+     * compressing as it takes off rather than rising inside the cell, so the feet
+     * never move relative to the cell and the vertical travel is the world's arc.
      */
     private val FOOT_ROWS_BY_SHEET: Map<String, List<Int>> = mapOf(
         "idle.png" to listOf(111, 111, 111, 111, 111, 111),
         "walk.png" to listOf(111, 111, 110, 110, 110, 111, 110, 111, 112, 112, 112, 112),
-        "jump.png" to listOf(115, 113, 115, 119, 119, 119, 119, 119, 119, 119),
+        "jump.png" to listOf(115, 115, 115, 115, 115, 115, 115, 115),
         // The attack sheet is a 4x4 grid of 256px cells and every frame plants its
         // feet on the same row, so the constant 198 keeps the whole swing seated on
         // the floor. These are rows within a 256 cell, not a 128 one.

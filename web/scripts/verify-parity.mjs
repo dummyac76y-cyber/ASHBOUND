@@ -9,22 +9,133 @@
  * means the two engines would draw different cells from the same artwork, which
  * is exactly the failure this change is meant to avoid.
  */
-const CASES = [
-  { name: 'idle.png', w: 1536, h: 128, frameCount: 12, columns: null, cellSize: null },
-  { name: 'walk.png', w: 1536, h: 128, frameCount: 12, columns: null, cellSize: null },
-  { name: 'jump.png', w: 1280, h: 128, frameCount: 10, columns: null, cellSize: null },
-  { name: 'attack.png', w: 1024, h: 1024, frameCount: 16, columns: 4, cellSize: 256 },
-  { name: 'heavy_attack.png', w: 1280, h: 1280, frameCount: 25, columns: 5, cellSize: 256 },
-]
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 
-// The displayScale and hitFrames values as configured in both engines. These are
-// duplicated here deliberately: if one engine's config drifts, the checks below
-// still pin the expected behaviour rather than re-deriving it from whatever the
-// code currently says.
-const ATTACK_SCALE = 1.461
-const HEAVY_SCALE = 1.78
-const WALK_SCALE = 1.05
-const JUMP_SCALE = 0.918
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
+const WEB_CONFIG = readFileSync(join(ROOT, 'web/src/game/AnimationConfig.ts'), 'utf8')
+const KT_CONFIG = readFileSync(
+  join(ROOT, 'app/src/main/java/com/example/game/animation/SpriteAnimationConfig.kt'),
+  'utf8',
+)
+const WEB_METRICS = readFileSync(join(ROOT, 'web/src/game/spriteMetrics.ts'), 'utf8')
+const KT_METRICS = readFileSync(
+  join(ROOT, 'app/src/main/java/com/example/game/animation/SpriteMetrics.kt'),
+  'utf8',
+)
+
+/**
+ * Dimensions straight out of a PNG's IHDR chunk, so the geometry below is checked
+ * against the artwork that actually ships rather than a transcribed width.
+ */
+function pngSize(path) {
+  const b = readFileSync(path)
+  if (b.readUInt32BE(0) !== 0x89504e47) throw new Error(`not a png: ${path}`)
+  return { w: b.readUInt32BE(16), h: b.readUInt32BE(20) }
+}
+
+/**
+ * Every foot-row table in a metrics file, in either engine's syntax:
+ *   'x.png': [a, b, c]          'x.png' to listOf(a, b, c)
+ *   'x.png': [v, v, v]          'x.png' to List(n) { v }
+ * The generated Kotlin form is expanded so both engines are compared as arrays.
+ */
+function parseFootRows(src) {
+  const out = {}
+  for (const m of src.matchAll(/["']([\w.]+\.png)["']\s*(?::|to)\s*(?:List\((\d+)\)\s*\{\s*(\d+)\s*\}|listOf\(([\s\S]*?)\)|\[([\s\S]*?)\])/g)) {
+    const list = m[4] ?? m[5] ?? ''
+    // Empty tokens are dropped before the number conversion: a trailing comma
+    // leaves one, and Number('') is 0, which would slip through as a real row.
+    const values = list.split(',').map((s) => s.trim()).filter((s) => s !== '').map(Number)
+    if (m[2] !== undefined) out[m[1]] = Array(Number(m[2])).fill(Number(m[3]))
+    else out[m[1]] = values.filter((n) => Number.isFinite(n))
+  }
+  return out
+}
+
+const webFoot = parseFootRows(WEB_METRICS)
+const ktFoot = parseFootRows(KT_METRICS)
+
+/** The per-action config table, read out of each engine's own source. */
+function parseWeb() {
+  const out = {}
+  // config(action, file, frameCount, fps, loop, priority, opts)
+  const entries = [...WEB_CONFIG.matchAll(/\[(PlayerAction\.\w+),\s*config\(PlayerAction\.\w+,\s*'([^']+)',\s*(\d+),\s*(\d+),([\s\S]*?)\)\]/g)]
+  for (const [, action, file, frameCount, fps, rest] of entries) {
+    const opt = (name) => {
+      const m = new RegExp(`${name}\\s*:\\s*([^,}\\s]+)`).exec(rest)
+      return m ? m[1].trim() : ''
+    }
+    const hit = /hitFrames\s*:\s*\[\s*(\d+)\s*,\s*(\d+)\s*\]/.exec(rest)
+    out[action] = {
+      file,
+      frameCount: Number(frameCount) || null,
+      fps: Number(fps),
+      columns: Number(opt('columns')) || null,
+      cellSize: Number(opt('cellSize')) || null,
+      displayScale: Number(opt('displayScale')) || 1,
+      hitFrames: hit ? [Number(hit[1]), Number(hit[2])] : null,
+      footRows: webFoot[file] ?? null,
+    }
+  }
+  return out
+}
+
+function parseKotlin() {
+  const out = {}
+  const entries = [...KT_CONFIG.matchAll(/PlayerAction\.(\w+)\s+to\s+AnimationConfig\(([\s\S]*?)\n\s*\)/g)]
+  for (const [, action, body] of entries) {
+    const arg = (name) => {
+      const m = new RegExp(`${name}\\s*=\\s*("[^"]*"|[^,\\n]+)`).exec(body)
+      // Kotlin float literals carry an `f` suffix that Number() will not take.
+      return m ? m[1].trim().replace(/f$/, '').replace(/^"|"$/g, '') : ''
+    }
+    const file = arg('sourceFileName')
+    const hit = /hitFrames\s*=\s*(\d+)\s*to\s*(\d+)/.exec(body)
+    out[`PlayerAction.${action}`] = {
+      file,
+      frameCount: Number(arg('frameCount')) || null,
+      fps: Number(arg('fps')),
+      columns: Number(arg('columns')) || null,
+      cellSize: Number(arg('cellSize')) || null,
+      displayScale: Number(arg('displayScale')) || 1,
+      hitFrames: hit ? [Number(hit[1]), Number(hit[2])] : null,
+      footRows: ktFoot[file] ?? null,
+    }
+  }
+  return out
+}
+
+const WEB = parseWeb()
+const KT = parseKotlin()
+
+// One entry per distinct sheet. Several actions share idle.png, and those actions
+// must all carry the same geometry and scale, so both engines are compared per
+// action but the artwork is only read once per file.
+const SHEETS = []
+for (const [action, w] of Object.entries(WEB)) {
+  let entry = SHEETS.find((s) => s.name === w.file)
+  if (!entry) {
+    entry = {
+      name: w.file,
+      android: pngSize(join(ROOT, 'app/src/main/assets/sprites', w.file)),
+      public: pngSize(join(ROOT, 'web/public/sprites', w.file)),
+      web: w,
+      actions: [],
+    }
+    SHEETS.push(entry)
+  }
+  entry.actions.push({ action, web: w, kt: KT[action] ?? null })
+}
+
+// Read straight from the engine configs, so this fails if either engine drifts
+// rather than pinning a copy of the values that could silently rot.
+const scaleOf = (action) => WEB[action].displayScale
+const ATTACK_SCALE = scaleOf('PlayerAction.ATTACK')
+const HEAVY_SCALE = scaleOf('PlayerAction.HEAVY_ATTACK')
+const WALK_SCALE = scaleOf('PlayerAction.WALK')
+const JUMP_SCALE = scaleOf('PlayerAction.JUMP')
 
 /** web/src/game/SpriteSheet.ts */
 function webGeometry(c) {
@@ -74,12 +185,13 @@ function check(name, ok, detail = '') {
   if (!ok) failures++
 }
 
-console.log('SHEET GEOMETRY: the web and Android rules agree')
-for (const c of CASES) {
+console.log('SHEET GEOMETRY: the web and Android rules agree, over the real artwork')
+for (const s of SHEETS) {
+  const c = { name: s.name, w: s.android.w, h: s.android.h, frameCount: s.web.frameCount, columns: s.web.columns, cellSize: s.web.cellSize }
   const w = webGeometry(c)
   const a = androidGeometry(c)
   check(
-    `${c.name}: same columns/cell/frameCount/frameWidth`,
+    `${s.name}: same columns/cell/frameCount/frameWidth`,
     w.columns === a.columns && w.cellHeight === a.cellHeight && w.frameCount === a.frameCount && w.frameWidth === a.frameWidth,
     `web ${w.columns}x${w.cellHeight},${w.frameCount}@${w.frameWidth} vs android ${a.columns}x${a.cellHeight},${a.frameCount}@${a.frameWidth}`,
   )
@@ -87,11 +199,53 @@ for (const c of CASES) {
   for (let i = 0; i < w.frameCount + 3; i++) {
     if (JSON.stringify(w.rect(i)) !== JSON.stringify(a.rect(i))) mismatch++
   }
-  check(`${c.name}: all ${w.frameCount + 3} probed frame rects identical`, mismatch === 0, `${mismatch} mismatches`)
+  check(`${s.name}: all ${w.frameCount + 3} probed frame rects identical`, mismatch === 0, `${mismatch} mismatches`)
 }
 
-console.log('GRID SHEETS: each grid tiles its sheet exactly')
-for (const c of CASES.filter((c) => c.cellSize)) {
+console.log('\nENGINE CONFIG: the two engines configure every action identically')
+for (const s of SHEETS) {
+  const tag = s.actions.length > 1 ? `${s.name} (${s.actions.length} actions)` : s.name
+  check(
+    `${tag}: web and Android ship pixel-identical artwork`,
+    s.android.w === s.public.w && s.android.h === s.public.h,
+    `android ${s.android.w}x${s.android.h} vs web ${s.public.w}x${s.public.h}`,
+  )
+  for (const { action, web, kt } of s.actions) {
+    const short = action.replace('PlayerAction.', '')
+    if (!kt) {
+      check(`${short}: configured in both engines`, false, 'no Kotlin entry')
+      continue
+    }
+    const fields = ['file', 'frameCount', 'fps', 'columns', 'cellSize', 'displayScale']
+    const diffs = fields.filter((f) => JSON.stringify(web[f]) !== JSON.stringify(kt[f]))
+    check(
+      `${short}: same file/frameCount/fps/columns/cellSize/displayScale`,
+      diffs.length === 0,
+      diffs.length
+        ? diffs.map((f) => `${f} web=${web[f]} kt=${kt[f]}`).join('; ')
+        : `${web.frameCount} frames @${web.fps}fps, scale ${web.displayScale}`,
+    )
+    const wf = web.footRows
+    const kf = kt.footRows
+    check(
+      `${short}: same foot rows`,
+      !!wf && !!kf && wf.length === kf.length && wf.every((v, i) => v === kf[i]),
+      wf && kf ? `web ${wf.length} rows, android ${kf.length} rows` : `web ${wf ? wf.length : 'none'}, android ${kf ? kf.length : 'none'}`,
+    )
+    // Foot rows must cover every frame the action plays, or later frames fall
+    // back to the rest pose and the character slides on the floor. More rows than
+    // frames is harmless: HURT plays 4 frames of a 6-frame sheet, and the unused
+    // tail is simply never indexed.
+    check(
+      `${short}: foot rows cover every frame it plays`,
+      !!wf && !!kf && wf.length >= web.frameCount && kf.length >= web.frameCount,
+      `rows ${wf ? wf.length : 'none'}/${kf ? kf.length : 'none'} vs frames ${web.frameCount}`,
+    )
+  }
+}
+
+console.log('\nGRID SHEETS: each grid tiles its sheet exactly')
+for (const c of SHEETS.filter((s) => s.web.cellSize).map((s) => ({ name: s.name, w: s.android.w, h: s.android.h, columns: s.web.columns, cellSize: s.web.cellSize, frameCount: s.web.frameCount }))) {
   const g = webGeometry(c)
   let oob = 0
   for (let i = 0; i < g.frameCount; i++) {
@@ -112,10 +266,35 @@ console.log('FOOT OFFSET: the 256px cell seats the sprite where the 128px one di
 // sheet's row 198 within a 256px cell must resolve the same in each.
 const footOffset = (row, displaySize, cellHeight) => ((cellHeight - 1 - row) / cellHeight) * displaySize
 const BASE = 100
+// Comparing the web formula against itself is trivially zero, so this compares the
+// two formulas as actually written in each engine. The `- 1` is the off-by-one
+// that decides which edge of the cell is opaque, and a flip in either sign or
+// operand order would seat the character a pixel off the floor on one platform.
+const KOTLIN_METRICS_SRC = readFileSync(
+  join(ROOT, 'app/src/main/java/com/example/game/animation/SpriteMetrics.kt'),
+  'utf8',
+)
+const WEB_FORMULA_SRC = readFileSync(join(ROOT, 'web/src/game/spriteMetrics.ts'), 'utf8')
+function formulaOf(src, fn) {
+  const re = new RegExp(
+    `${fn}\\s*\\([^)]*\\)(?:\\s*:\\s*[\\w<>?.]+)?\\s*(?:=\\s*([\\s\\S]{0,200}?)\\n\\s*\\}|\\{([\\s\\S]{0,200}?)\\n?\\s*\\})`,
+  )
+  const m = re.exec(src)
+  if (!m) return null
+  // Parens are dropped because both engines wrap the same subtraction; what
+  // matters is the token order, which is what catches a flipped `- 1` or sign.
+  return (m[1] ?? m[2] ?? '')
+    .replace(/return\s*/g, '')
+    .replace(/\s+/g, '')
+    .replace(/[()]/g, '')
+    .replace(/(\d)f(?![\w])/g, '$1')
+}
+const webFormula = formulaOf(WEB_FORMULA_SRC, 'footOffsetForRow')
+const ktFormula = formulaOf(KOTLIN_METRICS_SRC, 'footOffsetForRow')
 check(
-  'attack foot offset is identical in both engines',
-  Math.abs(footOffset(198, BASE * ATTACK_SCALE, 256) - footOffset(198, BASE * ATTACK_SCALE, 256)) < 1e-9,
-  `${footOffset(198, BASE * ATTACK_SCALE, 256).toFixed(4)}px below the draw-rect bottom`,
+  'the two engines derive the foot offset by the same formula',
+  !!webFormula && !!ktFormula && webFormula === ktFormula,
+  `web \`${webFormula}\` vs android \`${ktFormula}\``,
 )
 // The draw-rect bottom must sit below the feet plane, otherwise the character
 // would be clipped into the floor rather than seated on it.
@@ -148,8 +327,8 @@ check(
 // Scaling is what makes a 256px-cell sheet match a 128px one: unscaled, attack
 // would render at 55% of its cell against idle's 80%.
 check(
-  'a grid sheet carries enough scale to compensate for its larger cell',
-  ATTACK_SCALE > 1.2 && HEAVY_SCALE > ATTACK_SCALE && WALK_SCALE > 1 && JUMP_SCALE < 1,
+  'the sheets scale up to compensate for the art being drawn smaller',
+  ATTACK_SCALE > 1.2 && HEAVY_SCALE > 1.2 && WALK_SCALE > 1 && JUMP_SCALE > 1,
   `attack ${ATTACK_SCALE}, heavy ${HEAVY_SCALE}, walk ${WALK_SCALE}, jump ${JUMP_SCALE}`,
 )
 

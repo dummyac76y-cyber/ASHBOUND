@@ -241,6 +241,27 @@ if (reference) {
   )
 }
 
+console.log('\nSHEET CONTENT: every sheet renders distinct frames')
+// Guards against a sheet being pointed at the wrong file, or a frame count that
+// exceeds the art, either of which would show up as duplicated poses. A held
+// frame is legitimate, so this is a high bar rather than a strict one.
+for (const s of bySheet.values()) {
+  const sigs = []
+  for (let f = 0; f < s.frames; f++) {
+    const box = await page.evaluate(([a, fr]) => window.__game.measureCharacter(a, fr, true), [s.action, f])
+    if (box) sigs.push(`${box.minX.toFixed(0)},${box.minY.toFixed(0)},${box.maxX.toFixed(0)},${box.maxY.toFixed(0)}`)
+  }
+  const distinct = new Set(sigs).size
+  // Held frames are legitimate art -- idle holds 2 of its 6 to breathe, so the bar
+  // is a floor rather than "every frame differs". A wholly duplicated or
+  // mis-sliced sheet collapses to 1 silhouette and fails this easily.
+  check(
+    `${s.file.padEnd(18)} renders ${s.frames} distinct frames`,
+    sigs.length === s.frames && distinct >= Math.ceil(s.frames * 0.6),
+    `${sigs.length}/${s.frames} drew pixels, ${distinct} distinct silhouettes`,
+  )
+}
+
 console.log('\nGRID PACKED SHEETS: each grid renders frame by frame')
 const grids = allSheets.filter((s) => {
   // `columns` is frames-per-row, which is legitimately >1 for a plain strip too,

@@ -116,7 +116,11 @@ export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
     // reads as lower and lighter than standing still. This is one of two sheets
     // deliberately off the common size; see verify-attack.mjs.
     [PlayerAction.WALK, config(PlayerAction.WALK, 'walk.png', 12, 12, true, 1, { displayScale: 1.05 })],
-    [PlayerAction.JUMP, config(PlayerAction.JUMP, 'jump.png', 10, 12, false, 1, { displayScale: 0.918 })],
+    // jump.png is 8 frames. The character compresses as it takes off rather than
+    // rising inside the cell, so the whole sheet shares one foot row and the
+    // vertical travel comes from the world's arc. The scale is corrected because
+    // this art draws the character shorter than idle.png does.
+    [PlayerAction.JUMP, config(PlayerAction.JUMP, 'jump.png', 8, 10, false, 1, { displayScale: 1.069 })],
     // 4x4 grid of 256px cells. The blade is furthest out on frames 8 and 9, and
     // stays out through 11, so that is the window in which the hit is live.
     [PlayerAction.ATTACK, config(PlayerAction.ATTACK, 'attack.png', 16, 24, false, 3, {

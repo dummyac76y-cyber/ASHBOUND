@@ -384,14 +384,15 @@ const frames = [
   ['WALK', 5, 'walk (foot row 111)'],
   ['WALK', 8, 'walk (foot row 112)'],
   ['WALK', 11, 'walk (foot row 112)'],
-  // Every frame of the 10-frame jump sheet, so a mis-registered row in any one
-  // of them shows up as a frame sitting off the floor.
+  // Every frame of the 8-frame jump sheet, so a mis-registered row in any one
+  // would be caught. All 8 share foot row 115: the art compresses in place and
+  // the world's arc supplies the rise.
   ['JUMP', 0, 'jump (foot row 115)'],
-  ['JUMP', 1, 'jump (foot row 113)'],
+  ['JUMP', 1, 'jump (foot row 115)'],
   ['JUMP', 2, 'jump (foot row 115)'],
-  ['JUMP', 4, 'jump (foot row 119)'],
-  ['JUMP', 7, 'jump (foot row 119)'],
-  ['JUMP', 9, 'jump (foot row 119)'],
+  ['JUMP', 4, 'jump (foot row 115)'],
+  ['JUMP', 6, 'jump (foot row 115)'],
+  ['JUMP', 7, 'jump (foot row 115)'],
 ]
 
 console.log('visible feet vs. rendered floor')

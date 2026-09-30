@@ -573,7 +573,7 @@ console.log('CHARACTER SIZE: every sheet declares the scale that normalises it')
   const idleScale = scaleFor(PlayerAction.IDLE)
   check('idle is normalised, not left at an arbitrary size', idleScale > 0.9 && idleScale < 1.2, `idle ${idleScale}`)
   check('walk, drawn smaller than idle, scales up', scaleFor(PlayerAction.WALK) > 1, `${scaleFor(PlayerAction.WALK)}`)
-  check('jump, drawn larger than idle, scales down', scaleFor(PlayerAction.JUMP) < 1, `${scaleFor(PlayerAction.JUMP)}`)
+  check('jump, drawn smaller than idle, scales up', scaleFor(PlayerAction.JUMP) > 1, `${scaleFor(PlayerAction.JUMP)}`)
 
   // Every action standing in on idle.png renders that sheet, so it must render at
   // idle's scale. Getting this wrong is invisible in the config and only shows up
@@ -733,8 +733,8 @@ console.log('JUMP ANIMATION: uses the jump sheet and tracks the arc')
 {
   const cfg = createDefaultConfigs().get(PlayerAction.JUMP)!
   check('jump plays the jump sheet, not a stand-in', cfg.sourceFileName === 'jump.png', cfg.sourceFileName)
-  check('jump frame count matches the 10-frame sheet', cfg.frameCount === 10, `got ${cfg.frameCount}`)
-  check('jump has measured foot rows for every frame', cfg.footRows.length === 10, `got ${cfg.footRows.length}`)
+  check('jump frame count matches the 8-frame sheet', cfg.frameCount === 8, `got ${cfg.frameCount}`)
+  check('jump has measured foot rows for every frame', cfg.footRows.length === 8, `got ${cfg.footRows.length}`)
 
   // The animation must finish when the character does. Airtime is
   // 2*|impulse|/gravity; the sheet is frameCount/fps seconds long.
@@ -747,14 +747,14 @@ console.log('JUMP ANIMATION: uses the jump sheet and tracks the arc')
   )
   check('jump animation does not loop', cfg.loop === false, `loop ${cfg.loop}`)
 
-  // The rise in the art must be real, not a mis-registered sheet: the middle
-  // frames sit lower in the cell (larger row) than the launch frames.
-  const first = cfg.footRows[0]!
-  const apex = cfg.footRows[cfg.footRows.length - 1]!
+  // This sheet draws the character compressing as it takes off rather than rising
+  // inside the cell, so the feet hold one row for the whole animation and the
+  // vertical travel comes from the world's arc. A varying foot row here would mean
+  // the sheet was re-registered against art that does not move in-cell.
   check(
-    'the jump sheet actually shows a rise',
-    apex > first,
-    `launch foot row ${first}, later foot row ${apex}`,
+    'the jump sheet keeps one foot row, so the world supplies the rise',
+    new Set(cfg.footRows).size === 1,
+    `foot rows ${[...new Set(cfg.footRows)].join(', ')} across ${cfg.footRows.length} frames`,
   )
 }
 

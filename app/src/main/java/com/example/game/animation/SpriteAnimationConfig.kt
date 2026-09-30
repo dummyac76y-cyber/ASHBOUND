@@ -109,52 +109,60 @@ object DefaultAnimationConfigs {
             displayScale = 1.78f,
             hitFrames = listOf(14, 18)
         ),
+        // These four have no art of their own yet, so they stand in on idle.png.
+        // They must carry idle's scale or they would render at a different size.
         PlayerAction.BLOCK to AnimationConfig(
             action = PlayerAction.BLOCK,
-            sourceFileName = "block.png",
+            sourceFileName = "idle.png",
             frameCount = 6,
             fps = 12,
             loop = true,
             priority = 2,
-            canBeCancelledByMovement = true
+            canBeCancelledByMovement = true,
+            displayScale = 1.063f
         ),
         PlayerAction.DASH to AnimationConfig(
             action = PlayerAction.DASH,
-            sourceFileName = "dash.png",
+            sourceFileName = "idle.png",
             frameCount = 6,
             fps = 15,
             loop = false,
             priority = 5,
-            canBeCancelledByMovement = false
+            canBeCancelledByMovement = false,
+            displayScale = 1.063f
         ),
         PlayerAction.JUMP to AnimationConfig(
             action = PlayerAction.JUMP,
             sourceFileName = "jump.png",
-            frameCount = 10,
-            fps = 12,
+            frameCount = 8,
+            fps = 10,
             loop = false,
             priority = 1,
             canBeCancelledByMovement = true,
-            // jump.png draws its character larger than idle.png does.
-            displayScale = 0.918f
+            // The character compresses as it takes off rather than rising inside
+            // the cell, so the whole sheet shares one foot row. This art draws the
+            // character shorter than idle.png, so it scales up to match.
+            displayScale = 1.069f
         ),
         PlayerAction.HURT to AnimationConfig(
             action = PlayerAction.HURT,
-            sourceFileName = "hurt.png",
+            sourceFileName = "idle.png",
             frameCount = 4,
             fps = 12,
             loop = false,
             priority = 6,
-            canBeCancelledByMovement = false
+            canBeCancelledByMovement = false,
+            displayScale = 1.063f
         ),
         PlayerAction.DEATH to AnimationConfig(
             action = PlayerAction.DEATH,
-            sourceFileName = "death.png",
-            frameCount = 8,
+            sourceFileName = "idle.png",
+            frameCount = 6,
             fps = 8,
             loop = false,
             priority = 10,
-            canBeCancelledByMovement = false
+            canBeCancelledByMovement = false,
+            displayScale = 1.063f
         )
     )
 }

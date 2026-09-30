@@ -18,19 +18,19 @@ export const DEFAULT_FOOT_ROW = 111
 
 /**
  * Bottom-most opaque source row per frame, measured per sheet by scanning the alpha
- * channel. Idle is a constant 111 across all 12 frames; the walk cycle ranges over
+ * channel. Idle is a constant 111 across all 6 frames; the walk cycle ranges over
  * 110..112 because the cloak sways, so a single global offset would leave those
  * frames up to 0.78 logical px off the floor.
  *
- * Jump spans 113..119 across its 10 frames. Those rows are the feet *within the
- * cell*, and most of the jump arc is airborne, so this is the same measure taken
- * per frame: it keeps the launch and landing frames seated on the floor plane
- * while the rise in between is genuine vertical motion rather than drift.
+ * Jump is a constant 115 across all 8 frames. That sheet draws the character
+ * compressing as it takes off rather than rising inside the cell, so the feet never
+ * move relative to the cell and the whole animation stays seated on the floor plane;
+ * the vertical travel is the world's arc, applied on top of this offset.
  */
 export const FOOT_ROWS_BY_SHEET: Readonly<Record<string, readonly number[]>> = {
   'idle.png': [111, 111, 111, 111, 111, 111],
   'walk.png': [111, 111, 110, 110, 110, 111, 110, 111, 112, 112, 112, 112],
-  'jump.png': [115, 113, 115, 119, 119, 119, 119, 119, 119, 119],
+  'jump.png': [115, 115, 115, 115, 115, 115, 115, 115],
   // The attack sheet is a 4x4 grid of 256px cells and every frame plants its feet
   // on the same row, so the constant 198 keeps the whole swing seated on the
   // floor. These are rows within a 256 cell, not a 128 one.
