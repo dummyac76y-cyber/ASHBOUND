@@ -588,29 +588,62 @@ check('non-attack sheets deal no damage', true, 'all other configs have hitFrame
 // ---------------------------------------------------------------------------
 // The NPC sprite set.
 //
-// Both engines must agree on which NPC files exist and which are still awaited,
-// or one platform would look for art the other has already been given.
+// Both engines must agree on which sheets exist, on the ground line every frame is
+// anchored to, and on which frames each motion plays. If they disagreed, one
+// platform would bob, or would start a frame the other has no artwork for.
+//
+// The two languages spell the same records differently, so each sheet is read by
+// locating its file name and reading the rest of that record out of the source
+// rather than by matching a whole-declaration pattern. A pattern that only ever
+// matches one dialect would report agreement by missing the entries it skipped.
 // ---------------------------------------------------------------------------
 
 console.log('\nNPC asset set is declared identically in both engines')
 {
-  // TypeScript and Kotlin spell the same fields differently, so each gets its own
-  // pattern rather than a loose search that would match unrelated text.
-  const collect = (src, re) => {
+  const SHEET_FILE = /['"](npc[_a-z.]*\.png)['"]/g
+
+  function parseSheets(src, kt) {
     const out = []
+    SHEET_FILE.lastIndex = 0
     let m
-    while ((m = re.exec(src)) !== null) out.push(m)
+    while ((m = SHEET_FILE.exec(src)) !== null) {
+      const file = m[1]
+      const before = src.slice(Math.max(0, m.index - 300), m.index)
+      const owner = [...before.matchAll(new RegExp(kt ? '\\bval\\s+(\\w+)' : '\\bconst\\s+(\\w+)', 'g'))].pop()
+      // The record runs from the file name to the end of its literal or
+      // constructor call; the role strings in between contain no closers.
+      const tail = src.slice(m.index, m.index + 1200)
+      const close = tail.indexOf(kt ? ')' : '}')
+      const win = close === -1 ? tail : tail.slice(0, close)
+      const pick = (re) => (re.exec(win) || [])[1]
+      const layout = pick(kt ? /layout\s*=\s*NpcSheetLayout\.(STRIP|GRID)/ : /layout:\s*'(strip|grid)'/)
+      const frames = pick(/(?:frames)\s*[:=]\s*(\d+)/)
+      const flag = pick(kt ? /present\s*=\s*(true|false)/ : /status:\s*'(present|pending)'/)
+      out.push({
+        file,
+        const: owner?.[1],
+        layout: layout?.toLowerCase(),
+        frames: frames === undefined ? NaN : Number(frames),
+        present: kt ? flag === 'true' : flag === 'present',
+      })
+    }
     return out
   }
-  const web = collect(WEB_NPC_SRC, /file:\s*'([^']+)'[\s\S]*?layout:\s*'(strip|grid)'[\s\S]*?frames:\s*(\d+)[\s\S]*?status:\s*'(present|pending)'/g)
-    .map((m) => ({ file: m[1], layout: m[2], frames: Number(m[3]), present: m[4] === 'present' }))
-  const kt = collect(KT_NPC_SRC, /file\s*=\s*"([^"]+)"[\s\S]*?layout\s*=\s*NpcSheetLayout\.(STRIP|GRID)[\s\S]*?frames\s*=\s*(\d+)[\s\S]*?present\s*=\s*(true|false)/g)
-    .map((m) => ({ file: m[1], layout: m[2].toLowerCase(), frames: Number(m[3]), present: m[4] === 'true' }))
+
+  const web = parseSheets(WEB_NPC_SRC, false)
+  const kt = parseSheets(KT_NPC_SRC, true)
+  check(
+    'every NPC sheet in both engines parses, with no record the scan skipped',
+    web.length > 0 && web.length === kt.length && web.every((x) => x.layout && x.frames > 0),
+    `web ${web.length} vs android ${kt.length}`,
+  )
   check('both engines declare the same number of NPC sheets', web.length === kt.length && web.length > 0, `web ${web.length} vs android ${kt.length}`)
   check('both engines use the same 128px cell size',
     /NPC_CELL_SIZE\s*=\s*128/.test(WEB_NPC_SRC) && /NPC_CELL_SIZE\s*=\s*128/.test(KT_NPC_SRC), '128')
+  check('both engines pin sprite filtering to nearest-neighbour, so neither engine blurs the pixel art',
+    /NPC_NEAREST_NEIGHBOR\s*=\s*true/.test(WEB_NPC_SRC) && /NPC_NEAREST_NEIGHBOR\s*=\s*true/.test(KT_NPC_SRC), 'no smoothing')
 
-  const byFile = new Map(kt.map((s) => [s.file, s]))
+  const byFile = new Map(kt.map((x) => [x.file, x]))
   for (const w of web) {
     const k = byFile.get(w.file)
     if (!k) {
@@ -623,30 +656,93 @@ console.log('\nNPC asset set is declared identically in both engines')
       `web ${w.layout}/${w.frames}/${w.present} vs android ${k.layout}/${k.frames}/${k.present}`,
     )
   }
-  check('exactly one NPC sheet is marked present in both engines',
-    web.filter((s) => s.present).length === 1 && kt.filter((s) => s.present).length === 1,
-    `web [${web.filter((s) => s.present).map((s) => s.file)}] vs android [${kt.filter((s) => s.present).map((s) => s.file)}]`)
+
+  // The ground line is the one number that must not drift between platforms, or
+  // the NPC would stand at a different height on each.
+  const webBaseline = /NPC_BASELINE_Y\s*=\s*(\d+)/.exec(WEB_NPC_SRC)
+  const ktBaseline = /NPC_BASELINE_Y\s*=\s*(\d+)/.exec(KT_NPC_SRC)
+  check('both engines anchor the NPC to the same foot baseline',
+    !!webBaseline && !!ktBaseline && webBaseline[1] === ktBaseline[1],
+    `web ${webBaseline?.[1] ?? 'unset'} vs android ${ktBaseline?.[1] ?? 'unset'}`)
+
+  // A clip may name a sheet by literal or by the constant that holds it; both
+  // have to resolve to the same file, or the engines would play from different art.
+  const resolve = (expr, sheets) => {
+    const t = expr.trim()
+    if (t === 'null') return null
+    const quoted = /^['"](.+)['"]$/.exec(t)
+    if (quoted) return quoted[1]
+    const sym = /^(\w+)\.file$/.exec(t)
+    if (sym) return sheets.find((x) => x.const === sym[1])?.file ?? `unresolved:${t}`
+    return `unresolved:${t}`
+  }
+  // A frame count may be a literal or the sheet's own `frames`; both resolve the
+  // same way, so a binding written either way compares equal.
+  const resolveCount = (expr, sheets) => {
+    const t = expr.trim()
+    if (/^\d+$/.test(t)) return Number(t)
+    const sym = /^(\w+)\.frames$/.exec(t)
+    if (sym) {
+      const hit = sheets.find((x) => x.const === sym[1])
+      return hit ? hit.frames : NaN
+    }
+    return NaN
+  }
+  const webClipRe = /name:\s*'(\w+)'[\s\S]*?sheet:\s*([^,\n]+),[\s\S]*?firstFrame:\s*(\d+)[\s\S]*?frameCount:\s*([^,\n]+),[\s\S]*?loops:\s*(true|false)/g
+  const ktClipRe = /NpcClip\(\s*name\s*=\s*"(\w+)",\s*sheet\s*=\s*([^,\n]+),\s*firstFrame\s*=\s*(\d+),\s*frameCount\s*=\s*([^,\n]+),\s*loops\s*=\s*(true|false)/g
+  const grab = (src, re, sheets) => {
+    const out = []
+    let m
+    re.lastIndex = 0
+    while ((m = re.exec(src)) !== null) {
+      out.push({ name: m[1], sheet: resolve(m[2], sheets), firstFrame: +m[3], frames: resolveCount(m[4], sheets), loops: m[5] === 'true' })
+    }
+    return out
+  }
+  const webClips = grab(WEB_NPC_SRC, webClipRe, web)
+  const ktClips = grab(KT_NPC_SRC, ktClipRe, kt)
+  check('every clip resolves to a real sheet or to an explicit empty binding, in both engines',
+    webClips.length > 0 && [...webClips, ...ktClips].every((c) => Number.isFinite(c.frames) && (c.sheet === null || !String(c.sheet).startsWith('unresolved:'))),
+    [...webClips, ...ktClips].map((c) => `${c.name}=${c.sheet}`).join(' '))
+  check('both engines bind the same motions', webClips.length === ktClips.length, `web [${webClips.map((c) => c.name)}] vs android [${ktClips.map((c) => c.name)}]`)
+
+  const ktByClip = new Map(ktClips.map((c) => [c.name, c]))
+  for (const w of webClips) {
+    const k = ktByClip.get(w.name)
+    if (!k) {
+      check(`${w.name}: bound in both engines`, false, 'missing from Kotlin')
+      continue
+    }
+    check(
+      `${w.name}: plays the same frames from the same sheet in both engines`,
+      k.sheet === w.sheet && k.firstFrame === w.firstFrame && k.frames === w.frames && k.loops === w.loops,
+      `web ${w.sheet}[${w.firstFrame}..${w.firstFrame + w.frames - 1}] vs android ${k.sheet}[${k.firstFrame}..${k.firstFrame + k.frames - 1}]`,
+    )
+  }
+
+  // The point of the independent bindings is that either can be re-pointed alone.
+  const names = webClips.map((c) => c.name)
+  check('idle and walk are bound independently of one another, in both engines',
+    names.includes('idle') && names.includes('walk') && ktClips.some((c) => c.name === 'idle') && ktClips.some((c) => c.name === 'walk'),
+    `web [${names}] vs android [${ktClips.map((c) => c.name)}]`)
 
   // The artwork itself has to be shared, not merely declared.
   const manifest = JSON.parse(readFileSync(join(ROOT, 'web/src/generated/asset-manifest.json'), 'utf8'))
-  const present = web.filter((s) => s.present).map((s) => `./sprites/${s.file}`)
-  for (const entry of present) {
+  const present = web.filter((x) => x.present)
+  check('both engines agree on which sheets have artwork', present.length > 0 && present.length === kt.filter((x) => x.present).length,
+    `web ${present.map((x) => x.file)} vs android ${kt.filter((x) => x.present).map((x) => x.file)}`)
+  for (const sheet of present) {
+    const entry = `./sprites/${sheet.file}`
     check(`${entry}: the shared asset manifest knows about it`, entry in manifest, manifest[entry] ?? 'absent from manifest')
+    const androidSprite = join(ROOT, 'app/src/main/assets/sprites', sheet.file)
+    const webSprite = join(ROOT, 'web/public/sprites', sheet.file)
+    check(`${sheet.file}: exists in the Android asset tree`, existsSync(androidSprite), androidSprite)
+    check(`${sheet.file}: and is synced to the web tree byte for byte`,
+      existsSync(androidSprite) && existsSync(webSprite) &&
+        Buffer.compare(readFileSync(androidSprite), readFileSync(webSprite)) === 0,
+      existsSync(androidSprite) && existsSync(webSprite) ? 'identical' : 'missing a copy')
   }
-  const base = web.find((s) => s.present)
-  if (!base) {
-    check('a present NPC sheet was found in the declarations', false, 'the declarations could not be read')
-  }
-  const androidSprite = join(ROOT, 'app/src/main/assets/sprites', base?.file ?? '')
-  const webSprite = join(ROOT, 'web/public/sprites', base?.file ?? '')
-  check('the present sheet exists in the Android asset tree', existsSync(androidSprite), androidSprite)
-  check('and is synced to the web tree byte for byte',
-    existsSync(androidSprite) && existsSync(webSprite) &&
-      Buffer.compare(readFileSync(androidSprite), readFileSync(webSprite)) === 0,
-    existsSync(androidSprite) && existsSync(webSprite) ? 'identical' : 'missing a copy')
 }
-
-
 
 console.log(failures === 0 ? '\nAll parity checks passed.' : `\n${failures} check(s) FAILED.`)
 process.exit(failures === 0 ? 0 : 1)

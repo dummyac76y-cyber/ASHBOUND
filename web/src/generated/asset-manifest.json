@@ -8,6 +8,7 @@
   "./sprites/idle.png": "8ec19c09",
   "./sprites/jump.png": "3f8f3350",
   "./sprites/npc.png": "23fb29d8",
+  "./sprites/npc_idle_walk.png": "df416330",
   "./sprites/walk.png": "ddd33570",
   "./ui/btn_attack.png": "b5a90449",
   "./ui/btn_block.png": "6122ee5b",

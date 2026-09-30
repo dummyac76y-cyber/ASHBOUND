@@ -1,24 +1,43 @@
 /**
  * The NPC sprite set: what exists today, and the slots waiting to be filled.
  *
- * This is deliberately data only. The NPC is not animated, not loaded and not
- * placed in a scene yet -- this module records the asset contract so the artwork
- * can be dropped in later without anyone having to invent the naming, the cell
- * size or the layout by hand at that point.
+ * This is deliberately data only. The NPC is not yet placed in a scene, so this
+ * module records the asset contract -- names, cell size, filtering, the baseline
+ * the feet are anchored to, and which frames each motion plays -- rather than
+ * driving any rendering itself.
  *
- * Cell size is fixed at 128 because that is what the base reference already is:
- * `npc.png` is a single 128x128 cell, the same cell size the player's sheets use.
- * Every other sheet is built from that same cell, so an NPC can be drawn at the
- * player's scale without resampling.
+ * Cell size is fixed at 128 because that is what the artwork already is. The
+ * single reference sprite is a 128x128 cell and the 12-frame sheet is twelve of
+ * them side by side, matching the cell size the player's sheets use. An NPC can
+ * therefore be drawn at the player's scale without resampling.
  *
- * Frame counts below are defaults chosen to match the player's equivalent
- * sheets, not measurements. They describe the shape of the file to produce, and
- * a sheet that ends up with a different count only needs this table updated --
- * nothing else reads it yet.
+ * Nothing here is resampled, re-encoded or re-anchored. The sheets are stored
+ * exactly as supplied, and `NPC_BASELINE_Y` is a measurement of that artwork
+ * rather than a correction applied to it -- see `scripts/verify-npc-assets.mjs`,
+ * which re-derives it from the files and fails if the two ever disagree.
  */
 
 /** Every sprite in the set is cut into square cells of this size. */
 export const NPC_CELL_SIZE = 128
+
+/**
+ * The row the NPC's feet rest on, measured from the top of its cell.
+ *
+ * All twelve frames of the walk sheet already share it, so no frame needs shifting
+ * and none is shifted. It is recorded so every motion draws against one ground
+ * line: a clip assigned later draws its frames to this same row, which is what
+ * keeps the NPC from bobbing as its animation changes.
+ */
+export const NPC_BASELINE_Y = 104
+
+/**
+ * Sprite filtering, pinned rather than inherited from the renderer.
+ *
+ * Pixel art sampled with smoothing blurs its own edges, and the frames here are
+ * delivered with hard alpha, so anything that interpolates them would visibly
+ * soften the artwork.
+ */
+export const NPC_NEAREST_NEIGHBOR = true
 
 /** How a sheet's frames are arranged inside the image. */
 export type NpcSheetLayout =
@@ -39,45 +58,59 @@ export interface NpcSheetDefinition {
   /** What the sheet is for. */
   readonly role: string
   readonly layout: NpcSheetLayout
-  /** Frames the sheet is expected to hold. A default, not a measurement. */
+  /** Frames the sheet holds. For a sheet that exists yet, this is measured. */
   readonly frames: number
   /**
    * Whether the artwork is in the repository yet.
    *
-   * Exactly one sheet is `present` today: the base reference. The rest are
-   * declared so the slots are unambiguous, and are expected to be absent --
-   * a `pending` sheet that has quietly appeared would mean artwork landed without
-   * anyone deciding it was finished.
+   * A `pending` sheet is expected to be absent -- artwork that quietly appeared
+   * without anyone deciding it was finished would be worse than a gap.
    */
   readonly status: 'present' | 'pending'
 }
 
 /**
- * The base reference: the exact NPC sprite as supplied, unwrapped and unaltered.
+ * The single reference sprite as supplied, unwrapped and unaltered.
  *
- * Single frame, so it is neither a strip nor a grid; it exists to be looked at and
- * to cut the other sheets from.
+ * One frame, so it is neither a strip nor a grid. It shares its pose with frame 0
+ * of the walk sheet, so it is a still of that cycle rather than a separate motion.
  */
 export const NPC_BASE: NpcSheetDefinition = {
   file: 'npc.png',
-  role: 'Base reference sprite. Single cell, not animated.',
+  role: 'Single-frame reference, matching the walk sheet at frame 0.',
   layout: 'strip',
   frames: 1,
   status: 'present',
 }
 
+/**
+ * The 12-frame walk cycle as supplied, unwrapped and unaltered.
+ *
+ * Named for the idle-and-walk sheet it came from. Every frame is a different
+ * point in one continuous stride, so the whole file plays as the walk; see
+ * `NPC_CLIPS` for why idle is not carved out of it.
+ */
+export const NPC_IDLE_WALK_SHEET: NpcSheetDefinition = {
+  file: 'npc_idle_walk.png',
+  role: 'The walk cycle, 12 frames of 128px. Stored as supplied.',
+  layout: 'strip',
+  frames: 12,
+  status: 'present',
+}
+
 /** The sheets still to be drawn, in the order an NPC would need them. */
 export const NPC_SHEETS: readonly NpcSheetDefinition[] = [
+  NPC_IDLE_WALK_SHEET,
   {
     file: 'npc_idle.png',
-    role: 'Standing loop, cut from the base reference.',
+    role: 'A standing loop of its own, to replace the empty idle binding below.',
     layout: 'strip',
     frames: 6,
     status: 'pending',
   },
   {
     file: 'npc_walk.png',
-    role: 'Ground locomotion, cut from the base reference.',
+    role: 'Ground locomotion as a standalone sheet, if the walk ever outgrows this cycle.',
     layout: 'strip',
     frames: 12,
     status: 'pending',
@@ -119,8 +152,12 @@ export const NPC_SHEETS: readonly NpcSheetDefinition[] = [
   },
 ]
 
-/** The base reference followed by every sheet awaiting artwork. */
-export const NPC_ASSET_SET: readonly NpcSheetDefinition[] = [NPC_BASE, ...NPC_SHEETS]
+/** Every sheet in the set, present ones first. */
+export const NPC_ASSET_SET: readonly NpcSheetDefinition[] = [
+  NPC_BASE,
+  NPC_IDLE_WALK_SHEET,
+  ...NPC_SHEETS.filter((s) => s.status === 'pending'),
+]
 
 /** Pixel width a sheet of this definition occupies. */
 export function npcSheetWidth(sheet: NpcSheetDefinition): number {
@@ -130,4 +167,64 @@ export function npcSheetWidth(sheet: NpcSheetDefinition): number {
 /** Pixel height a sheet of this definition occupies. */
 export function npcSheetHeight(sheet: NpcSheetDefinition): number {
   return sheet.layout === 'grid' ? NPC_CELL_SIZE * 8 : NPC_CELL_SIZE
+}
+
+/**
+ * A motion, bound to a run of frames on a sheet.
+ *
+ * Each clip names its own sheet and its own frame range, which is what lets idle
+ * and walk be pointed at different artwork later without touching each other.
+ * Every clip draws against `NPC_BASELINE_Y`, so swapping one does not move the
+ * NPC's feet.
+ */
+export interface NpcClip {
+  /** Which motion this is. */
+  readonly name: string
+  /** Sheet the frames come from, or null while the motion has no artwork yet. */
+  readonly sheet: string | null
+  /** Index of the first frame within that sheet. */
+  readonly firstFrame: number
+  /** How many frames play. Zero means the motion is unassigned. */
+  readonly frameCount: number
+  /** Whether the last frame wraps to the first. */
+  readonly loops: boolean
+}
+
+/**
+ * The motions the NPC has, bound independently of one another.
+ *
+ * The 12-frame sheet is named idle-and-walk, but measuring it shows one continuous
+ * stride: in all twelve frames the two feet sit at different heights and different
+ * x positions, and the foot that is forward alternates across the file, wrapping
+ * from the last frame back to the first. No frame is a planted, stationary stance,
+ * so there is no idle range to cut from it. Rather than re-time a walk frame to
+ * fake a standing pose -- which would be a pose that was never drawn -- idle is
+ * left unassigned and walk takes the whole cycle.
+ *
+ * When idle artwork arrives, either point `idle` at its own sheet or hand it a
+ * range of a shared one; neither binding disturbs walk.
+ */
+export const NPC_CLIPS: readonly NpcClip[] = [
+  {
+    name: 'idle',
+    sheet: null,
+    firstFrame: 0,
+    frameCount: 0,
+    loops: true,
+  },
+  {
+    name: 'walk',
+    sheet: NPC_IDLE_WALK_SHEET.file,
+    firstFrame: 0,
+    frameCount: NPC_IDLE_WALK_SHEET.frames,
+    loops: true,
+  },
+]
+
+/** Frames played per second by walk, matching the player's own cadence. */
+export const NPC_WALK_FPS = 12
+
+/** True while this clip has artwork behind it. */
+export function isClipAssigned(clip: NpcClip): boolean {
+  return clip.sheet !== null && clip.frameCount > 0
 }
