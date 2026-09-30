@@ -8,10 +8,18 @@ import { KEY_HINTS, VirtualControls } from './ui/VirtualControls'
 import './style.css'
 
 const SPRITE_BASE = assetUrl('sprites')
-const BACKGROUND_URL = assetUrl('bg/arena_bg.png')
 
-/** Underground Cavern: the world section that follows the Forgotten Prison. */
-const CAVERN_BACKGROUND_URL = assetUrl('bg/cavern_bg.png')
+/**
+ * Backdrops, one per scene, keyed by the asset name the scene declares.
+ *
+ * Keyed rather than passed positionally so adding a scene is a matter of adding an
+ * entry to the scene list and an image here: nothing has to be threaded through by
+ * index, which is what made the previous two-plate arrangement easy to get wrong.
+ */
+const BACKDROP_URLS: Record<string, string> = {
+  img_arena_bg_hd: assetUrl('bg/arena_bg.png'),
+  img_underground_cavern_hd: assetUrl('bg/cavern_bg.png'),
+}
 
 async function loadImage(url: string): Promise<HTMLImageElement | null> {
   return new Promise((resolve) => {
@@ -60,14 +68,22 @@ async function boot(): Promise<void> {
   const ctx: CanvasRenderingContext2D = ctxOrNull
 
   const animations = new SpriteAnimationSystem(SPRITE_BASE)
-  const background = await loadImage(BACKGROUND_URL)
-  // The second world section, loaded from the same synced asset the APK uses.
-  const cavernBackground = await loadImage(CAVERN_BACKGROUND_URL)
-  const world = new GameWorld(
-    animations,
-    background ? { image: background, width: background.width, height: background.height } : null,
-    cavernBackground ? { image: cavernBackground, width: cavernBackground.width, height: cavernBackground.height } : null,
+
+  // Every scene's backdrop is decoded up front so a handover never has to wait on
+  // the network: the fade covers the swap, and a missing plate would otherwise show
+  // as a flash of the fallback fill.
+  const backdropEntries = await Promise.all(
+    Object.entries(BACKDROP_URLS).map(
+      async ([asset, url]) =>
+        [asset, await loadImage(url)] as const,
+    ),
   )
+  const backdrops: Record<string, { image: HTMLImageElement; width: number; height: number } | null> = {}
+  for (const [asset, image] of backdropEntries) {
+    backdrops[asset] = image ? { image, width: image.width, height: image.height } : null
+  }
+
+  const world = new GameWorld(animations, backdrops)
 
   // Sheets must be decoded before the first update(), otherwise frame 0 is skipped.
   await animations.reloadAll()
@@ -76,7 +92,7 @@ async function boot(): Promise<void> {
     () => world.player,
     () => animations,
     () => openInspector(),
-    () => world.player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y),
+    () => world.respawn(),
   )
 
   const controls = new VirtualControls({
@@ -203,6 +219,43 @@ async function boot(): Promise<void> {
         /** Pins the camera so the floor line can be checked at several offsets. */
         setCamera(x: number): void {
           world.cameraX = x
+        },
+        /**
+         * Jumps straight to a scene, with no transition, so each environment can be
+         * inspected on its own.
+         */
+        loadScene(index: number): void {
+          world.enterScene(index)
+        },
+        /** Runs the handover that a player triggers by walking off the exit. */
+        startTransition(): void {
+          world.beginTransition()
+        },
+        /** Places the player at a world X, for driving an exit from a known point. */
+        setPlayerX(x: number): void {
+          world.player.x = x
+        },
+        /** Readable snapshot of the scene/transition state, for assertions. */
+        sceneState(): Record<string, unknown> {
+          const scene = world.activeScene
+          return {
+            index: world.activeSceneIndex,
+            id: scene.definition.id,
+            title: scene.definition.title,
+            worldWidth: world.worldWidth,
+            floorY: world.floorY,
+            fit: scene.fit,
+            cameraX: world.cameraX,
+            maxCameraX: world.maxCameraX,
+            playerX: world.player.x,
+            spawnX: scene.definition.spawnX,
+            exitX: scene.definition.exitX,
+            dummyXs: world.dummies.map((d) => d.x),
+            phase: world.transitionPhase,
+            elapsed: world.transitionElapsed,
+            title2: world.transitionTitle,
+            loaded: scene.background !== null,
+          }
         },
         /**
          * The backdrop alone, through the real drawing path. The harness subtracts

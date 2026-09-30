@@ -187,120 +187,182 @@ function check(name, ok, detail = '') {
   if (!ok) failures++
 }
 
-console.log('\nWORLD GEOMETRY: both engines build the same two-section world')
-// The world is the Forgotten Prison followed by the Underground Cavern, laid end to
-// end. Everything the player, the dummies, collision and the backdrop share lives in
-// that one space, so these constants have to agree or the two platforms would put
-// the ground plane in a different place.
+console.log('\nSCENES: both engines declare the same environments, the same way')
+// Every environment is its own full-screen scene. A scene's scale, crop and floor
+// plane are all derived from its own definition, so these fields have to agree
+// between the engines or the two platforms would stand the player on different
+// ground in the same room.
+const WEB_SCENE_SRC = readFileSync(join(ROOT, 'web/src/game/GameScene.ts'), 'utf8')
+const KT_SCENE_SRC = readFileSync(join(ROOT, 'app/src/main/java/com/example/game/engine/GameScene.kt'), 'utf8')
 const WEB_WORLD_SRC = readFileSync(join(ROOT, 'web/src/game/GameWorld.ts'), 'utf8')
 const KT_WORLD_SRC = readFileSync(join(ROOT, 'app/src/main/java/com/example/game/engine/GameWorld.kt'), 'utf8')
 
-/** Literal `static readonly X = <n>` / `const val X = <n>f` values from each engine. */
-function literals(src, web) {
-  const out = {}
-  const re = web
-    ? /static\s+readonly\s+(\w+)\s*=\s*(-?[\d.]+)\s*$/gm
-    : /const\s+val\s+(\w+)\s*(?::\s*Float\s*)?=\s*(-?[\d.]+)f?\s*$/gm
-  for (const m of src.matchAll(re)) out[m[1]] = Number(m[2])
-  return out
+/**
+ * Pulls every `SceneDefinition` literal out of an engine's scene source.
+ *
+ * Both engines declare scenes as data, so the whole scene list can be read straight
+ * out of the source and compared field by field. Nothing here re-implements the
+ * values: they are parsed, so a change in either engine shows up immediately.
+ */
+function parseScenes(src) {
+  const scenes = {}
+  const webRe = /export const (\w+): SceneDefinition = \{([\s\S]*?)\n\}/g
+  const ktRe = /val (\w+) = SceneDefinition\(([\s\S]*?)\n\)/g
+  for (const [re, isWeb] of [[webRe, true], [ktRe, false]]) {
+    for (const m of src.matchAll(re)) {
+      const [, name, body] = m
+      // The two engines spell fields differently -- TS uses `key:` and Kotlin named
+      // arguments use `key =` -- so accept either separator and compare the values.
+      const num = (key) => {
+        const hit = body.match(new RegExp(`${key}\\s*[:=]\\s*(-?[\\d.]+)f?`))
+        return hit ? Number(hit[1]) : null
+      }
+      const str = (key) => {
+        const hit = body.match(new RegExp(`${key}\\s*[:=]\\s*['"]([^'"]+)['"]`))
+        return hit ? hit[1] : null
+      }
+      const listMatch = isWeb
+        ? body.match(/dummyXs\s*[:=]\s*\[([^\]]*)\]/)
+        : body.match(/dummyXs\s*=\s*listOf\(([^)]*)\)/)
+      const dummyXs = listMatch
+        ? listMatch[1].split(',').map((v) => Number(v.trim().replace('f', ''))).filter((v) => !Number.isNaN(v))
+        : null
+      const exitMatch = body.match(/exitX\s*[:=]\s*(null|(-?[\d.]+)f?)/)
+      scenes[name] = {
+        id: str('id'),
+        title: str('title'),
+        asset: str('asset'),
+        sourceWidth: num('sourceWidth'),
+        sourceHeight: num('sourceHeight'),
+        floorRow: num('floorRow'),
+        worldWidth: num('worldWidth'),
+        spawnX: num('spawnX'),
+        dummyXs,
+        exitX: exitMatch ? (exitMatch[1] === 'null' ? null : Number(exitMatch[2])) : undefined,
+      }
+    }
+  }
+  return scenes
 }
-const WEB_LIT = literals(WEB_WORLD_SRC, true)
-const KT_LIT = literals(KT_WORLD_SRC, false)
 
-const SHARED = [
-  'LOGICAL_WIDTH', 'LOGICAL_HEIGHT', 'BACKGROUND_HEIGHT',
-  'CAVERN_WIDTH', 'CAVERN_HEIGHT', 'BACKGROUND_FLOOR_ROW', 'CAVERN_FLOOR_ROW',
-  'SPRITE_DISPLAY_SIZE',
-]
-for (const name of SHARED) {
+const WEB_SCENES = parseScenes(WEB_SCENE_SRC)
+const KT_SCENES = parseScenes(KT_SCENE_SRC)
+const sceneNames = Object.keys(WEB_SCENES)
+
+check('web declares at least two scenes', sceneNames.length >= 2, `${sceneNames.length}`)
+check('both engines declare the same scenes', sceneNames.length === Object.keys(KT_SCENES).length,
+  `web [${sceneNames}] vs android [${Object.keys(KT_SCENES)}]`)
+
+for (const name of sceneNames) {
+  const w = WEB_SCENES[name]
+  const k = KT_SCENES[name]
+  if (!k) {
+    check(`${name}: declared in both engines`, false, 'missing from Kotlin')
+    continue
+  }
+  for (const field of ['id', 'title', 'asset', 'sourceWidth', 'sourceHeight', 'floorRow', 'worldWidth', 'spawnX', 'exitX']) {
+    check(`${name}.${field}: same in both engines`, w[field] === k[field], `web ${w[field]} vs android ${k[field]}`)
+  }
   check(
-    `${name}: same literal in both engines`,
-    WEB_LIT[name] !== undefined && WEB_LIT[name] === KT_LIT[name],
-    `web ${WEB_LIT[name]} vs android ${KT_LIT[name]}`,
+    `${name}.dummyXs: same fixtures, in the same order`,
+    JSON.stringify(w.dummyXs) === JSON.stringify(k.dummyXs),
+    `web ${JSON.stringify(w.dummyXs)} vs android ${JSON.stringify(k.dummyXs)}`,
   )
 }
 
-// The arena plate is 1536 wide in both. Web names the constant; Kotlin inlines the
-// literal into the scaled expression, so both spellings are checked.
-// Note web qualifies its constants with `GameWorld.`, so every pattern below
-// tolerates that prefix rather than assuming a bare name.
-const ARENA_W = WEB_LIT.BACKGROUND_WIDTH
-check(
-  'the arena plate is 1536 wide in both engines',
-  ARENA_W === 1536 && /BACKGROUND_LOGICAL_WIDTH\s*:\s*Float\s*=\s*1536/.test(KT_WORLD_SRC),
-  `web BACKGROUND_WIDTH ${ARENA_W}, kotlin inline 1536`,
-)
+// Scenes must be listed in the same travel order, or the two engines would send the
+// player to different places from the same exit.
+const webOrder = (WEB_SCENE_SRC.match(/SCENES: readonly SceneDefinition\[\] = \[([^\]]*)\]/) || [, ''])[1]
+  .split(',').map((v) => v.trim()).filter(Boolean)
+const ktOrder = (KT_SCENE_SRC.match(/SCENES: List<SceneDefinition> = listOf\(([^)]*)\)/) || [, ''])[1]
+  .split(',').map((v) => v.trim()).filter(Boolean)
+check('both engines list the scenes in the same order',
+  JSON.stringify(webOrder) === JSON.stringify(ktOrder) && webOrder.length >= 2,
+  `web [${webOrder}] vs android [${ktOrder}]`)
 
-// Recomputed from the shared literals, so the two plates cannot drift apart from
-// each other even if both engines agreed on a wrong number.
-const WORLD_SCALE = WEB_LIT.LOGICAL_HEIGHT / WEB_LIT.BACKGROUND_HEIGHT
-const FLOOR_Y = WEB_LIT.BACKGROUND_FLOOR_ROW * WORLD_SCALE
-const ARENA_LOGICAL_W = (WEB_LIT.BACKGROUND_WIDTH ?? 1536) * WORLD_SCALE
-const CAVERN_W = WEB_LIT.CAVERN_WIDTH * WORLD_SCALE
-const CAVERN_H = WEB_LIT.CAVERN_HEIGHT * WORLD_SCALE
-const CAVERN_Y = FLOOR_Y - WEB_LIT.CAVERN_FLOOR_ROW * WORLD_SCALE
-check(
-  'one shared scale puts each plate exactly one viewport wide',
-  Math.abs(ARENA_LOGICAL_W - WEB_LIT.LOGICAL_WIDTH) < 1e-9 &&
-    Math.abs(CAVERN_W - WEB_LIT.LOGICAL_WIDTH) < 1e-9,
-  `arena ${ARENA_LOGICAL_W}, cavern ${CAVERN_W}, viewport ${WEB_LIT.LOGICAL_WIDTH}`,
-)
-check(
-  'the cavern floor lands exactly on the shared ground plane',
-  Math.abs(CAVERN_Y + WEB_LIT.CAVERN_FLOOR_ROW * WORLD_SCALE - FLOOR_Y) < 1e-9,
-  `cavern floor ${CAVERN_Y + WEB_LIT.CAVERN_FLOOR_ROW * WORLD_SCALE} vs FLOOR_Y ${FLOOR_Y}`,
-)
-check(
-  'the cavern is shorter than the viewport, which is why the bands are filled',
-  CAVERN_H < WEB_LIT.LOGICAL_HEIGHT,
-  `cavern ${CAVERN_H.toFixed(2)} vs viewport ${WEB_LIT.LOGICAL_HEIGHT}`,
-)
-check(
-  'the cavern plate sits fully inside the viewport when floor-aligned',
-  CAVERN_Y >= 0 && CAVERN_Y + CAVERN_H <= WEB_LIT.LOGICAL_HEIGHT,
-  `top ${CAVERN_Y.toFixed(2)}, bottom ${(CAVERN_Y + CAVERN_H).toFixed(2)}`,
-)
+// Only the last scene may be a dead end, otherwise the last scene would hand over to
+// nothing.
+const ordered = webOrder.map((n) => WEB_SCENES[n])
+check('every scene but the last has an exit, and the last has none',
+  ordered.slice(0, -1).every((d) => d.exitX !== null) && ordered[ordered.length - 1].exitX === null,
+  ordered.map((d) => `${d.id}:${d.exitX}`).join(', '))
 
-// The arena centre anchors the spawn and both dummies. It must be the prison's
-// centre: derived from the world it would land on the seam between the sections.
-check(
-  'the spawn and dummies are anchored to the prison, not to the world',
-  /ARENA_CENTER_X\s*=\s*(?:GameWorld\.)?BACKGROUND_LOGICAL_WIDTH\s*\/\s*2/.test(WEB_WORLD_SRC) &&
-    /ARENA_CENTER_X:\s*Float\s*=\s*BACKGROUND_LOGICAL_WIDTH\s*\/\s*2f/.test(KT_WORLD_SRC),
-  'both derive the centre from the prison plate',
-)
+// The transition timings are part of the shared feel, not per-platform polish.
+for (const [name, web, kt] of [
+  ['TRANSITION_FADE_OUT', /TRANSITION_FADE_OUT\s*=\s*([\d.]+)/, /TRANSITION_FADE_OUT\s*=\s*([\d.]+)f/],
+  ['TRANSITION_TITLE_HOLD', /TRANSITION_TITLE_HOLD\s*=\s*([\d.]+)/, /TRANSITION_TITLE_HOLD\s*=\s*([\d.]+)f/],
+  ['TRANSITION_FADE_IN', /TRANSITION_FADE_IN\s*=\s*([\d.]+)/, /TRANSITION_FADE_IN\s*=\s*([\d.]+)f/],
+]) {
+  const w = Number((WEB_SCENE_SRC.match(web) || [, NaN])[1])
+  const k = Number((KT_SCENE_SRC.match(kt) || [, NaN])[1])
+  check(`${name}: same timing in both engines`, Number.isFinite(w) && w === k, `web ${w} vs android ${k}`)
+}
+const totalFade = Number((WEB_SCENE_SRC.match(/TRANSITION_FADE_OUT\s*=\s*([\d.]+)/) || [, NaN])[1]) +
+  Number((WEB_SCENE_SRC.match(/TRANSITION_TITLE_HOLD\s*=\s*([\d.]+)/) || [, NaN])[1]) +
+  Number((WEB_SCENE_SRC.match(/TRANSITION_FADE_IN\s*=\s*([\d.]+)/) || [, NaN])[1])
+check('the whole handover lands in the 0.6-1.0s window', totalFade >= 0.6 && totalFade <= 1.0, `${totalFade}s`)
 
-// Both engines must draw the cavern from the same source file, and the cavern must
-// be drawn at the arena's scale rather than a scale of its own.
-check(
-  'both engines load the cavern from the same shared asset name',
-  /img_underground_cavern_hd/.test(KT_WORLD_SRC) && /bg\/cavern_bg\.png/.test(WEB_WORLD_SRC) &&
-    existsSync(join(ROOT, 'app/src/main/res/drawable/img_underground_cavern_hd.png')) &&
+// The fit is recomputed here from the shared literals rather than trusted, so a scene
+// that would leave a black gap around the artwork fails even if both engines agreed
+// on the same wrong numbers.
+const LOGICAL_W = 640
+const LOGICAL_H = 360
+for (const d of ordered) {
+  let scale = LOGICAL_H / d.sourceHeight
+  if (d.sourceWidth * scale < d.worldWidth) scale = d.worldWidth / d.sourceWidth
+  const drawW = d.sourceWidth * scale
+  const drawH = d.sourceHeight * scale
+  const offsetX = (d.worldWidth - drawW) / 2
+  const offsetY = (LOGICAL_H - drawH) / 2
+  const floorY = offsetY + d.floorRow * scale
+  const tag = d.id
+  check(`${tag}: the backdrop covers the full width, so no black gap can show`, drawW >= d.worldWidth, `draw ${drawW} vs world ${d.worldWidth}`)
+  check(`${tag}: the backdrop covers the full height, so no black gap can show`, drawH >= LOGICAL_H, `draw ${drawH} vs ${LOGICAL_H}`)
+  check(`${tag}: overflow is cropped, never inset`, offsetX <= 0 && offsetY <= 0, `offset ${offsetX},${offsetY}`)
+  check(`${tag}: one uniform scale, so the artwork is not stretched`, Math.abs(drawW / d.sourceWidth - drawH / d.sourceHeight) < 1e-12, `x ${drawW / d.sourceWidth} vs y ${drawH / d.sourceHeight}`)
+  check(`${tag}: the floor plane lands inside the viewport`, floorY > 0 && floorY < LOGICAL_H, `floorY ${floorY.toFixed(3)}`)
+}
+const prisonFit = ordered[0]
+const cavernFit = ordered[1] ?? ordered[0]
+check('the prison still fills its scene at exactly 5/12, uncropped',
+  Math.abs(LOGICAL_H / prisonFit.sourceHeight - 5 / 12) < 1e-12,
+  `scale ${(LOGICAL_H / prisonFit.sourceHeight).toFixed(6)}`)
+check('each scene scales on its own terms, not on a shared scale',
+  Math.abs(LOGICAL_H / cavernFit.sourceHeight - LOGICAL_H / prisonFit.sourceHeight) > 1e-6,
+  `prison ${(LOGICAL_H / prisonFit.sourceHeight).toFixed(4)}, cavern ${(LOGICAL_H / cavernFit.sourceHeight).toFixed(4)}`)
+check('the scenes declare genuinely different floors',
+  Math.abs((cavernFit.floorRow * (LOGICAL_H / cavernFit.sourceHeight)) -
+           (prisonFit.floorRow * (LOGICAL_H / prisonFit.sourceHeight))) > 1,
+  'each scene has its own ground plane')
+
+// Scenes must not be laid side by side any more: the world is one scene's width.
+check('neither engine still composes a world out of two plates side by side',
+  !/WORLD_WIDTH\s*=\s*.*BACKGROUND_LOGICAL_WIDTH\s*\+/.test(WEB_WORLD_SRC) &&
+    !/WORLD_WIDTH: Float = BACKGROUND_LOGICAL_WIDTH \+/.test(KT_WORLD_SRC) &&
+    !/CAVERN_SCALE/.test(WEB_WORLD_SRC) && !/CAVERN_SCALE/.test(KT_WORLD_SRC),
+  'no summed world width, no shared-section scale')
+check('each engine draws one backdrop per scene, on demand',
+  /renderBackdrop/.test(WEB_WORLD_SRC) && /fun renderBackdrop/.test(KT_WORLD_SRC),
+  'a single plate is drawn from the active scene')
+
+// Both engines must draw each scene from the same source file.
+check('both engines load each backdrop from the same shared asset name',
+  ordered.every((d) => KT_SCENE_SRC.includes(d.asset)) &&
+    existsSync(join(ROOT, `app/src/main/res/drawable/${ordered[0].asset}.png`)) &&
+    existsSync(join(ROOT, `app/src/main/res/drawable/${cavernFit.asset}.png`)) &&
     existsSync(join(ROOT, 'web/public/bg/cavern_bg.png')),
-  'res/drawable is the source, web/public is the synced copy',
-)
-check(
-  'the cavern is drawn at the arena scale, not a scale of its own',
-  /CAVERN_SCALE\s*=\s*(?:GameWorld\.)?BACKGROUND_SCALE/.test(WEB_WORLD_SRC) &&
-    /CAVERN_SCALE:\s*Float\s*=\s*BACKGROUND_SCALE/.test(KT_WORLD_SRC),
-  'one scale for both sections',
-)
+  'res/drawable is the source, web/public is the synced copy')
 
-// Same bytes on both platforms, which is the whole point of routing the section
+// Same bytes on both platforms, which is the whole point of routing the artwork
 // through the shared asset system rather than a second hand-copied file.
-{
-  const androidCavern = readFileSync(join(ROOT, 'app/src/main/res/drawable/img_underground_cavern_hd.png'))
-  const webCavern = readFileSync(join(ROOT, 'web/public/bg/cavern_bg.png'))
-  check(
-    'web and Android ship byte-identical cavern artwork',
-    androidCavern.equals(webCavern),
-    `${androidCavern.length} vs ${webCavern.length} bytes`,
-  )
-  check(
-    'the cavern is the exact artwork, not a regenerated or resized copy',
-    androidCavern.readUInt32BE(16) === WEB_LIT.CAVERN_WIDTH && androidCavern.readUInt32BE(20) === WEB_LIT.CAVERN_HEIGHT,
-    `${androidCavern.readUInt32BE(16)}x${androidCavern.readUInt32BE(20)}`,
-  )
+for (const [d, webPath] of [[prisonFit, 'web/public/bg/arena_bg.png'], [cavernFit, 'web/public/bg/cavern_bg.png']]) {
+  const androidPng = readFileSync(join(ROOT, `app/src/main/res/drawable/${d.asset}.png`))
+  const webPng = readFileSync(join(ROOT, webPath))
+  check(`web and Android ship byte-identical ${d.asset} artwork`, androidPng.equals(webPng),
+    `${androidPng.length} vs ${webPng.length} bytes`)
+  check(`${d.asset} is the exact artwork, not a regenerated or resized copy`,
+    androidPng.readUInt32BE(16) === d.sourceWidth && androidPng.readUInt32BE(20) === d.sourceHeight,
+    `${androidPng.readUInt32BE(16)}x${androidPng.readUInt32BE(20)} vs declared ${d.sourceWidth}x${d.sourceHeight}`)
 }
 
 console.log('\nSHEET GEOMETRY: the web and Android rules agree, over the real artwork')

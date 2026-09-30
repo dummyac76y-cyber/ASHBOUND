@@ -6,22 +6,30 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Shader
 import android.util.Log
 import com.example.game.animation.DefaultAnimationConfigs
-import com.example.game.animation.PlayerAction
 import com.example.game.animation.SpriteAnimationSystem
 import com.example.game.animation.SpriteMetrics
 import com.example.game.controller.PlayerController
 import com.example.game.model.DamageText
 import com.example.game.model.SparkParticle
 import com.example.game.model.TrainingDummy
+import kotlin.math.cos
+import kotlin.math.min
 import kotlin.random.Random
 
 /**
- * 2D Game World managing world bounds, logical resolution, arena scenery,
- * training combat targets, and particle systems.
+ * 2D Game World managing scenes, logical resolution, combat targets and particles.
+ *
+ * Exactly one scene is active at a time. Its backdrop is the only environment drawn,
+ * scaled to cover that scene's world, and its own bounds and floor plane are what the
+ * player, the dummies and the camera are measured against.
+ *
+ * Mirrors GameWorld.ts.
  */
 class GameWorld(val context: Context) {
 
@@ -30,186 +38,55 @@ class GameWorld(val context: Context) {
         const val LOGICAL_HEIGHT = 360f
 
         /**
-         * Native pixel height of the arena backdrop (img_arena_bg_hd.png).
-         * The backdrop is drawn with a single uniform scale, so any source row
-         * maps to logical Y via: row * LOGICAL_HEIGHT / this.
-         */
-        const val BACKGROUND_HEIGHT = 864f
-
-        /** Uniform scale the backdrop is drawn at. 360 / 864 is exactly 5/12. */
-        val BACKGROUND_SCALE: Float = LOGICAL_HEIGHT / BACKGROUND_HEIGHT
-
-        /**
-         * Logical size of the backdrop once scaled.
+         * Logical size a 128px sprite cell is drawn at (aspect preserved).
          *
-         * 1536 x 5/12 is exactly 640 and 864 x 5/12 is exactly 360: the artwork
-         * is a single frame that covers the viewport precisely. It is one finite
-         * environment, not a texture, so it is drawn once, never repeated and
-         * never mirrored.
+         * A property of the character alone. It is never scaled by a backdrop's size,
+         * so the knight is exactly as large in the cavern as he is in the prison even
+         * though the two artworks need very different scales to fill the screen.
          */
-        val BACKGROUND_LOGICAL_WIDTH: Float = 1536f * BACKGROUND_SCALE
-        val BACKGROUND_LOGICAL_HEIGHT: Float = 864f * BACKGROUND_SCALE
-
-        /**
-         * Native pixel size of the Underground Cavern backdrop
-         * (img_underground_cavern_hd.png), the world section that follows the prison.
-         */
-        const val CAVERN_WIDTH = 1536f
-        const val CAVERN_HEIGHT = 512f
-
-        /**
-         * The cavern is drawn at the *same* uniform scale as the arena, not at a
-         * scale chosen to fill the viewport.
-         *
-         * The cavern art is 512px tall where the arena is 864, so scaling it to
-         * cover 360 logical pixels would need 360/512 rather than 5/12 -- about
-         * 1.69x larger. That would leave the knight, drawn at a fixed sprite size,
-         * standing at a very different size against the scenery the moment he
-         * crossed the boundary. Sharing one scale keeps the character-to-scenery
-         * relationship identical across the seam.
-         */
-        val CAVERN_SCALE: Float = BACKGROUND_SCALE
-
-        /** Logical size of the cavern once scaled: exactly 640 x 213 1/3. */
-        val CAVERN_LOGICAL_WIDTH: Float = CAVERN_WIDTH * CAVERN_SCALE
-        val CAVERN_LOGICAL_HEIGHT: Float = CAVERN_HEIGHT * CAVERN_SCALE
-
-        /**
-         * Width of the playable world, in logical pixels.
-         *
-         * The world is the Forgotten Prison followed by the Underground Cavern,
-         * each one finite environment laid end to end. The camera therefore has
-         * exactly one viewport of scroll to cross between them, and because the
-         * world is exactly the two plates there is no slack that would have to be
-         * covered by a tiled or mirrored copy.
-         */
-        val WORLD_WIDTH: Float = BACKGROUND_LOGICAL_WIDTH + CAVERN_LOGICAL_WIDTH
-
-        /**
-         * Centre of the Forgotten Prison, in world units.
-         *
-         * Anchored to the prison plate rather than to the world, because the world
-         * now spans two sections: half the world would put the spawn exactly on the
-         * seam between them and shift both training dummies into the cavern.
-         */
-        val ARENA_CENTER_X: Float = BACKGROUND_LOGICAL_WIDTH / 2f
-
-        /**
-         * Initial world X for the player: the arena centre, which leaves the full
-         * half-width of arena on both sides to walk into.
-         */
-        val SPAWN_X: Float = ARENA_CENTER_X
-
-        /**
-         * World X of the first training dummy. Placed to the right of the spawn so
-         * the match opens as player-versus-target, and left untouched thereafter: a
-         * fixed world position, not a screen or player-relative one.
-         */
-        val DUMMY_X: Float = ARENA_CENTER_X + 130f
-
-        /** World distance between the two training dummies. */
-        val DUMMY_SPACING = 120f
-
-        /**
-         * Native pixel height of the arena backdrop (img_arena_bg_hd.png).
-         * The backdrop is drawn with a single uniform scale, so any source row maps
-         * to logical Y via: row * LOGICAL_HEIGHT / this.
-         */
-        const val BACKGROUND_HEIGHT = 864f
-
-        /**
-         * Row of the visible stone floor surface, measured from the backdrop artwork.
-         *
-         * Row statistics across the image width show a hard horizon: row 532 is still
-         * dark wall (mean 21.6, 18.5% lit, 43.9% of sampled columns agreeing), while
-         * row 533 is the first lit floor row (mean 31.5, 51.2% lit, 68.9% coherent).
-         * The edge is horizontal, so one world-space plane is exact across the arena.
-         * The bright seam further down at row 620 is a flagstone joint *inside* the
-         * floor, not its top edge, and using it left the knight standing in front of
-         * the wall.
-         */
-        const val BACKGROUND_FLOOR_ROW = 533f
-
-        /**
-         * World-space ground / collision plane, in logical pixels.
-         *
-         * The player's visible feet rest exactly on this Y at all times, and it is the Y the
-         * jump impulse starts from and gravity returns to. Derived from the backdrop
-         * rather than guessed, so the knight stands on the drawn stone floor instead
-         * of an arbitrary line near the bottom of the screen.
-         */
-        val FLOOR_Y: Float = BACKGROUND_FLOOR_ROW * (LOGICAL_HEIGHT / BACKGROUND_HEIGHT)
-
-        /**
-         * Row of the cavern's visible floor surface, measured from its artwork the
-         * same way as the arena's.
-         *
-         * Both backdrops share one structure: dark wall, then a lit floor band, then
-         * a dark foreground running off the bottom. In the cavern the transition is
-         * at row 391, where the lit fraction jumps 43.2% -> 63.3% and mean
-         * luminance rises 37.2 -> 46.1 -- the same shape of step as the arena's
-         * 532 -> 533, so both sections measure their floor the same way and land on
-         * one shared ground plane.
-         */
-        const val CAVERN_FLOOR_ROW = 391f
-
-        /**
-         * Logical Y at which the cavern plate is drawn.
-         *
-         * The cavern is shorter than the viewport once scaled and its floor sits
-         * lower within its own frame than the arena's (391/512 vs 533/864). Offsetting
-         * the plate so its measured floor row lands exactly on FLOOR_Y is what keeps
-         * the walkable surface continuous across the boundary: one collision plane,
-         * so there is no step, gap or floating knight.
-         */
-        val CAVERN_OFFSET_Y: Float = FLOOR_Y - CAVERN_FLOOR_ROW * CAVERN_SCALE
-
-        /**
-         * Flat fills for the two bands the cavern plate does not reach.
-         *
-         * At the shared scale the cavern covers only 213 of the 360 logical pixel
-         * rows, so plain colour fills what is left above and below it. Both are
-         * sampled from the cavern's own outermost rows (row 0 averages rgb(3,6,18),
-         * row 511 averages rgb(0,0,10)) so the bands continue the artwork's own
-         * near-black cave darkness. The plate is drawn once and never stretched,
-         * mirrored or repeated; these fills only cover what it does not reach.
-         */
-        val CAVERN_FILL_ABOVE = Color.rgb(3, 6, 18)
-        val CAVERN_FILL_BELOW = Color.rgb(0, 0, 10)
-
-        /** Logical size a 128px sprite cell is drawn at (aspect preserved). */
         const val SPRITE_DISPLAY_SIZE = 100f
 
         /**
          * Rest-pose foot offset, i.e. the padding below the opaque pixels of the idle
-         * sheet's frames. Kept for diagnostics and tests; the renderer uses the
-         * per-frame value from the animation system instead, since the walk cycle's
-         * contact row is not constant.
+         * sheet's frames. Kept for diagnostics; the renderer uses the per-frame value
+         * from the animation system instead, since the walk cycle's contact row is not
+         * constant.
          */
         val SPRITE_FOOT_OFFSET: Float =
             SpriteMetrics.footOffsetForRow(SpriteMetrics.DEFAULT_FOOT_ROW, SPRITE_DISPLAY_SIZE)
+
+        /** Fallback fill for a scene whose backdrop has not loaded. */
+        val SCENE_FALLBACK_FILL: Int = Color.rgb(18, 20, 28)
     }
 
     val animationSystem = SpriteAnimationSystem(context, DefaultAnimationConfigs.createDefaults())
-    val player = PlayerController(animationSystem, x = SPAWN_X, groundY = FLOOR_Y)
+    val player = PlayerController(animationSystem, x = SCENES[STARTING_SCENE_INDEX].spawnX, groundY = 0f)
 
-    // Interactive training dummy targets. World fixtures at fixed world X: never
-    // derived from the player, and standing on the same FLOOR_Y.
-    val dummies = listOf(
-        TrainingDummy(x = DUMMY_X, groundY = FLOOR_Y),
-        TrainingDummy(x = DUMMY_X + DUMMY_SPACING, groundY = FLOOR_Y)
-    )
+    /**
+     * Every scene the game knows, in travel order, each bound to its own geometry.
+     *
+     * Only one is drawn at a time.
+     */
+    val scenes: List<SceneRuntime> = SCENES.map { definition ->
+        SceneRuntime(
+            definition = definition,
+            fit = fitBackdrop(
+                definition.sourceWidth,
+                definition.sourceHeight,
+                definition.floorRow,
+                definition.worldWidth,
+                LOGICAL_HEIGHT
+            )
+        )
+    }
+
+    /** Objects belonging to the active scene. Rebuilt on every scene change. */
+    var dummies: List<TrainingDummy> = emptyList()
+        private set
 
     // Visual particle effects
     val damageTexts = mutableListOf<DamageText>()
     val particles = mutableListOf<SparkParticle>()
-
-    // Arena background bitmap
-    private var bgBitmap: Bitmap? = null
-
-    // Underground Cavern bitmap: the second world section, kept separate from the
-    // arena because it is a different image at a different vertical offset.
-    private var cavernBitmap: Bitmap? = null
 
     // Nearest-neighbor rendering paint
     val pixelPaint = Paint().apply {
@@ -224,49 +101,115 @@ class GameWorld(val context: Context) {
         isAntiAlias = true
     }
 
-    // Camera view offset, in world units. Everything in the arena (backdrop,
-    // player, dummies, hitboxes) lives in world space and is drawn through this
-    // single transform, so a world-fixed object stays locked to the dungeon as the
-    // player walks.
+    /**
+     * Paint for the transition veil.
+     *
+     * Separate from [pixelPaint] because the veil needs a real alpha blend, while the
+     * scene paint is configured for hard-edged pixel art.
+     */
+    private val fadePaint = Paint().apply { isAntiAlias = false }
+
+    private val titlePaint = Paint().apply {
+        isAntiAlias = true
+        isFakeBoldText = true
+        textAlign = Paint.Align.CENTER
+    }
+
+    private val rulePaint = Paint().apply {
+        isAntiAlias = false
+        style = Paint.Style.STROKE
+        strokeWidth = 1f
+    }
+
+    /**
+     * Camera view offset, in world units. Everything in the scene (backdrop, player,
+     * dummies, hitboxes) lives in world space and is drawn through this single
+     * transform, so a world-fixed object stays locked to its scene as the player walks.
+     *
+     * Recomputed from the active scene's bounds whenever the scene changes, so a
+     * camera never carries over from a scene with different geometry.
+     */
     var cameraX: Float = 0f
         private set
 
+    /** Index of the scene currently being played. */
+    var activeSceneIndex: Int = STARTING_SCENE_INDEX
+        private set
+
+    /** Stage of the scene handover; IDLE whenever gameplay is live. */
+    var transitionPhase: SceneTransitionPhase = SceneTransitionPhase.IDLE
+        private set
+
+    /** Seconds elapsed in the current transition phase. */
+    var transitionElapsed: Float = 0f
+        private set
+
+    /** Scene index the handover will land on, or -1 when nothing is pending. */
+    var transitionTargetIndex: Int = -1
+        private set
+
+    /** Title shown on the transition card. */
+    var transitionTitle: String = ""
+        private set
+
+    /** Drifting cave fog, alive only while a handover is running. */
+    private var fog: List<FogMote> = emptyList()
+
+    /** Deterministic seed for [fog], varied per handover so it is not a loop. */
+    private var fogSeed: Int = 0
+
+    /** The scene currently being played. */
+    val activeScene: SceneRuntime get() = scenes[activeSceneIndex]
+
+    /** Width of the active scene's world, in logical pixels. */
+    val worldWidth: Float get() = activeScene.definition.worldWidth
+
+    /**
+     * Ground plane of the active scene, in logical pixels.
+     *
+     * The player's visible feet rest exactly on this, and it is what the jump impulse
+     * starts from and gravity returns to. It comes from the scene's own artwork, so the
+     * knight always stands on that scene's drawn floor rather than a line carried over
+     * from somewhere else.
+     */
+    val floorY: Float get() = activeScene.fit.floorY
+
+    /** Largest legal camera offset for the active scene. Always >= 0. */
+    val maxCameraX: Float get() = maxOf(0f, worldWidth - LOGICAL_WIDTH)
+
+    /** True while a scene handover is running and gameplay is suspended. */
+    val isTransitioning: Boolean get() = transitionPhase != SceneTransitionPhase.IDLE
+
     init {
-        loadArenaBackground()
-        loadCavernBackground()
-        // Start with the player already centred, instead of easing in from the
-        // left edge on the first frames of the match.
-        cameraX = cameraXForPlayerX(player.x)
+        for (scene in scenes) {
+            scene.background = loadBackdrop(scene.definition.asset)
+        }
+        enterScene(STARTING_SCENE_INDEX)
     }
 
     /** Camera offset that puts a given world X at the centre of the viewport. */
     fun cameraXForPlayerX(worldX: Float): Float =
-        (worldX - LOGICAL_WIDTH / 2f).coerceIn(0f, WORLD_WIDTH - LOGICAL_WIDTH)
-
-    private fun loadArenaBackground() {
-        // Prefer the high-res backdrop; fall back to the legacy jpg if it is absent.
-        val names = listOf("img_arena_bg_hd", "img_arena_bg")
-        for (name in names) {
-            val bitmap = decodeDrawable(name) ?: continue
-            bgBitmap = bitmap
-            Log.i("GameWorld", "Arena background: $name (${bitmap.width}x${bitmap.height})")
-            return
-        }
-        Log.w("GameWorld", "No arena background found; using the gradient fallback")
-    }
+        (worldX - LOGICAL_WIDTH / 2f).coerceIn(0f, maxCameraX)
 
     /**
-     * Loads the Underground Cavern plate -- the same file the web build syncs from
-     * here, so both engines render identical pixels for the second section.
+     * Loads a scene backdrop.
+     *
+     * The arena keeps its legacy fallback name; every other scene is a single plate.
+     * A missing plate is survivable: the scene draws its fallback fill instead.
      */
-    private fun loadCavernBackground() {
-        val bitmap = decodeDrawable("img_underground_cavern_hd")
-        if (bitmap != null) {
-            cavernBitmap = bitmap
-            Log.i("GameWorld", "Cavern background (${bitmap.width}x${bitmap.height})")
+    private fun loadBackdrop(asset: String): Bitmap? {
+        val names = if (asset == FORGOTTEN_PRISON.asset) {
+            listOf(asset, "img_arena_bg")
         } else {
-            Log.w("GameWorld", "No cavern background found; that section falls back to flat fill")
+            listOf(asset)
         }
+        for (name in names) {
+            val bitmap = decodeDrawable(name) ?: continue
+            Log.i("GameWorld", "Scene backdrop $name (${bitmap.width}x${bitmap.height})")
+            return bitmap
+        }
+        Log.w("GameWorld", "No backdrop for '$asset'; that scene falls back to flat fill")
+        return null
     }
 
     private fun decodeDrawable(name: String): Bitmap? = try {
@@ -281,14 +224,52 @@ class GameWorld(val context: Context) {
         null
     }
 
+    /**
+     * Switches to a scene: rebuilds its objects, places the player at its entrance and
+     * snaps the camera to the new bounds.
+     *
+     * The camera is set outright rather than eased, because a camera that drifts in
+     * from a previous scene's position would show the old framing sliding across the
+     * new one. Nothing from the previous scene survives except the player and the
+     * persistent HUD.
+     */
+    fun enterScene(index: Int) {
+        activeSceneIndex = index.coerceIn(0, scenes.size - 1)
+        val scene = activeScene
+        dummies = scene.definition.dummyXs.map { TrainingDummy(x = it, groundY = scene.fit.floorY) }
+        damageTexts.clear()
+        particles.clear()
+        player.resetPlayer(scene.definition.spawnX, scene.fit.floorY)
+        cameraX = cameraXForPlayerX(player.x)
+        transitionPhase = SceneTransitionPhase.IDLE
+        transitionElapsed = 0f
+        transitionTargetIndex = -1
+        transitionTitle = ""
+        fog = emptyList()
+    }
+
+    /** Returns the player to the active scene's entrance without changing scene. */
+    fun respawn() {
+        player.resetPlayer(activeScene.definition.spawnX, floorY)
+        cameraX = cameraXForPlayerX(player.x)
+    }
+
     fun update(dt: Float) {
         val clampedDt = dt.coerceIn(0.001f, 0.05f)
 
-        // Update player
-        player.update(clampedDt, 0f, WORLD_WIDTH, FLOOR_Y)
+        // A running handover owns the clock: gameplay is suspended, and the scene swap
+        // happens behind the fully opaque part of the fade so it is never seen.
+        if (isTransitioning) {
+            advanceTransition(clampedDt)
+            updateFogMotes(fog, clampedDt, LOGICAL_WIDTH, LOGICAL_HEIGHT)
+            return
+        }
 
-        // Camera smoothly follows player within world bounds
-        val targetCamX = (player.x - LOGICAL_WIDTH / 2f).coerceIn(0f, WORLD_WIDTH - LOGICAL_WIDTH)
+        val sceneFloorY = activeScene.fit.floorY
+        player.update(clampedDt, 0f, worldWidth, sceneFloorY)
+
+        // Camera smoothly follows player within this scene's bounds.
+        val targetCamX = cameraXForPlayerX(player.x)
         cameraX += (targetCamX - cameraX) * 0.15f
 
         // Check attack collisions
@@ -305,22 +286,88 @@ class GameWorld(val context: Context) {
         }
 
         // Update damage texts
-        val textIter = damageTexts.iterator()
-        while (textIter.hasNext()) {
-            val dtItem = textIter.next()
-            if (!dtItem.update(clampedDt)) {
-                textIter.remove()
-            }
+        val dtIter = damageTexts.iterator()
+        while (dtIter.hasNext()) {
+            val item = dtIter.next()
+            if (!item.update(clampedDt)) dtIter.remove()
         }
 
         // Update particles
         val partIter = particles.iterator()
         while (partIter.hasNext()) {
             val p = partIter.next()
-            if (!p.update(clampedDt)) {
-                partIter.remove()
-            }
+            if (!p.update(clampedDt)) partIter.remove()
         }
+
+        // Reaching the exit stops normal movement and starts the handover.
+        val exitX = activeScene.definition.exitX
+        if (exitX != null && player.x >= exitX) {
+            beginTransition()
+        }
+    }
+
+    /**
+     * Starts the handover to the next scene.
+     *
+     * Does nothing at the last scene, which has no successor, so the player is simply
+     * stopped by the world bound there.
+     */
+    fun beginTransition() {
+        if (isTransitioning) return
+        val next = activeSceneIndex + 1
+        if (next >= scenes.size) return
+        transitionTargetIndex = next
+        transitionTitle = scenes[next].definition.title
+        transitionPhase = SceneTransitionPhase.FADING_OUT
+        transitionElapsed = 0f
+        fogSeed += 1
+        fog = buildFogMotes(fogSeed, 28, LOGICAL_WIDTH, LOGICAL_HEIGHT)
+    }
+
+    /** Drives the fade / title / fade-in state machine. */
+    private fun advanceTransition(dt: Float) {
+        transitionElapsed += dt
+        when (transitionPhase) {
+            SceneTransitionPhase.FADING_OUT -> {
+                // Fully dark by the end of this phase, so the scene swap is hidden.
+                if (transitionElapsed >= TRANSITION_FADE_OUT) {
+                    transitionElapsed -= TRANSITION_FADE_OUT
+                    if (transitionTargetIndex >= 0) enterScene(transitionTargetIndex)
+                    // enterScene clears the phase, so the handover is restated for the
+                    // title card.
+                    transitionPhase = SceneTransitionPhase.TITLE
+                    transitionElapsed = 0f
+                    transitionTargetIndex = -1
+                    transitionTitle = activeScene.definition.title
+                }
+            }
+
+            SceneTransitionPhase.TITLE -> {
+                if (transitionElapsed >= TRANSITION_TITLE_HOLD) {
+                    transitionElapsed -= TRANSITION_TITLE_HOLD
+                    transitionPhase = SceneTransitionPhase.FADING_IN
+                }
+            }
+
+            SceneTransitionPhase.FADING_IN -> {
+                if (transitionElapsed >= TRANSITION_FADE_IN) {
+                    transitionPhase = SceneTransitionPhase.IDLE
+                    transitionElapsed = 0f
+                    transitionTitle = ""
+                    fog = emptyList()
+                }
+            }
+
+            SceneTransitionPhase.IDLE -> Unit
+        }
+    }
+
+    /** Opacity of the dark veil over the screen, 0 (clear) to 1 (opaque). */
+    private fun fadeAlpha(): Float = when (transitionPhase) {
+        SceneTransitionPhase.FADING_OUT -> min(1f, transitionElapsed / TRANSITION_FADE_OUT)
+        SceneTransitionPhase.TITLE -> 1f
+        SceneTransitionPhase.FADING_IN -> maxOf(0f, 1f - transitionElapsed / TRANSITION_FADE_IN)
+        SceneTransitionPhase.IDLE -> 0f
     }
 
     private fun performAttackHitCheck(damage: Int, isHeavy: Boolean) {
@@ -343,7 +390,7 @@ class GameWorld(val context: Context) {
                         SparkParticle(
                             x = dummy.x + (Random.nextFloat() - 0.5f) * 16f,
                             y = dummy.groundY - dummy.height / 2f + (Random.nextFloat() - 0.5f) * 20f,
-                            vx = kotlin.math.cos(angle) * speed,
+                            vx = cos(angle) * speed,
                             vy = kotlin.math.sin(angle) * speed - 60f,
                             color = if (isHeavy) Color.rgb(255, 200, 80) else Color.rgb(220, 240, 255),
                             size = if (isHeavy) 4f else 3f
@@ -355,55 +402,24 @@ class GameWorld(val context: Context) {
     }
 
     /**
-     * Draws the backdrop once, in world space, at its natural size.
+     * Draws the active scene's backdrop and nothing else.
      *
-     * The artwork is a single finite environment that already covers the viewport
-     * exactly, so it is neither mirrored, repeated, nor flipped. It is anchored to
-     * world (0, 0) and the camera is clamped to the world, so the plate can never
-     * be drawn twice or leave a gap at either edge.
+     * Only one plate is ever drawn, so there is no seam between environments to hide
+     * and no possibility of two environments appearing at once.
      */
-    private fun drawBackdrop(canvas: Canvas) {
-        val bg = bgBitmap
+    fun renderBackdrop(canvas: Canvas) {
+        val scene = activeScene
+        val bg = scene.background
+        val fit = scene.fit
         if (bg == null) {
-            // Fallback dark castle gradient
-            pixelPaint.color = Color.rgb(18, 20, 28)
-            canvas.drawRect(0f, 0f, WORLD_WIDTH, LOGICAL_HEIGHT, pixelPaint)
+            pixelPaint.color = SCENE_FALLBACK_FILL
+            canvas.drawRect(0f, 0f, worldWidth, LOGICAL_HEIGHT, pixelPaint)
             return
         }
-
-        // Forgotten Prison: anchored at world (0, 0), drawn once.
         canvas.drawBitmap(
             bg,
             Rect(0, 0, bg.width, bg.height),
-            RectF(0f, 0f, bg.width * BACKGROUND_SCALE, bg.height * BACKGROUND_SCALE),
-            pixelPaint
-        )
-
-        val cavern = cavernBitmap ?: return
-        val cavernX = BACKGROUND_LOGICAL_WIDTH
-
-        // Flat bands first, so the plate is drawn over them and no seam shows at its
-        // own top and bottom edges.
-        pixelPaint.color = CAVERN_FILL_BELOW
-        canvas.drawRect(cavernX, 0f, cavernX + CAVERN_LOGICAL_WIDTH, LOGICAL_HEIGHT, pixelPaint)
-        if (CAVERN_OFFSET_Y > 0f) {
-            pixelPaint.color = CAVERN_FILL_ABOVE
-            canvas.drawRect(cavernX, 0f, cavernX + CAVERN_LOGICAL_WIDTH, CAVERN_OFFSET_Y, pixelPaint)
-        }
-
-        // Underground Cavern: its own section, immediately right of the prison and in
-        // the same world space, so the single camera transform scrolls across the
-        // boundary and everything stays locked to the world. Drawn exactly once --
-        // never tiled, never mirrored, never flipped.
-        canvas.drawBitmap(
-            cavern,
-            Rect(0, 0, cavern.width, cavern.height),
-            RectF(
-                cavernX,
-                CAVERN_OFFSET_Y,
-                cavernX + cavern.width * CAVERN_SCALE,
-                CAVERN_OFFSET_Y + cavern.height * CAVERN_SCALE
-            ),
+            RectF(fit.offsetX, fit.offsetY, fit.offsetX + fit.drawWidth, fit.offsetY + fit.drawHeight),
             pixelPaint
         )
     }
@@ -419,8 +435,8 @@ class GameWorld(val context: Context) {
     fun renderCharacter(canvas: Canvas) {
         // A cell is drawn square, and the sheet's own display scale is applied so a
         // grid-packed sheet (attack) still matches the strip sheets on screen. The
-        // cell's transparent lower edge is corrected per frame so the visible feet —
-        // and therefore the collision bottom — land exactly on FLOOR_Y.
+        // cell's transparent lower edge is corrected per frame so the visible feet --
+        // and therefore the collision bottom -- land exactly on the scene's floor plane.
         val spriteDisplaySize = animationSystem.displaySizeForCurrentSheet(SPRITE_DISPLAY_SIZE)
         animationSystem.render(
             canvas = canvas,
@@ -433,42 +449,40 @@ class GameWorld(val context: Context) {
         )
     }
 
-    /**
-     * Renders the game world onto the scaled canvas at logical coordinates.
-     */
+    /** Renders the game world onto the scaled canvas at logical coordinates. */
     fun render(canvas: Canvas) {
+        val sceneFloorY = floorY
+
         canvas.save()
-        // Single world -> screen transform. The backdrop, the player, the dummies
-        // and every hitbox all live in the same world space, so a world-fixed
-        // object stays locked to the dungeon while the player walks.
+        // Single world -> screen transform. The backdrop, the player, the dummies and
+        // every hitbox all live in the same world space, so a world-fixed object stays
+        // locked to its scene while the player walks.
         canvas.translate(-cameraX, 0f)
 
-        // 1. Backdrop, drawn once in world space at a single uniform scale.
-        //
-        // The artwork already covers the viewport exactly and the world is
-        // exactly as wide as the artwork, so there is nothing to repeat, mirror
-        // or fill in: the plate is drawn at world (0, 0) and the camera never
-        // leaves [0, 0].
-        drawBackdrop(canvas)
+        // 1. The active scene's backdrop, and only that one, uniformly scaled to cover
+        // the world and cropped where it overflows. No tiling, mirroring or stretching,
+        // and by construction no gap: the plate is at least as large as the area it
+        // covers on both axes.
+        renderBackdrop(canvas)
 
-        // 2. Arena boundary stone pillars, in world space at the arena edges.
+        // 2. Scene boundary stone pillars, at this scene's own world edges.
         //
         // No ground slab or flagstone grid is drawn here on purpose: the backdrop
-        // already renders a detailed stone floor starting at FLOOR_Y, and painting
-        // an opaque rectangle over that area is what previously hid the very
-        // surface the player has to stand on.
+        // already renders a detailed floor starting at floorY, and painting an opaque
+        // rectangle over that area is what previously hid the very surface the player
+        // has to stand on.
         pixelPaint.color = Color.rgb(50, 55, 70)
-        canvas.drawRect(0f, 0f, 24f, FLOOR_Y, pixelPaint)
-        canvas.drawRect(WORLD_WIDTH - 24f, 0f, WORLD_WIDTH, FLOOR_Y, pixelPaint)
+        canvas.drawRect(0f, 0f, 24f, sceneFloorY, pixelPaint)
+        canvas.drawRect(worldWidth - 24f, 0f, worldWidth, sceneFloorY, pixelPaint)
 
-        // 3. Render Training Dummies
+        // 3. Scene objects, at this scene's own world positions.
         for (dummy in dummies) {
             dummy.render(canvas, pixelPaint)
         }
 
         // 4. Character contact shadow, seated on the floor line.
         pixelPaint.color = Color.argb(82, 0, 0, 0)
-        canvas.drawOval(player.x - 18f, FLOOR_Y - 2f, player.x + 18f, FLOOR_Y + 4f, pixelPaint)
+        canvas.drawOval(player.x - 18f, sceneFloorY - 2f, player.x + 18f, sceneFloorY + 4f, pixelPaint)
 
         // 5. Render Character Sprite
         renderCharacter(canvas)
@@ -487,5 +501,108 @@ class GameWorld(val context: Context) {
         }
 
         canvas.restore()
+
+        // 8. The scene handover card, in screen space so it is unaffected by the camera.
+        renderTransition(canvas)
     }
+
+    /**
+     * Draws the scene transition: a dark fade, drifting fog and the area title.
+     *
+     * Deliberately not a loading screen. There is no spinner or progress bar; the
+     * handover is presented as the character moving from one place to the next.
+     */
+    private fun renderTransition(canvas: Canvas) {
+        val alpha = fadeAlpha()
+        if (alpha <= 0f && fog.isEmpty()) return
+
+        // Fog drifts under the veil, brightest while the screen is still dark.
+        if (fog.isNotEmpty()) {
+            val fogAlpha = (90f * (0.35f + 0.65f * alpha)).toInt()
+            fadePaint.color = Color.argb(fogAlpha, 198, 206, 222)
+            for (m in fog) {
+                canvas.drawRect(
+                    m.x - m.size / 2f,
+                    m.y - m.size / 2f,
+                    m.x + m.size / 2f,
+                    m.y + m.size / 2f,
+                    fadePaint
+                )
+            }
+        }
+
+        fadePaint.color = Color.argb((alpha * 255).toInt(), 2, 3, 6)
+        canvas.drawRect(0f, 0f, LOGICAL_WIDTH, LOGICAL_HEIGHT, fadePaint)
+
+        if (transitionPhase != SceneTransitionPhase.TITLE || transitionTitle.isEmpty()) return
+
+        // The title eases in over the first third of the hold, so it settles rather than
+        // snapping on at full strength.
+        val t = min(1f, transitionElapsed / (TRANSITION_TITLE_HOLD * 0.35f))
+        val cx = LOGICAL_WIDTH / 2f
+        val cy = LOGICAL_HEIGHT / 2f
+
+        // A warm ember glow behind the text, as if lit from within the dark.
+        fadePaint.shader = RadialGradient(
+            cx, cy, 190f,
+            Color.argb((0.16f * t * 255).toInt(), 255, 176, 92),
+            Color.TRANSPARENT,
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawRect(cx - 190f, cy - 190f, cx + 190f, cy + 190f, fadePaint)
+        fadePaint.shader = null
+
+        titlePaint.textSize = 26f
+        titlePaint.typeface = android.graphics.Typeface.create(
+            android.graphics.Typeface.SERIF,
+            android.graphics.Typeface.BOLD
+        )
+
+        // Shadow, then the face itself.
+        titlePaint.color = Color.argb((0.6f * t * 255).toInt(), 0, 0, 0)
+        drawSpacedText(canvas, transitionTitle, cx + 1.5f, cy + 1.5f, 3f)
+        titlePaint.color = Color.argb((t * 0.96f * 255).toInt(), 238, 224, 196)
+        drawSpacedText(canvas, transitionTitle, cx, cy, 3f)
+
+        // Hairline rules flanking the title.
+        rulePaint.color = Color.argb((t * 0.5f * 255).toInt(), 214, 180, 122)
+        val halfW = spacedTextWidth(transitionTitle, 3f) / 2f
+        canvas.drawLine(cx - halfW - 44f, cy + 0.5f, cx - halfW - 14f, cy + 0.5f, rulePaint)
+        canvas.drawLine(cx + halfW + 14f, cy + 0.5f, cx + halfW + 44f, cy + 0.5f, rulePaint)
+    }
+
+    /**
+     * Draws [text] centred at ([x], [y]) with manual letter spacing.
+     *
+     * Android's Paint has no portable letterSpacing, and widely tracked small caps are
+     * most of what makes a serif face read as a carved location card rather than body
+     * text.
+     */
+    private fun drawSpacedText(canvas: Canvas, text: String, x: Float, y: Float, spacing: Float) {
+        val startX = x - spacedTextWidth(text, spacing) / 2f
+        var cursor = startX
+        for (ch in text) {
+            val w = titlePaint.measureText(ch.toString())
+            canvas.drawText(ch.toString(), cursor + w / 2f, y, titlePaint)
+            cursor += w + spacing
+        }
+    }
+
+    private fun spacedTextWidth(text: String, spacing: Float): Float {
+        var total = 0f
+        for (ch in text) total += titlePaint.measureText(ch.toString())
+        return total + spacing * (text.length - 1).coerceAtLeast(0)
+    }
+}
+
+/** One scene, bound at runtime: its definition, its image and its resolved geometry. */
+class SceneRuntime(
+    val definition: SceneDefinition,
+    val fit: SceneBackdropFit
+) {
+    /**
+     * The scene's backdrop. Null means the plate is missing, in which case the scene
+     * draws its fallback fill instead.
+     */
+    var background: Bitmap? = null
 }

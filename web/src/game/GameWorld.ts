@@ -1,4 +1,18 @@
 import { DamageText, SparkParticle, TrainingDummy } from './CombatEntity'
+import {
+  buildFogMotes,
+  fitBackdrop,
+  SCENES,
+  STARTING_SCENE_INDEX,
+  TRANSITION_FADE_IN,
+  TRANSITION_FADE_OUT,
+  TRANSITION_TITLE_HOLD,
+  updateFogMotes,
+  type FogMote,
+  type SceneBackdropFit,
+  type SceneDefinition,
+  type SceneTransitionPhase,
+} from './GameScene'
 import { PlayerController, rectsIntersect } from './PlayerController'
 import type { SpriteAnimationSystem } from './SpriteAnimationSystem'
 import { DEFAULT_FOOT_ROW, footOffsetForRow } from './spriteMetrics'
@@ -10,9 +24,25 @@ export interface LoadedImage {
   height: number
 }
 
+/** One scene, bound at runtime: its definition, its image and its resolved geometry. */
+export interface SceneRuntime {
+  readonly definition: SceneDefinition
+  /**
+   * The scene's backdrop. Null means the plate has not been decoded yet (or the
+   * asset is missing), in which case the scene draws its fallback fill instead.
+   */
+  background: LoadedImage | null
+  /** How the backdrop is scaled and cropped to cover this scene's world. */
+  readonly fit: SceneBackdropFit
+}
+
 /**
- * 2D Game World managing world bounds, logical resolution, arena scenery,
- * training combat targets, and particle systems.
+ * 2D Game World managing scenes, logical resolution, combat targets and particles.
+ *
+ * Exactly one scene is active at a time. Its backdrop is the only environment drawn,
+ * scaled to cover that scene's world, and its own bounds and floor plane are what the
+ * player, the dummies and the camera are measured against.
+ *
  * Mirrors GameWorld.kt.
  */
 export class GameWorld {
@@ -20,145 +50,12 @@ export class GameWorld {
   static readonly LOGICAL_HEIGHT = 360
 
   /**
-   * Native pixel size of the arena backdrop (img_arena_bg_hd.png, synced to
-   * bg/arena_bg.png). The backdrop is drawn with a single uniform scale, so any
-   * source row maps to logical Y via: row * LOGICAL_HEIGHT / this.
-   */
-  static readonly BACKGROUND_WIDTH = 1536
-  static readonly BACKGROUND_HEIGHT = 864
-
-  /** Uniform scale the backdrop is drawn at. 360 / 864 is exactly 5/12. */
-  static readonly BACKGROUND_SCALE = GameWorld.LOGICAL_HEIGHT / GameWorld.BACKGROUND_HEIGHT
-
-  /**
-   * Logical size of the backdrop once scaled.
+   * Logical size a 128px sprite cell is drawn at (aspect preserved).
    *
-   * 1536 x 5/12 is exactly 640 and 864 x 5/12 is exactly 360: the artwork is a
-   * single frame that covers the viewport precisely. It is one finite environment,
-   * not a texture, so it is drawn once, never repeated and never mirrored.
+   * A property of the character alone. It is never scaled by a backdrop's size, so
+   * the knight is exactly as large in the cavern as he is in the prison even though
+   * the two artworks need very different scales to fill the screen.
    */
-  static readonly BACKGROUND_LOGICAL_WIDTH = GameWorld.BACKGROUND_WIDTH * GameWorld.BACKGROUND_SCALE
-  static readonly BACKGROUND_LOGICAL_HEIGHT = GameWorld.BACKGROUND_HEIGHT * GameWorld.BACKGROUND_SCALE
-
-  /**
-   * Native pixel size of the Underground Cavern backdrop
-   * (img_underground_cavern_hd.png, synced to bg/cavern_bg.png).
-   */
-  static readonly CAVERN_WIDTH = 1536
-  static readonly CAVERN_HEIGHT = 512
-
-  /**
-   * The cavern is drawn at the *same* uniform scale as the arena, not at a scale
-   * chosen to fill the viewport.
-   *
-   * The cavern art is 512px tall where the arena is 864, so scaling it to cover
-   * 360 logical pixels would need 360/512 rather than 5/12 -- about 1.69x larger.
-   * That would leave the knight, drawn at a fixed SPRITE_DISPLAY_SIZE, standing at
-   * a very different size against the scenery the moment he crossed the boundary.
-   * Sharing one scale keeps the character-to-scenery relationship identical across
-   * the seam, which is what makes the two sections read as one continuous world.
-   */
-  static readonly CAVERN_SCALE = GameWorld.BACKGROUND_SCALE
-
-  /** Logical size of the cavern once scaled: exactly 640 x 213 1/3. */
-  static readonly CAVERN_LOGICAL_WIDTH = GameWorld.CAVERN_WIDTH * GameWorld.CAVERN_SCALE
-  static readonly CAVERN_LOGICAL_HEIGHT = GameWorld.CAVERN_HEIGHT * GameWorld.CAVERN_SCALE
-
-  /**
-   * Width of the playable world: the Forgotten Prison followed by the cavern.
-   *
-   * Each section is one finite environment laid end to end, so the world is exactly
-   * as wide as the two plates together and the camera can scroll between them. With
-   * this width the camera range becomes 0 .. (WORLD_WIDTH - LOGICAL_WIDTH), which is
-   * what turns the previously static single-screen arena into a scrolling world.
-   */
-  static readonly WORLD_WIDTH = GameWorld.BACKGROUND_LOGICAL_WIDTH + GameWorld.CAVERN_LOGICAL_WIDTH
-
-  /**
-   * Centre of the Forgotten Prison, in world units.
-   *
-   * Anchored to the prison plate rather than to the world, because the world now
-   * spans two sections: half the world would put the spawn exactly on the seam
-   * between them and shift both training dummies into the cavern.
-   */
-  static readonly ARENA_CENTER_X = GameWorld.BACKGROUND_LOGICAL_WIDTH / 2
-
-  /**
-   * Initial world X for the player: the arena centre, which leaves the full
-   * half-width of arena on both sides to walk into.
-   */
-  static readonly SPAWN_X = GameWorld.ARENA_CENTER_X
-
-  /**
-   * World X of the first training dummy. Placed to the right of the spawn so the
-   * match opens as player-versus-target, and left untouched thereafter: a fixed
-   * world position, not a screen or player-relative one.
-   */
-  static readonly DUMMY_X = GameWorld.ARENA_CENTER_X + 130
-
-  /** World distance between the two training dummies. */
-  static readonly DUMMY_SPACING = 120
-
-  /**
-   * Row of the visible stone floor surface, measured from the backdrop artwork.
-   *
-   * Row statistics across the image width show a hard horizon: row 532 is still
-   * dark wall (mean 21.6, 18.5% lit, 43.9% of sampled columns agreeing), while row
-   * 533 is the first lit floor row (mean 31.5, 51.2% lit, 68.9% coherent). The
-   * edge is horizontal, so one world-space plane is exact across the arena. The
-   * bright seam further down at row 620 is a flagstone joint *inside* the floor,
-   * not its top edge, and using it left the knight standing in front of the wall.
-   */
-  static readonly BACKGROUND_FLOOR_ROW = 533
-
-  /**
-   * World-space ground / collision plane, in logical pixels.
-   *
-   * The player's visible feet rest exactly on this Y at all times, and it is the Y
-   * the jump impulse starts from and gravity returns to. Derived from the backdrop
-   * rather than guessed, so the knight stands on the drawn stone floor instead of
-   * an arbitrary line near the bottom of the screen.
-   */
-  static readonly FLOOR_Y = (GameWorld.BACKGROUND_FLOOR_ROW * GameWorld.LOGICAL_HEIGHT) / GameWorld.BACKGROUND_HEIGHT
-
-  /**
-   * Row of the cavern's visible floor surface, measured from its artwork the same
-   * way as the arena's.
-   *
-   * Both backdrops share one structure: dark wall, then a lit floor band, then a
-   * dark foreground that runs off the bottom. In the cavern the transition is at
-   * row 391, where the lit fraction of the row jumps 43.2% -> 63.3% and mean
-   * luminance rises 37.2 -> 46.1. That is the same shape of step as the arena's
-   * 532 -> 533 (6.8% -> 19.9% lit, mean 22.3 -> 32.4), so both sections measure
-   * their floor the same way and land on one shared ground plane.
-   */
-  static readonly CAVERN_FLOOR_ROW = 391
-
-  /**
-   * Logical Y at which the cavern plate is drawn.
-   *
-   * The cavern is shorter than the viewport once scaled, and its floor sits lower
-   * within its own frame than the arena's does (391/512 vs 533/864). Offsetting the
-   * plate so its measured floor row lands exactly on FLOOR_Y is what keeps the
-   * walkable surface continuous: the player's collision plane and visible feet stay
-   * on one line across the boundary, so there is no step, gap or floating knight.
-   */
-  static readonly CAVERN_OFFSET_Y = GameWorld.FLOOR_Y - GameWorld.CAVERN_FLOOR_ROW * GameWorld.CAVERN_SCALE
-
-  /**
-   * Flat fills for the two bands the cavern plate does not reach.
-   *
-   * At the shared scale the cavern covers only 213 of the 360 logical pixel rows,
-   * so plain colour fills what is left above and below it. Both are sampled from
-   * the cavern's own outermost rows (row 0 averages rgb(3,6,18), row 511 averages
-   * rgb(0,0,10)), so the flat bands continue the artwork's own near-black cave
-   * darkness. The plate itself is drawn once, unscaled beyond the shared factor
-   * and otherwise untouched -- these fills never stretch, mirror or repeat it.
-   */
-  static readonly CAVERN_FILL_ABOVE = 'rgb(3, 6, 18)'
-  static readonly CAVERN_FILL_BELOW = 'rgb(0, 0, 10)'
-
-  /** Logical size a 128px sprite cell is drawn at (aspect preserved). */
   static readonly SPRITE_DISPLAY_SIZE = 100
 
   /**
@@ -169,76 +66,162 @@ export class GameWorld {
    */
   static readonly SPRITE_FOOT_OFFSET = footOffsetForRow(DEFAULT_FOOT_ROW, GameWorld.SPRITE_DISPLAY_SIZE)
 
+  /** Fallback fill for a scene whose backdrop has not loaded. */
+  private static readonly SCENE_FALLBACK_FILL = 'rgb(18, 20, 28)'
+
   readonly player: PlayerController
-  readonly dummies: TrainingDummy[]
   readonly damageTexts: DamageText[] = []
   readonly particles: SparkParticle[] = []
 
-  private background: LoadedImage | null = null
+  /** Every scene the game knows, in travel order. Only one is drawn at a time. */
+  readonly scenes: SceneRuntime[]
+
+  /** Objects belonging to the active scene. Rebuilt on every scene change. */
+  dummies: TrainingDummy[] = []
+
+  private activeIndex: number
 
   /**
-   * The Underground Cavern plate, the second world section.
-   *
-   * Kept separate from [background] because it is a different image at a different
-   * vertical offset, not a variant of the same one. Null simply means the section
-   * falls back to flat fill.
-   */
-  private cavernBackground: LoadedImage | null = null
-
-  /**
-   * Camera view offset, in world units. Everything in the arena (backdrop, player,
+   * Camera view offset, in world units. Everything in the scene (backdrop, player,
    * dummies, hitboxes) lives in world space and is drawn through this single
-   * transform, so a world-fixed object stays locked to the dungeon as the player
-   * walks.
+   * transform, so a world-fixed object stays locked to its scene as the player walks.
+   *
+   * Recomputed from the active scene's bounds whenever the scene changes, so a
+   * camera never carries over from a scene with different geometry.
    */
   cameraX = 0
 
+  /** Stage of the scene handover; 'idle' whenever gameplay is live. */
+  transitionPhase: SceneTransitionPhase = 'idle'
+  /** Seconds elapsed in the current transition phase. */
+  transitionElapsed = 0
+  /** Scene index the handover will land on, or -1 when nothing is pending. */
+  transitionTargetIndex = -1
+  /** Title shown on the transition card. */
+  transitionTitle = ''
+  /** Drifting cave fog, alive only while a handover is running. */
+  private fog: FogMote[] = []
+  /** Deterministic seed for [fog], varied per handover so it is not a loop. */
+  private fogSeed = 0
+
   constructor(
     readonly animationSystem: SpriteAnimationSystem,
-    background: LoadedImage | null = null,
-    cavernBackground: LoadedImage | null = null,
+    backdrops: Record<string, LoadedImage | null> = {},
   ) {
-    this.player = new PlayerController(animationSystem, GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
-    // Dummies are world fixtures at fixed world X. They are never derived from the
-    // player, and their groundY is the same FLOOR_Y the player stands on.
-    this.dummies = [
-      new TrainingDummy(GameWorld.DUMMY_X, GameWorld.FLOOR_Y),
-      new TrainingDummy(GameWorld.DUMMY_X + GameWorld.DUMMY_SPACING, GameWorld.FLOOR_Y),
-    ]
-    this.background = background
-    this.cavernBackground = cavernBackground
-    // Start with the player already centred, instead of easing in from the left
-    // edge on the first frames of the match.
-    this.cameraX = this.cameraXForPlayerX(this.player.x)
+    this.scenes = SCENES.map((definition) => ({
+      definition,
+      background: backdrops[definition.asset] ?? null,
+      fit: fitBackdrop(
+        definition.sourceWidth,
+        definition.sourceHeight,
+        definition.floorRow,
+        definition.worldWidth,
+        GameWorld.LOGICAL_HEIGHT,
+      ),
+    }))
+    // activeIndex first: the scene's own floor plane is what the player is placed on.
+    this.activeIndex = STARTING_SCENE_INDEX
+    this.player = new PlayerController(animationSystem, this.activeScene.definition.spawnX, this.floorY)
+    this.enterScene(STARTING_SCENE_INDEX)
+  }
+
+  /** Index of the scene currently being played. */
+  get activeSceneIndex(): number {
+    return this.activeIndex
+  }
+
+  /** The scene currently being played. */
+  get activeScene(): SceneRuntime {
+    return this.scenes[this.activeIndex]
+  }
+
+  /** Width of the active scene's world, in logical pixels. */
+  get worldWidth(): number {
+    return this.activeScene.definition.worldWidth
+  }
+
+  /**
+   * Ground plane of the active scene, in logical pixels.
+   *
+   * The player's visible feet rest exactly on this, and it is what the jump impulse
+   * starts from and gravity returns to. It comes from the scene's own artwork, so
+   * the knight always stands on that scene's drawn floor rather than a line carried
+   * over from somewhere else.
+   */
+  get floorY(): number {
+    return this.activeScene.fit.floorY
+  }
+
+  /** Largest legal camera offset for the active scene. Always >= 0. */
+  get maxCameraX(): number {
+    return Math.max(0, this.worldWidth - GameWorld.LOGICAL_WIDTH)
+  }
+
+  /** True while a scene handover is running and gameplay is suspended. */
+  get isTransitioning(): boolean {
+    return this.transitionPhase !== 'idle'
   }
 
   /** Camera offset that puts a given world X at the centre of the viewport. */
   cameraXForPlayerX(worldX: number): number {
-    return Math.min(Math.max(worldX - GameWorld.LOGICAL_WIDTH / 2, 0), GameWorld.WORLD_WIDTH - GameWorld.LOGICAL_WIDTH)
+    return Math.min(Math.max(worldX - GameWorld.LOGICAL_WIDTH / 2, 0), this.maxCameraX)
   }
 
-  setBackground(background: LoadedImage | null): void {
-    this.background = background
+  /** Attaches a decoded backdrop to the scene that declares it. */
+  setBackground(definitionId: string, image: LoadedImage | null): void {
+    const scene = this.scenes.find((s) => s.definition.id === definitionId)
+    if (scene) scene.background = image
   }
 
-  setCavernBackground(cavernBackground: LoadedImage | null): void {
-    this.cavernBackground = cavernBackground
+  /**
+   * Switches to a scene: rebuilds its objects, places the player at its entrance and
+   * snaps the camera to the new bounds.
+   *
+   * The camera is set outright rather than eased, because a camera that drifts in
+   * from a previous scene's position would show the old framing sliding across the
+   * new one. Nothing from the previous scene survives except the player and the
+   * persistent HUD.
+   */
+  enterScene(index: number): void {
+    this.activeIndex = Math.min(Math.max(index, 0), this.scenes.length - 1)
+    const scene = this.activeScene
+    this.dummies = scene.definition.dummyXs.map((x) => new TrainingDummy(x, scene.fit.floorY))
+    this.damageTexts.length = 0
+    this.particles.length = 0
+    this.player.resetPlayer(scene.definition.spawnX, scene.fit.floorY)
+    this.cameraX = this.cameraXForPlayerX(this.player.x)
+    this.transitionPhase = 'idle'
+    this.transitionElapsed = 0
+    this.transitionTargetIndex = -1
+    this.fog = []
+  }
+
+  /** Returns the player to the active scene's entrance without changing scene. */
+  respawn(): void {
+    this.player.resetPlayer(this.activeScene.definition.spawnX, this.floorY)
+    this.cameraX = this.cameraXForPlayerX(this.player.x)
   }
 
   update(dt: number): void {
     const clampedDt = Math.min(0.05, Math.max(0.001, dt))
 
-    // Update player
-    this.player.update(clampedDt, 0, GameWorld.WORLD_WIDTH, GameWorld.FLOOR_Y)
+    // A running handover owns the clock: gameplay is suspended, and the scene swap
+    // happens behind the fully opaque part of the fade so it is never seen.
+    if (this.isTransitioning) {
+      this.advanceTransition(clampedDt)
+      updateFogMotes(this.fog, clampedDt, GameWorld.LOGICAL_WIDTH, GameWorld.LOGICAL_HEIGHT)
+      return
+    }
 
-    // Camera smoothly follows player within world bounds
-    const targetCamX = Math.min(
-      Math.max(this.player.x - GameWorld.LOGICAL_WIDTH / 2, 0),
-      GameWorld.WORLD_WIDTH - GameWorld.LOGICAL_WIDTH,
-    )
+    const scene = this.activeScene
+    const floorY = scene.fit.floorY
+
+    this.player.update(clampedDt, 0, this.worldWidth, floorY)
+
+    // Camera smoothly follows player within this scene's bounds.
+    const targetCamX = this.cameraXForPlayerX(this.player.x)
     this.cameraX += (targetCamX - this.cameraX) * 0.15
 
-    // Check attack collisions
     if (this.player.shouldCheckAttackHit()) {
       this.performAttackHitCheck(18, false)
     }
@@ -256,6 +239,79 @@ export class GameWorld {
 
     for (let i = this.particles.length - 1; i >= 0; i--) {
       if (!this.particles[i].update(clampedDt)) this.particles.splice(i, 1)
+    }
+
+    // Reaching the exit stops normal movement and starts the handover.
+    const exitX = scene.definition.exitX
+    if (exitX !== null && this.player.x >= exitX) {
+      this.beginTransition()
+    }
+  }
+
+  /**
+   * Starts the handover to the next scene.
+   *
+   * Does nothing at the last scene, which has no successor, so the player is simply
+   * stopped by the world bound there.
+   */
+  beginTransition(): void {
+    if (this.isTransitioning) return
+    const next = this.activeIndex + 1
+    if (next >= this.scenes.length) return
+    this.transitionTargetIndex = next
+    this.transitionTitle = this.scenes[next].definition.title
+    this.transitionPhase = 'fadingOut'
+    this.transitionElapsed = 0
+    this.fogSeed += 1
+    this.fog = buildFogMotes(this.fogSeed, 28, GameWorld.LOGICAL_WIDTH, GameWorld.LOGICAL_HEIGHT)
+  }
+
+  /** Drives the fade / title / fade-in state machine. */
+  private advanceTransition(dt: number): void {
+    this.transitionElapsed += dt
+    switch (this.transitionPhase) {
+      case 'fadingOut':
+        // Fully dark by the end of this phase, so the scene swap is hidden.
+        if (this.transitionElapsed >= TRANSITION_FADE_OUT) {
+          this.transitionElapsed -= TRANSITION_FADE_OUT
+          if (this.transitionTargetIndex >= 0) this.enterScene(this.transitionTargetIndex)
+          // enterScene clears the phase, so the handover is restated for the title.
+          this.transitionPhase = 'title'
+          this.transitionElapsed = 0
+          this.transitionTargetIndex = -1
+          this.transitionTitle = this.activeScene.definition.title
+        }
+        break
+      case 'title':
+        if (this.transitionElapsed >= TRANSITION_TITLE_HOLD) {
+          this.transitionElapsed -= TRANSITION_TITLE_HOLD
+          this.transitionPhase = 'fadingIn'
+        }
+        break
+      case 'fadingIn':
+        if (this.transitionElapsed >= TRANSITION_FADE_IN) {
+          this.transitionPhase = 'idle'
+          this.transitionElapsed = 0
+          this.transitionTitle = ''
+          this.fog = []
+        }
+        break
+      default:
+        break
+    }
+  }
+
+  /** Opacity of the dark veil over the screen, 0 (clear) to 1 (opaque). */
+  private fadeAlpha(): number {
+    switch (this.transitionPhase) {
+      case 'fadingOut':
+        return Math.min(1, this.transitionElapsed / TRANSITION_FADE_OUT)
+      case 'title':
+        return 1
+      case 'fadingIn':
+        return Math.max(0, 1 - this.transitionElapsed / TRANSITION_FADE_IN)
+      default:
+        return 0
     }
   }
 
@@ -291,78 +347,23 @@ export class GameWorld {
   }
 
   /**
-   * Draws the backdrop once, in world space, at its natural size.
+   * Draws the active scene's backdrop and nothing else.
    *
-   * The artwork is a single finite environment that already covers the viewport
-   * exactly, so it is neither mirrored, repeated, nor flipped. It is anchored to
-   * world (0, 0) and the camera is clamped to the world, so the plate can never
-   * be drawn twice or leave a gap at either edge.
-   */
-  /**
-   * Draws the world backdrop and nothing else, through the real drawing path.
-   *
-   * Split out of {@link render} for the same reason as {@link renderCharacter}: so
-   * headless verification can capture the backdrop exactly as the game composes it
-   * and use it as a subtraction reference. Duplicating the two-plate composition
-   * in a harness would let the reference drift from the real thing, which would
-   * then show up as phantom "characters" wherever the two disagree.
+   * Split out of {@link render} so headless verification can capture the backdrop
+   * exactly as the game composes it and use it as a subtraction reference. Only one
+   * plate is ever drawn, so there is no seam between environments to hide and no
+   * possibility of two environments appearing at once.
    */
   renderBackdrop(ctx: CanvasRenderingContext2D): void {
-    this.drawBackdrop(ctx)
-  }
-
-  private drawBackdrop(ctx: CanvasRenderingContext2D): void {
-    const bg = this.background
+    const scene = this.activeScene
+    const bg = scene.background
+    const { fit } = scene
     if (!bg) {
-      // Fallback dark castle gradient
-      ctx.fillStyle = 'rgb(18, 20, 28)'
-      ctx.fillRect(0, 0, GameWorld.WORLD_WIDTH, GameWorld.LOGICAL_HEIGHT)
+      ctx.fillStyle = GameWorld.SCENE_FALLBACK_FILL
+      ctx.fillRect(0, 0, this.worldWidth, GameWorld.LOGICAL_HEIGHT)
       return
     }
-
-    // Forgotten Prison: anchored at world (0, 0), drawn once.
-    ctx.drawImage(
-      bg.image,
-      0,
-      0,
-      bg.width,
-      bg.height,
-      0,
-      0,
-      bg.width * GameWorld.BACKGROUND_SCALE,
-      bg.height * GameWorld.BACKGROUND_SCALE,
-    )
-
-    const cavern = this.cavernBackground
-    if (!cavern) return
-
-    const cavernX = GameWorld.BACKGROUND_LOGICAL_WIDTH
-    // Flat bands first, so the plate is drawn over them and no seam shows at the
-    // plate's own top and bottom edges.
-    ctx.fillStyle = GameWorld.CAVERN_FILL_BELOW
-    ctx.fillRect(cavernX, 0, GameWorld.CAVERN_LOGICAL_WIDTH, GameWorld.LOGICAL_HEIGHT)
-    if (GameWorld.CAVERN_OFFSET_Y > 0) {
-      ctx.fillStyle = GameWorld.CAVERN_FILL_ABOVE
-      ctx.fillRect(cavernX, 0, GameWorld.CAVERN_LOGICAL_WIDTH, GameWorld.CAVERN_OFFSET_Y)
-    }
-
-    // Underground Cavern: its own section, immediately to the right of the prison
-    // and in the same world space, so the single camera transform scrolls across
-    // the boundary and everything stays locked to the world.
-    //
-    // Drawn exactly once, at its own x offset and vertical alignment. Never tiled,
-    // never mirrored, never flipped: the two plates are the whole world.
-    ctx.drawImage(
-      cavern.image,
-      0,
-      0,
-      cavern.width,
-      cavern.height,
-      cavernX,
-      GameWorld.CAVERN_OFFSET_Y,
-      cavern.width * GameWorld.CAVERN_SCALE,
-      cavern.height * GameWorld.CAVERN_SCALE,
-    )
+    ctx.drawImage(bg.image, 0, 0, bg.width, bg.height, fit.offsetX, fit.offsetY, fit.drawWidth, fit.drawHeight)
   }
 
   /**
@@ -377,7 +378,7 @@ export class GameWorld {
     // A cell is drawn square, and the sheet's own display scale is applied so a
     // grid-packed sheet (attack) still matches the strip sheets on screen. The
     // cell's transparent lower edge is corrected per frame so the visible feet —
-    // and therefore the collision bottom — land exactly on FLOOR_Y.
+    // and therefore the collision bottom — land exactly on the scene's floor plane.
     const spriteDisplaySize = this.animationSystem.displaySizeForCurrentSheet(GameWorld.SPRITE_DISPLAY_SIZE)
     this.animationSystem.render(
       ctx,
@@ -391,31 +392,31 @@ export class GameWorld {
 
   /** Renders the game world. The ctx is already in logical coordinates. */
   render(ctx: CanvasRenderingContext2D): void {
+    const floorY = this.floorY
+
     ctx.save()
     // Single world -> screen transform. The backdrop, the player, the dummies and
     // every hitbox all live in the same world space, so a world-fixed object stays
-    // locked to the dungeon while the player walks.
+    // locked to its scene while the player walks.
     ctx.translate(-this.cameraX, 0)
 
-    // 1. Backdrop, drawn once in world space at a single uniform scale.
-    //
-    // The artwork already covers the viewport exactly and the world is exactly as
-    // wide as the artwork, so there is nothing to repeat, mirror or fill in: the
-    // plate is drawn at world (0, 0) and the camera never leaves [0, 0].
-    this.drawBackdrop(ctx)
+    // 1. The active scene's backdrop, and only that one, uniformly scaled to cover
+    // the world and cropped where it overflows. No tiling, mirroring or stretching,
+    // and by construction no gap: the plate is at least as large as the area it
+    // covers on both axes.
+    this.renderBackdrop(ctx)
 
-    // 2. Arena boundary stone pillars, in world space at the arena edges.
+    // 2. Scene boundary stone pillars, at this scene's own world edges.
     //
     // No ground slab or flagstone grid is drawn here on purpose: the backdrop
-    // already renders a detailed stone floor starting at FLOOR_Y, and painting an
-    // opaque rectangle over that area is what previously hid the very surface the
-    // player has to stand on.
+    // already renders a detailed floor starting at floorY, and painting an opaque
+    // rectangle over that area is what previously hid the very surface the player
+    // has to stand on.
     ctx.fillStyle = 'rgb(50, 55, 70)'
-    ctx.fillRect(0, 0, 24, GameWorld.FLOOR_Y)
-    ctx.fillRect(GameWorld.WORLD_WIDTH - 24, 0, GameWorld.WORLD_WIDTH, GameWorld.FLOOR_Y)
+    ctx.fillRect(0, 0, 24, floorY)
+    ctx.fillRect(this.worldWidth - 24, 0, this.worldWidth, floorY)
 
-    // 3. Render Training Dummies. Their x and groundY are world values, so these
-    // draw at world position and the camera transform handles the rest.
+    // 3. Scene objects, at this scene's own world positions.
     for (const dummy of this.dummies) {
       dummy.render(ctx)
     }
@@ -423,12 +424,11 @@ export class GameWorld {
     // 4. Character contact shadow, seated on the floor line.
     ctx.fillStyle = 'rgba(0, 0, 0, 0.32)'
     ctx.beginPath()
-    ctx.ellipse(this.player.x, GameWorld.FLOOR_Y + 1, 18, 3, 0, 0, Math.PI * 2)
+    ctx.ellipse(this.player.x, floorY + 1, 18, 3, 0, 0, Math.PI * 2)
     ctx.fill()
 
     // 5. Render Character Sprite
     this.renderCharacter(ctx)
-
 
     // 6. Render Particles
     for (const p of this.particles) {
@@ -448,5 +448,90 @@ export class GameWorld {
     }
 
     ctx.restore()
+
+    // 8. The scene handover card, in screen space so it is unaffected by the camera.
+    this.renderTransition(ctx)
+  }
+
+  /**
+   * Draws the scene transition: a dark fade, drifting fog and the area title.
+   *
+   * Deliberately not a loading screen. There is no spinner or progress bar; the
+   * handover is presented as the character moving from one place to the next.
+   */
+  private renderTransition(ctx: CanvasRenderingContext2D): void {
+    const alpha = this.fadeAlpha()
+    if (alpha <= 0 && this.fog.length === 0) return
+
+    // Fog drifts under the veil, brightest while the screen is still dark.
+    if (this.fog.length > 0) {
+      const fogAlpha = 90 * (0.35 + 0.65 * alpha)
+      ctx.fillStyle = `rgba(198, 206, 222, ${(fogAlpha / 255).toFixed(3)})`
+      for (const m of this.fog) {
+        ctx.fillRect(m.x - m.size / 2, m.y - m.size / 2, m.size, m.size)
+      }
+    }
+
+    ctx.fillStyle = `rgba(2, 3, 6, ${alpha.toFixed(3)})`
+    ctx.fillRect(0, 0, GameWorld.LOGICAL_WIDTH, GameWorld.LOGICAL_HEIGHT)
+
+    if (this.transitionPhase !== 'title' || !this.transitionTitle) return
+
+    // The title eases in over the first third of the hold, so it settles rather than
+    // snapping on at full strength.
+    const t = Math.min(1, this.transitionElapsed / (TRANSITION_TITLE_HOLD * 0.35))
+    const cx = GameWorld.LOGICAL_WIDTH / 2
+    const cy = GameWorld.LOGICAL_HEIGHT / 2
+
+    ctx.save()
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+
+    // A warm ember glow behind the text, as if lit from within the dark.
+    const glow = ctx.createRadialGradient(cx, cy, 4, cx, cy, 190)
+    glow.addColorStop(0, `rgba(255, 176, 92, ${(0.16 * t).toFixed(3)})`)
+    glow.addColorStop(1, 'rgba(255, 176, 92, 0)')
+    ctx.fillStyle = glow
+    ctx.fillRect(0, cy - 190, GameWorld.LOGICAL_WIDTH, 380)
+
+    ctx.font = 'bold 26px Georgia, "Times New Roman", serif'
+    ctx.fillStyle = `rgba(0, 0, 0, ${(0.6 * t).toFixed(3)})`
+    this.drawSpacedText(ctx, this.transitionTitle, cx + 1.5, cy + 1.5, 3)
+    ctx.fillStyle = `rgba(238, 224, 196, ${(t * 0.96).toFixed(3)})`
+    this.drawSpacedText(ctx, this.transitionTitle, cx, cy, 3)
+
+    // Hairline rules flanking the title.
+    const halfW = this.spacedTextWidth(ctx, this.transitionTitle, 3) / 2
+    ctx.strokeStyle = `rgba(214, 180, 122, ${(t * 0.5).toFixed(3)})`
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(cx - halfW - 44, cy + 0.5)
+    ctx.lineTo(cx - halfW - 14, cy + 0.5)
+    ctx.moveTo(cx + halfW + 14, cy + 0.5)
+    ctx.lineTo(cx + halfW + 44, cy + 0.5)
+    ctx.stroke()
+
+    ctx.restore()
+  }
+
+  /**
+   * Draws `text` centred at (x, y) with manual letter spacing.
+   *
+   * Canvas has no portable letterSpacing, and widely tracked small caps are most of
+   * what makes a serif face read as a carved location card rather than body text.
+   */
+  private drawSpacedText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, spacing: number): void {
+    const startX = x - this.spacedTextWidth(ctx, text, spacing) / 2
+    let cursor = startX
+    for (const ch of text) {
+      ctx.fillText(ch, cursor + ctx.measureText(ch).width / 2, y)
+      cursor += ctx.measureText(ch).width + spacing
+    }
+  }
+
+  private spacedTextWidth(ctx: CanvasRenderingContext2D, text: string, spacing: number): number {
+    let total = 0
+    for (const ch of text) total += ctx.measureText(ch).width
+    return total + spacing * Math.max(0, [...text].length - 1)
   }
 }

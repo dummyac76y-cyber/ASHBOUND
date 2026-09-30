@@ -84,8 +84,11 @@ await page.evaluate(() => {
     b.translate(g.offX(), g.offY())
     b.scale(s, s)
     b.translate(-g.world.cameraX, 0)
-    const bg = g.world.background
-    b.drawImage(bg.image, 0, 0, bg.width, bg.height, 0, 0, bg.width * g.GameWorld.BACKGROUND_SCALE, bg.height * g.GameWorld.BACKGROUND_SCALE)
+    // The active scene's own plate, drawn through its own fit rather than a shared
+    // scale: each scene is scaled and cropped to fill independently.
+    const bg = g.world.activeScene.background
+    const fit = g.world.activeScene.fit
+    b.drawImage(bg.image, 0, 0, bg.width, bg.height, fit.offsetX, fit.offsetY, fit.drawWidth, fit.drawHeight)
     return b.getImageData(0, 0, c.width, c.height).data
   }
 
@@ -138,7 +141,7 @@ await page.evaluate(() => {
   }
 })
 
-const floorY = await page.evaluate(() => window.__game.GameWorld.FLOOR_Y)
+const floorY = await page.evaluate(() => window.__game.world.floorY)
 
 console.log('CHARACTER SIZE: every sheet renders the character the same size')
 // Measured across every frame of every sheet, and compared on the median. The

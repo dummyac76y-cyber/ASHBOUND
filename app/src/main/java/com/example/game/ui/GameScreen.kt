@@ -118,7 +118,7 @@ fun GameScreen(modifier: Modifier = Modifier) {
             fps = fps,
             onOpenInspector = { showInspector = true },
             onResetPosition = {
-                gameWorld.player.resetPlayer(300f, GameWorld.FLOOR_Y)
+                gameWorld.respawn()
             }
         )
 

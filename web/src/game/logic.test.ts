@@ -6,6 +6,13 @@
  *   node --experimental-strip-types --no-warnings src/game/logic.test.ts
  */
 import { GameWorld } from './GameWorld.ts'
+import {
+  FORGOTTEN_PRISON,
+  SCENES,
+  UNDERGROUND_CAVERN,
+  fitBackdrop,
+  TRANSITION_TOTAL,
+} from './GameScene.ts'
 import { PlayerController, rectsIntersect } from './PlayerController.ts'
 import { PlayerAction } from './PlayerAction.ts'
 import type { SpriteAnimationSystem } from './SpriteAnimationSystem.ts'
@@ -53,9 +60,39 @@ function stubAnimations() {
   return system as unknown as SpriteAnimationSystem & typeof system
 }
 
+// Most of these tests exercise the opening scene, so they read its geometry from the
+// scene definition rather than from the world, whose scene can now change.
+const OPENING_FIT = fitBackdrop(
+  FORGOTTEN_PRISON.sourceWidth,
+  FORGOTTEN_PRISON.sourceHeight,
+  FORGOTTEN_PRISON.floorRow,
+  FORGOTTEN_PRISON.worldWidth,
+  GameWorld.LOGICAL_HEIGHT,
+)
+const FLOOR_Y = OPENING_FIT.floorY
+const SPAWN_X = FORGOTTEN_PRISON.spawnX
+const WORLD_WIDTH = FORGOTTEN_PRISON.worldWidth
+
 const anim = stubAnimations()
-const world = new GameWorld(anim, null)
+const world = new GameWorld(anim)
 const player = world.player
+
+/**
+ * Returns the shared world to the opening scene.
+ *
+ * Scenes are real state now: a block that walks the player into an exit genuinely
+ * moves the shared world on to the next environment, which would silently change the
+ * floor plane every later block measures against. Blocks that walk that far call
+ * this first, so they do not inherit each other's scene.
+ */
+function resetWorld(): void {
+  // resetPlayer() intentionally keeps held input -- releasing the stick is the
+  // caller's job -- so neutralise it here too. Otherwise a leftover "walk right"
+  // from an earlier block keeps walking during this one, reaches the exit and hands
+  // the world over mid-test.
+  world.player.setMovementInput(0)
+  world.enterScene(0)
+}
 
 console.log('rect intersection')
 check('overlapping rects intersect', rectsIntersect({ left: 0, top: 0, right: 10, bottom: 10 }, { left: 5, top: 5, right: 15, bottom: 15 }))
@@ -69,15 +106,15 @@ check(
 )
 
 console.log('spawn state')
-check('player spawns on the floor', player.groundY === GameWorld.FLOOR_Y, `got ${player.groundY}`)
-check('player starts at spawn x', player.x === GameWorld.SPAWN_X, `got ${player.x}`)
+check('player spawns on the floor', player.groundY === FLOOR_Y, `got ${player.groundY}`)
+check('player starts at spawn x', player.x === SPAWN_X, `got ${player.x}`)
 check('starts facing right', player.isFacingRight)
 check('starts on IDLE', anim.currentAction === PlayerAction.IDLE)
 
 console.log('movement + walk state')
 player.setMovementInput(1)
 world.update(1 / 60)
-check('moves right', player.x > GameWorld.SPAWN_X, `got ${player.x}`)
+check('moves right', player.x > SPAWN_X, `got ${player.x}`)
 check('still facing right', player.isFacingRight)
 check('enters WALK', anim.currentAction === PlayerAction.WALK, `got ${anim.currentAction}`)
 check('vx matches walk speed', Math.abs(player.vx - 150) < 1, `got ${player.vx}`)
@@ -96,16 +133,17 @@ for (let i = 0; i < 600; i++) world.update(1 / 60)
 check('clamped to left bound', player.x >= player.width / 2 - 0.001, `got ${player.x}`)
 player.setMovementInput(1)
 for (let i = 0; i < 1200; i++) world.update(1 / 60)
-check('clamped to right bound', player.x <= GameWorld.WORLD_WIDTH - player.width / 2 + 0.001, `got ${player.x}`)
+check('clamped to right bound', player.x <= WORLD_WIDTH - player.width / 2 + 0.001, `got ${player.x}`)
 
+resetWorld()
 console.log('jump')
-player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+player.resetPlayer(SPAWN_X, FLOOR_Y)
 check('jump accepted while grounded', player.onJump())
 check('airborne after jump', !player.isGrounded)
 check('JUMP state while airborne', anim.currentAction === PlayerAction.JUMP, `got ${anim.currentAction}`)
 check('jump rejected while airborne', !player.onJump())
 for (let i = 0; i < 200; i++) world.update(1 / 60)
-check('lands back on the floor', player.isGrounded && Math.abs(player.groundY - GameWorld.FLOOR_Y) < 0.001)
+check('lands back on the floor', player.isGrounded && Math.abs(player.groundY - FLOOR_Y) < 0.001)
 
 console.log('dash')
 const staminaBefore = player.stamina
@@ -118,7 +156,7 @@ for (let i = 0; i < 30; i++) world.update(1 / 60)
 check('invulnerability ends after dash', !player.isInvulnerable)
 
 console.log('attack hit detection')
-player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+player.resetPlayer(SPAWN_X, FLOOR_Y)
 const dummy = world.dummies[0]
 player.x = dummy.x - 30
 player.isFacingRight = true
@@ -146,7 +184,7 @@ console.log('the hit waits for the blade instead of landing on the windup')
 // Every frame before the window is a windup frame: the swing must not have
 // connected yet, so no damage and no effect.
 for (let f = 0; f < attackWindow[0]; f++) {
-  player.resetPlayer(dummy.x - 30, GameWorld.FLOOR_Y)
+  player.resetPlayer(dummy.x - 30, FLOOR_Y)
   player.isFacingRight = true
   player.onAttack()
   const hp = dummy.hp
@@ -156,7 +194,7 @@ for (let f = 0; f < attackWindow[0]; f++) {
 }
 
 // The last frame of the window still connects.
-player.resetPlayer(dummy.x - 30, GameWorld.FLOOR_Y)
+player.resetPlayer(dummy.x - 30, FLOOR_Y)
 player.isFacingRight = true
 player.onAttack()
 const lateHp = dummy.hp
@@ -168,7 +206,7 @@ check('light attack still connects on the last window frame', dummy.hp === lateH
 check('a swing cannot hit twice', !player.shouldCheckAttackHit())
 for (let f = attackWindow[0]; f <= attackWindow[1]; f++) anim.currentFrameIndex = f
 check('a swing cannot hit twice across the window', !player.shouldCheckAttackHit())
-player.resetPlayer(dummy.x - 30, GameWorld.FLOOR_Y)
+player.resetPlayer(dummy.x - 30, FLOOR_Y)
 player.isFacingRight = true
 player.onAttack()
 anim.currentFrameIndex = attackWindow[0]
@@ -177,7 +215,7 @@ check('a second swing hits again', dummy.hp < lateHp, `got ${dummy.hp} from ${la
 
 console.log('heavy attack')
 for (let f = 0; f < heavyWindow[0]; f++) {
-  player.resetPlayer(dummy.x - 30, GameWorld.FLOOR_Y)
+  player.resetPlayer(dummy.x - 30, FLOOR_Y)
   player.isFacingRight = true
   player.onHeavyAttack()
   const hp = dummy.hp
@@ -185,7 +223,7 @@ for (let f = 0; f < heavyWindow[0]; f++) {
   world.update(1 / 60)
   check(`heavy attack deals no damage on windup frame ${f}`, dummy.hp === hp, `took ${hp - dummy.hp} too early`)
 }
-player.resetPlayer(dummy.x - 30, GameWorld.FLOOR_Y)
+player.resetPlayer(dummy.x - 30, FLOOR_Y)
 player.isFacingRight = true
 player.onHeavyAttack()
 const heavyBefore = dummy.hp
@@ -194,7 +232,7 @@ world.update(1 / 60)
 check('dummy took heavy damage', dummy.hp === heavyBefore - 45, `got ${dummy.hp} from ${heavyBefore}`)
 
 console.log('attack out of range')
-player.resetPlayer(dummy.x - 300, GameWorld.FLOOR_Y)
+player.resetPlayer(dummy.x - 300, FLOOR_Y)
 const missBefore = dummy.hp
 check('attack still animates out of range', player.onAttack())
 anim.currentFrameIndex = attackWindow[0]
@@ -202,7 +240,7 @@ world.update(1 / 60)
 check('dummy untouched out of range', dummy.hp === missBefore, `got ${dummy.hp}`)
 
 console.log('attack cannot be started mid-air')
-player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+player.resetPlayer(SPAWN_X, FLOOR_Y)
 player.onJump()
 check('airborne attack rejected', !player.onAttack())
 player.onHurt(200)
@@ -210,7 +248,7 @@ for (let i = 0; i < 200; i++) world.update(1 / 60)
 check('lands after hurt too', player.isGrounded)
 
 console.log('block deflection')
-player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+player.resetPlayer(SPAWN_X, FLOOR_Y)
 player.setBlockActive(true)
 world.update(1 / 60)
 check('blocking state engaged', player.isBlocking)
@@ -220,30 +258,47 @@ check('block still chips hp', player.hp < blockHp && player.hp > blockHp - 18, `
 player.setBlockActive(false)
 
 console.log('hurt + death')
-player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+player.resetPlayer(SPAWN_X, FLOOR_Y)
 check('unblocked hit connects', player.onHurt(18) === true)
 check('hp reduced', player.hp === 82, `got ${player.hp}`)
 check('HURT state active', anim.currentAction === PlayerAction.HURT, `got ${anim.currentAction}`)
 player.onHurt(1000)
 check('death state at 0 hp', anim.currentAction === PlayerAction.DEATH, `got ${anim.currentAction}`)
 check('dead player cannot be hurt again', player.onHurt(10) === false)
-player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+player.resetPlayer(SPAWN_X, FLOOR_Y)
 check('reset restores hp', player.hp === player.maxHp)
 check('reset returns to IDLE', anim.currentAction === PlayerAction.IDLE)
 
 console.log('stamina regen')
-player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+player.resetPlayer(SPAWN_X, FLOOR_Y)
 player.stamina = 50
 for (let i = 0; i < 60; i++) world.update(1 / 60)
 check('stamina regenerates at 20/s', Math.abs(player.stamina - 70) < 0.5, `got ${player.stamina}`)
 
+resetWorld()
 console.log('camera')
-player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
-for (let i = 0; i < 300; i++) world.update(1 / 60)
-check('camera stays within world bounds', world.cameraX >= 0 && world.cameraX <= GameWorld.WORLD_WIDTH - GameWorld.LOGICAL_WIDTH, `got ${world.cameraX}`)
+player.resetPlayer(SPAWN_X, FLOOR_Y)
+player.setMovementInput(-1)
+for (let i = 0; i < 200; i++) world.update(1 / 60)
+player.setMovementInput(0)
+check(
+  'camera stays within the active scene bounds',
+  world.cameraX >= 0 && world.cameraX <= world.maxCameraX,
+  `got ${world.cameraX}, allowed 0..${world.maxCameraX}`,
+)
+check(
+  'a scene exactly one viewport wide pins the camera at 0',
+  world.maxCameraX === 0 && world.cameraX === 0,
+  `max ${world.maxCameraX}, cameraX ${world.cameraX}`,
+)
+check(
+  'cameraXForPlayerX clamps to the scene at both extremes',
+  world.cameraXForPlayerX(-500) === 0 && world.cameraXForPlayerX(99999) === world.maxCameraX,
+  `${world.cameraXForPlayerX(-500)} .. ${world.cameraXForPlayerX(99999)}`,
+)
 
 console.log('dt clamping')
-player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+player.resetPlayer(SPAWN_X, FLOOR_Y)
 const xBefore = player.x
 world.update(10) // a huge stall must not teleport the player
 check('huge dt is clamped', Math.abs(player.x - xBefore) < 20, `moved ${player.x - xBefore}px`)
@@ -256,24 +311,25 @@ check('solo controller defaults sane', solo.width === 44 && solo.height === 70 &
 // World space: the dummies are arena fixtures, not screen or player-relative.
 // ---------------------------------------------------------------------------
 
-console.log('player spawns at the arena centre')
+console.log('the opening scene places the player at its own entrance')
 // A fresh world, so these read the real match-start state rather than whatever
 // the earlier blocks left the shared `world` in.
 {
-const spawnWorld = new GameWorld(stubAnimations(), null)
+const spawnWorld = new GameWorld(stubAnimations())
+const scene = spawnWorld.scenes[spawnWorld.activeSceneIndex]
+check('the game opens on the Forgotten Prison', scene.definition.id === FORGOTTEN_PRISON.id, `got ${scene.definition.id}`)
+check('spawn X is the opening scene entrance', scene.definition.spawnX === SPAWN_X, `got ${scene.definition.spawnX}`)
+check('player starts at the scene spawn X', Math.abs(spawnWorld.player.x - scene.definition.spawnX) < 1e-9, `got ${spawnWorld.player.x}`)
 check(
-  'ARENA_CENTER_X is the arena section centre, not the world centre',
-  GameWorld.ARENA_CENTER_X === GameWorld.BACKGROUND_LOGICAL_WIDTH / 2 &&
-    GameWorld.ARENA_CENTER_X !== GameWorld.WORLD_WIDTH / 2,
-  `got ${GameWorld.ARENA_CENTER_X}, world centre ${GameWorld.WORLD_WIDTH / 2}`,
+  'player starts on the opening scene floor plane',
+  Math.abs(spawnWorld.player.groundY - scene.fit.floorY) < 1e-9,
+  `got ${spawnWorld.player.groundY}, scene floor ${scene.fit.floorY}`,
 )
-check('spawn X is the arena centre', GameWorld.SPAWN_X === GameWorld.ARENA_CENTER_X, `got ${GameWorld.SPAWN_X}`)
-check('player starts at the spawn X', Math.abs(spawnWorld.player.x - GameWorld.SPAWN_X) < 1e-9, `got ${spawnWorld.player.x}`)
 check(
   'spawn leaves room to walk in both directions',
   spawnWorld.player.x - spawnWorld.player.width / 2 > 100 &&
-    GameWorld.WORLD_WIDTH - spawnWorld.player.x - spawnWorld.player.width / 2 > 100,
-  `${(spawnWorld.player.x - spawnWorld.player.width / 2).toFixed(0)} left / ${(GameWorld.WORLD_WIDTH - spawnWorld.player.x - spawnWorld.player.width / 2).toFixed(0)} right`,
+    scene.definition.worldWidth - spawnWorld.player.x - spawnWorld.player.width / 2 > 100,
+  `${(spawnWorld.player.x - spawnWorld.player.width / 2).toFixed(0)} left / ${(scene.definition.worldWidth - spawnWorld.player.x - spawnWorld.player.width / 2).toFixed(0)} right`,
 )
 check(
   'camera starts with the player centred in the viewport',
@@ -282,26 +338,29 @@ check(
   `cameraX ${spawnWorld.cameraX}`,
 )
 check(
-  'dummies sit to the right of the spawn, inside the arena',
-  spawnWorld.dummies.every((d) => d.x > GameWorld.SPAWN_X && d.x < GameWorld.WORLD_WIDTH),
+  'dummies come from the opening scene, to the right of the spawn',
+  spawnWorld.dummies.every((d) => d.x > scene.definition.spawnX && d.x < scene.definition.worldWidth),
   spawnWorld.dummies.map((d) => d.x).join(', '),
 )
 check(
-  'dummies stand on the same FLOOR_Y as the player',
-  spawnWorld.dummies.every((d) => Math.abs(d.groundY - GameWorld.FLOOR_Y) < 1e-9),
+  'dummies stand on the same floor plane as the player',
+  spawnWorld.dummies.every((d) => Math.abs(d.groundY - scene.fit.floorY) < 1e-9),
   '',
 )
 }
 
+resetWorld()
 console.log('dummies are fixed in world space while the camera follows the player')
 {
   const dummy = world.dummies[0]
   const worldX = dummy.x
   const seen: Array<{ screen: number; camera: number; player: number }> = []
 
-  // Walk right, sample, walk back, sample.
+  // Walk right a little, sample, walk back, sample. Kept short of the exit at
+  // world 618: crossing it would hand the player to another scene, and these are
+  // checks about one scene's fixtures.
   world.player.setMovementInput(1)
-  for (let i = 0; i < 180; i++) world.update(1 / 60)
+  for (let i = 0; i < 50; i++) world.update(1 / 60)
   world.player.setMovementInput(0)
   for (let i = 0; i < 60; i++) world.update(1 / 60)
   seen.push({ screen: dummy.x - world.cameraX, camera: world.cameraX, player: world.player.x })
@@ -313,132 +372,267 @@ console.log('dummies are fixed in world space while the camera follows the playe
   seen.push({ screen: dummy.x - world.cameraX, camera: world.cameraX, player: world.player.x })
 
   check('dummy world X is constant through the whole walk', dummy.x === worldX, `${worldX} -> ${dummy.x}`)
-  // The camera used to be pinned at 0 because the world was exactly one backdrop
-  // wide. The world is now two sections, so it scrolls -- but only within the
-  // world, and only ever as a whole-pixel offset of one shared transform.
+  // Each scene is one viewport wide, so the camera is pinned at 0 -- but it is
+  // still clamped to that scene's bounds rather than assumed, and the fixture is
+  // still placed through the single world->screen transform rather than baked in.
   check(
-    'the camera stays inside the world on both legs',
-    seen.every((r) => r.camera >= -1e-9 && r.camera <= GameWorld.WORLD_WIDTH - GameWorld.LOGICAL_WIDTH + 1e-9),
+    'the camera stays inside the scene on both legs',
+    seen.every((r) => r.camera >= -1e-9 && r.camera <= world.maxCameraX + 1e-9),
     `cameraX ${seen[0].camera} / ${seen[1].camera}`,
-  )
-  check(
-    'the camera scrolled right on the way out and back on the return',
-    seen[0].camera > 1e-9 && seen[1].camera < seen[0].camera,
-    `cameraX ${seen[0].camera} then ${seen[1].camera}`,
   )
   check(
     'screen position = worldX - cameraX in both samples',
     Math.abs(seen[0].screen - (worldX - seen[0].camera)) < 1e-9 && Math.abs(seen[1].screen - (worldX - seen[1].camera)) < 1e-9,
     '',
   )
-  // A world fixture drifts across the screen as the camera tracks the player.
-  // That is correct: it is locked to the world, not to the viewport.
+  // The camera is pinned, so the fixture holds its screen X too. What matters is that
+  // the screen X comes from world X through the shared transform on both samples,
+  // not that it was baked in at spawn.
   check(
-    'the dummy stays world-locked while the camera scrolls',
-    Math.abs(seen[0].screen - seen[1].screen - (seen[1].camera - seen[0].camera)) < 1e-9,
-    `screen ${seen[0].screen} vs ${seen[1].screen}, camera ${seen[0].camera} vs ${seen[1].camera}`,
+    'the dummy holds its world X, and its screen X follows from it',
+    Math.abs(dummy.x - worldX) < 1e-9 &&
+      Math.abs(seen[0].screen - worldX) < 1e-9 &&
+      Math.abs(seen[1].screen - worldX) < 1e-9,
+    `worldX ${dummy.x}, screens ${seen[0].screen} / ${seen[1].screen}`,
   )
-  check('the player actually moved', Math.abs(seen[0].player - GameWorld.SPAWN_X) > 50, `player reached ${seen[0].player.toFixed(1)}`)
+  check('the player actually moved', Math.abs(seen[0].player - SPAWN_X) > 50, `player reached ${seen[0].player.toFixed(1)}`)
 }
 
+resetWorld()
 console.log('dummy hitbox and health bar are anchored to the dummy')
 {
   const dummy = world.dummies[0]
   const before = { ...dummy.hitbox }
   dummy.x += 200
   const after = { ...dummy.hitbox }
-  dummy.x = GameWorld.DUMMY_X
+  dummy.x = FORGOTTEN_PRISON.dummyXs[0]
 
   check('hitbox left/right follow the dummy world X', after.left - before.left === 200 && after.right - before.right === 200, `moved ${after.left - before.left}`)
-  check('hitbox bottom is the floor plane', Math.abs(after.bottom - GameWorld.FLOOR_Y) < 1e-9, `got ${after.bottom}`)
-  check('hitbox top is the floor minus the dummy height', Math.abs(after.top - (GameWorld.FLOOR_Y - dummy.height)) < 1e-9, `got ${after.top}`)
+  check('hitbox bottom is the floor plane', Math.abs(after.bottom - FLOOR_Y) < 1e-9, `got ${after.bottom}`)
+  check('hitbox top is the floor minus the dummy height', Math.abs(after.top - (FLOOR_Y - dummy.height)) < 1e-9, `got ${after.top}`)
 }
 
-console.log('WORLD SECTIONS: two finite plates laid end to end, each drawn once')
-// The arena used to be the whole world. It is now the first of two sections, so
-// these assert that the world is exactly the two plates -- no gap between them,
-// and no slack that something would have to be tiled or mirrored to cover.
-check(
-  'the world is exactly the arena plus the cavern',
-  Math.abs(GameWorld.WORLD_WIDTH - (GameWorld.BACKGROUND_LOGICAL_WIDTH + GameWorld.CAVERN_LOGICAL_WIDTH)) < 1e-9,
-  `arena ${GameWorld.BACKGROUND_LOGICAL_WIDTH} + cavern ${GameWorld.CAVERN_LOGICAL_WIDTH} vs world ${GameWorld.WORLD_WIDTH}`,
-)
-check(
-  'the two plates meet exactly, leaving no gap to fill',
-  Math.abs(GameWorld.BACKGROUND_LOGICAL_WIDTH - GameWorld.LOGICAL_WIDTH) < 1e-9,
-  `arena plate is ${GameWorld.BACKGROUND_LOGICAL_WIDTH}, cavern starts there`,
-)
-check(
-  'the cavern occupies the second section at the same one-viewport width',
-  Math.abs(GameWorld.CAVERN_LOGICAL_WIDTH - GameWorld.LOGICAL_WIDTH) < 1e-9,
-  `cavern plate ${GameWorld.CAVERN_LOGICAL_WIDTH}`,
-)
-check(
-  'the camera has exactly one viewport of scroll to cross the boundary',
-  Math.abs(GameWorld.WORLD_WIDTH - GameWorld.LOGICAL_WIDTH - GameWorld.LOGICAL_WIDTH) < 1e-9,
-  `range ${GameWorld.WORLD_WIDTH - GameWorld.LOGICAL_WIDTH}`,
-)
-check(
-  'both sections are drawn at one shared scale, so the player never jumps size',
-  GameWorld.CAVERN_SCALE === GameWorld.BACKGROUND_SCALE,
-  `arena ${GameWorld.BACKGROUND_SCALE}, cavern ${GameWorld.CAVERN_SCALE}`,
-)
-check(
-  'the cavern floor lands exactly on the shared ground plane',
-  Math.abs(GameWorld.CAVERN_OFFSET_Y + GameWorld.CAVERN_FLOOR_ROW * GameWorld.CAVERN_SCALE - GameWorld.FLOOR_Y) < 1e-9,
-  `cavern floor ${GameWorld.CAVERN_OFFSET_Y + GameWorld.CAVERN_FLOOR_ROW * GameWorld.CAVERN_SCALE} vs FLOOR_Y ${GameWorld.FLOOR_Y}`,
-)
-check(
-  'the cavern is not tall enough to reach the viewport on its own, which is why the bands are filled',
-  GameWorld.CAVERN_LOGICAL_HEIGHT < GameWorld.LOGICAL_HEIGHT,
-  `cavern ${GameWorld.CAVERN_LOGICAL_HEIGHT} vs viewport ${GameWorld.LOGICAL_HEIGHT}`,
-)
+console.log('SCENES: one full-screen environment at a time')
+// Every scene is its own picture. Its backdrop is scaled to cover that scene's world
+// and cropped where it overflows, so there is no gap to fill, nothing to tile, and no
+// adjacency at which two environments could ever meet.
+{
+  for (const scene of world.scenes) {
+    const { fit, definition: d } = scene
+    const tag = d.id
+    check(
+      `${tag}: plate covers the scene width, so no horizontal gap can show`,
+      fit.drawWidth >= d.worldWidth,
+      `draw ${fit.drawWidth} vs world ${d.worldWidth}`,
+    )
+    check(
+      `${tag}: plate covers the viewport height, so no vertical gap can show`,
+      fit.drawHeight >= GameWorld.LOGICAL_HEIGHT,
+      `draw ${fit.drawHeight} vs ${GameWorld.LOGICAL_HEIGHT}`,
+    )
+    check(
+      `${tag}: overflow is cropped away, never inset (offsets cannot leave a gap)`,
+      fit.offsetX <= 0 && fit.offsetY <= 0,
+      `offset ${fit.offsetX},${fit.offsetY}`,
+    )
+    check(
+      `${tag}: aspect ratio preserved, one scale on both axes`,
+      Math.abs(fit.drawWidth / d.sourceWidth - fit.drawHeight / d.sourceHeight) < 1e-12,
+      `x ${fit.drawWidth / d.sourceWidth} vs y ${fit.drawHeight / d.sourceHeight}`,
+    )
+    check(
+      `${tag}: scene floor is the artwork's own floor row, placed`,
+      Math.abs(fit.floorY - (fit.offsetY + d.floorRow * fit.scale)) < 1e-9,
+      `floorY ${fit.floorY}`,
+    )
+    check(
+      `${tag}: floor sits inside the viewport`,
+      fit.floorY > 0 && fit.floorY < GameWorld.LOGICAL_HEIGHT,
+      `floorY ${fit.floorY}`,
+    )
+  }
 
-// ---------------------------------------------------------------------------
-// Ground alignment: the feet must rest on the backdrop's visible stone floor.
-// ---------------------------------------------------------------------------
+  const prison = world.scenes.find((x) => x.definition.id === FORGOTTEN_PRISON.id)!
+  const cavern = world.scenes.find((x) => x.definition.id === UNDERGROUND_CAVERN.id)!
 
-const BG_SCALE_Y = GameWorld.LOGICAL_HEIGHT / GameWorld.BACKGROUND_HEIGHT
-/** Converts a world Y back into a row of the backdrop artwork. */
-const toBackgroundRow = (worldY: number): number => worldY / BG_SCALE_Y
+  check(
+    'the prison still fits its 1536x864 art at exactly 5/12, uncropped',
+    Math.abs(prison.fit.scale - 5 / 12) < 1e-12 && prison.fit.offsetX === 0 && prison.fit.offsetY === 0,
+    `scale ${prison.fit.scale}, offsets ${prison.fit.offsetX},${prison.fit.offsetY}`,
+  )
+  check(
+    'the cavern fills on its own terms, at its own scale',
+    Math.abs(cavern.fit.scale - GameWorld.LOGICAL_HEIGHT / 512) < 1e-12,
+    `cavern scale ${cavern.fit.scale}`,
+  )
+  check(
+    'the two scenes are scaled independently, not forced to share one scale',
+    Math.abs(cavern.fit.scale - prison.fit.scale) > 0.1,
+    `prison ${prison.fit.scale}, cavern ${cavern.fit.scale}`,
+  )
+  check(
+    'each scene has its own floor plane',
+    Math.abs(cavern.fit.floorY - FLOOR_Y) > 1,
+    `prison ${FLOOR_Y}, cavern ${cavern.fit.floorY.toFixed(3)}`,
+  )
+  check('there is more than one scene to travel between', world.scenes.length >= 2, `${world.scenes.length}`)
+  check(
+    'scene titles are non-empty and upper-case for the location card',
+    SCENES.every((d) => d.title.length > 0 && d.title === d.title.toUpperCase()),
+    SCENES.map((d) => d.title).join(' | '),
+  )
+  check(
+    'only the last scene is a dead end',
+    SCENES.slice(0, -1).every((d) => d.exitX !== null) && SCENES[SCENES.length - 1].exitX === null,
+    SCENES.map((d) => `${d.id}:${d.exitX}`).join(', '),
+  )
+  check(
+    'the exit sits exactly where the world bound stops the player',
+    FORGOTTEN_PRISON.exitX === FORGOTTEN_PRISON.worldWidth - 22,
+    `exit ${FORGOTTEN_PRISON.exitX}, bound ${FORGOTTEN_PRISON.worldWidth - 22}`,
+  )
+  check(
+    'player size is a character constant, untouched by any scene scale',
+    GameWorld.SPRITE_DISPLAY_SIZE === 100 &&
+      world.scenes.every(() => GameWorld.SPRITE_DISPLAY_SIZE === 100),
+    `got ${GameWorld.SPRITE_DISPLAY_SIZE}`,
+  )
+}
 
 console.log('ground plane is derived from the backdrop')
 check(
-  'FLOOR_Y matches the measured floor row (533 * 5/12)',
-  Math.abs(GameWorld.FLOOR_Y - 222.0833) < 0.01,
-  `got ${GameWorld.FLOOR_Y}`,
-)
-check(
-  'backdrop is drawn at a uniform 5/12 scale',
-  Math.abs(GameWorld.BACKGROUND_SCALE - 5 / 12) < 1e-12,
-  `got ${GameWorld.BACKGROUND_SCALE}`,
-)
-check(
-  'uniform scale maps the 1536x864 plate exactly onto the 640x360 viewport',
-  Math.abs(1536 * GameWorld.BACKGROUND_SCALE - GameWorld.LOGICAL_WIDTH) < 1e-9 &&
-    Math.abs(864 * GameWorld.BACKGROUND_SCALE - GameWorld.LOGICAL_HEIGHT) < 1e-9,
-  `got ${1536 * GameWorld.BACKGROUND_SCALE}x${864 * GameWorld.BACKGROUND_SCALE}`,
-)
-check(
-  'ground plane maps back to backdrop row 533',
-  Math.abs(toBackgroundRow(GameWorld.FLOOR_Y) - GameWorld.BACKGROUND_FLOOR_ROW) < 0.01,
-  `got row ${toBackgroundRow(GameWorld.FLOOR_Y).toFixed(2)}`,
+  'the opening scene floor matches the measured floor row (533 * 5/12)',
+  Math.abs(FLOOR_Y - 222.0833) < 0.01,
+  `got ${FLOOR_Y}`,
 )
 check(
   'floor is the lit surface, not the row-620 flagstone joint',
-  GameWorld.BACKGROUND_FLOOR_ROW === 533 && GameWorld.FLOOR_Y < 230,
-  `got row ${GameWorld.BACKGROUND_FLOOR_ROW}, y ${GameWorld.FLOOR_Y}`,
+  FORGOTTEN_PRISON.floorRow === 533 && FLOOR_Y < 230,
+  `row ${FORGOTTEN_PRISON.floorRow}, y ${FLOOR_Y}`,
 )
 check(
   'ground plane is no longer the old screen-relative 285',
-  Math.abs(GameWorld.FLOOR_Y - 285) > 20,
-  `got ${GameWorld.FLOOR_Y}`,
+  Math.abs(FLOOR_Y - 285) > 20,
+  `got ${FLOOR_Y}`,
 )
 check(
   'rest-pose foot offset equals the idle sheet padding',
   Math.abs(GameWorld.SPRITE_FOOT_OFFSET - 12.5) < 0.01,
   `got ${GameWorld.SPRITE_FOOT_OFFSET}`,
 )
+
+console.log('SCENE TRANSITION: exit, fade, title, fade in')
+{
+  const w = new GameWorld(stubAnimations())
+  check('the match opens in the prison', w.activeScene.definition.id === FORGOTTEN_PRISON.id, w.activeScene.definition.id)
+  check('gameplay is live at rest', !w.isTransitioning, w.transitionPhase)
+
+  const seen = new Set<string>()
+  w.player.setMovementInput(1)
+  for (let i = 0; i < 600 && !w.isTransitioning; i++) w.update(1 / 60)
+  w.player.setMovementInput(0)
+  seen.add(w.transitionPhase)
+  check('walking into the exit starts a handover', w.isTransitioning, w.transitionPhase)
+  check('the handover announces the next area', w.transitionTitle === UNDERGROUND_CAVERN.title, w.transitionTitle)
+
+  // Sample the opening stretch of the fade, while the outgoing scene is still up.
+  // The fade-out is 0.3s, i.e. 18 frames, so 10 stay safely inside it.
+  const outgoing = w.activeScene.definition.id
+  const parkedX = w.player.x
+  w.player.setMovementInput(1)
+  for (let i = 0; i < 10; i++) {
+    w.update(1 / 60)
+    seen.add(w.transitionPhase)
+  }
+  check('normal movement is stopped during the handover', w.player.x === parkedX, `drifted to ${w.player.x}`)
+  check(
+    'the outgoing scene is still on screen while it fades out',
+    w.activeScene.definition.id === outgoing,
+    w.activeScene.definition.id,
+  )
+  // Release the stick, or the incoming scene walks straight back out of its exit.
+  w.player.setMovementInput(0)
+
+  const steps = Math.ceil((TRANSITION_TOTAL + 0.5) * 60)
+  for (let i = 0; i < steps; i++) {
+    w.update(1 / 60)
+    seen.add(w.transitionPhase)
+  }
+  check(
+    'it fades out, holds the title, then fades back in',
+    seen.has('fadingOut') && seen.has('title') && seen.has('fadingIn'),
+    [...seen].join(','),
+  )
+  check('the handover completes and gameplay resumes', !w.isTransitioning, w.transitionPhase)
+  check('the title is cleared afterwards', w.transitionTitle === '', w.transitionTitle)
+  check('it lands on the cavern', w.activeScene.definition.id === UNDERGROUND_CAVERN.id, w.activeScene.definition.id)
+  check(
+    'the player is placed at the cavern entrance',
+    Math.abs(w.player.x - UNDERGROUND_CAVERN.spawnX) < 1e-9,
+    `got ${w.player.x}, entrance ${UNDERGROUND_CAVERN.spawnX}`,
+  )
+  check(
+    'the player is grounded on the cavern floor plane',
+    Math.abs(w.player.groundY - w.floorY) < 1e-9,
+    `feet ${w.player.groundY}, floor ${w.floorY}`,
+  )
+  check(
+    'the camera is reset to the new scene bounds, not carried over',
+    Math.abs(w.cameraX - w.cameraXForPlayerX(w.player.x)) < 1e-9 &&
+      w.cameraX >= 0 &&
+      w.cameraX <= w.maxCameraX,
+    `cameraX ${w.cameraX}, allowed 0..${w.maxCameraX}`,
+  )
+  check(
+    "the prison's dummies did not carry into the cavern",
+    w.dummies.every((d) => !FORGOTTEN_PRISON.dummyXs.includes(d.x)) &&
+      w.dummies.length === UNDERGROUND_CAVERN.dummyXs.length &&
+      w.dummies.every((d, i) => d.x === UNDERGROUND_CAVERN.dummyXs[i]),
+    w.dummies.map((d) => d.x).join(', '),
+  )
+  check(
+    'cavern dummies stand on the cavern floor',
+    w.dummies.every((d) => Math.abs(d.groundY - w.floorY) < 1e-9),
+    '',
+  )
+
+  // The cavern is a dead end, so walking right must not start another handover.
+  w.player.setMovementInput(1)
+  for (let i = 0; i < 600; i++) w.update(1 / 60)
+  w.player.setMovementInput(0)
+  check('the last scene has no further exit', !w.isTransitioning && w.activeSceneIndex === 1, `${w.transitionPhase}/${w.activeSceneIndex}`)
+  check(
+    'the player is stopped by the cavern world bound',
+    Math.abs(w.player.x - (UNDERGROUND_CAVERN.worldWidth - w.player.width / 2)) < 1e-9,
+    `x ${w.player.x}`,
+  )
+  check(
+    'the camera never leaves the scene range',
+    w.cameraX >= -1e-9 && w.cameraX <= w.maxCameraX + 1e-9,
+    `cameraX ${w.cameraX}, max ${w.maxCameraX}`,
+  )
+  check(
+    'cameraXForPlayerX clamps at both ends of the scene',
+    w.cameraXForPlayerX(-9999) === 0 && w.cameraXForPlayerX(99999) === w.maxCameraX,
+    `${w.cameraXForPlayerX(-9999)} .. ${w.cameraXForPlayerX(99999)}, max ${w.maxCameraX}`,
+  )
+}
+
+console.log('only one scene is ever active')
+{
+  const w = new GameWorld(stubAnimations())
+  const ids = new Set<string>()
+  for (let i = 0; i < SCENES.length; i++) {
+    w.enterScene(i)
+    ids.add(w.activeScene.definition.id)
+    check(
+      `scene ${i} has exactly one backdrop plate bound to it`,
+      w.scenes.filter((sc) => sc.background !== null).length <= 1,
+      '',
+    )
+  }
+  check('every scene can be entered and is distinct', ids.size === SCENES.length, `${ids.size} of ${SCENES.length}`)
+}
 
 console.log('per-frame foot rows come from the artwork, not a constant')
 {
@@ -503,9 +697,9 @@ console.log('GRID PACKED SHEETS: a 4x4 grid of 256px cells slices correctly')
   const scaled = size * sheet.displayScale
   let worst = 0
   for (let frame = 0; frame < sheet.frameCount; frame++) {
-    const rectBottom = GameWorld.FLOOR_Y + footOffsetForRow(sheet.footRowForFrame(frame), scaled, sheet.cellHeight)
+    const rectBottom = FLOOR_Y + footOffsetForRow(sheet.footRowForFrame(frame), scaled, sheet.cellHeight)
     const visibleFeet = rectBottom - footOffsetForRow(sheet.footRowForFrame(frame), scaled, sheet.cellHeight)
-    worst = Math.max(worst, Math.abs(visibleFeet - GameWorld.FLOOR_Y))
+    worst = Math.max(worst, Math.abs(visibleFeet - FLOOR_Y))
   }
   check('all 16 attack frames put their visible feet on FLOOR_Y', worst < 1e-9, `worst ${worst}`)
 
@@ -566,9 +760,9 @@ console.log('GRID PACKED SHEET: a 5x5 grid of 256px cells slices correctly')
   const scaled = size * sheet.displayScale
   let worst = 0
   for (let frame = 0; frame < sheet.frameCount; frame++) {
-    const rectBottom = GameWorld.FLOOR_Y + footOffsetForRow(sheet.footRowForFrame(frame), scaled, sheet.cellHeight)
+    const rectBottom = FLOOR_Y + footOffsetForRow(sheet.footRowForFrame(frame), scaled, sheet.cellHeight)
     const visibleFeet = rectBottom - footOffsetForRow(sheet.footRowForFrame(frame), scaled, sheet.cellHeight)
-    worst = Math.max(worst, Math.abs(visibleFeet - GameWorld.FLOOR_Y))
+    worst = Math.max(worst, Math.abs(visibleFeet - FLOOR_Y))
   }
   check('all 25 heavy attack frames put their visible feet on FLOOR_Y', worst < 1e-9, `worst ${worst}`)
 }
@@ -651,10 +845,10 @@ console.log("the sprite cell is anchored on each frame's own opaque bottom")
     let worst = 0
     for (let frame = 0; frame < sheet.frameCount; frame++) {
       // The renderer puts the draw-rect bottom this far below FLOOR_Y...
-      const rectBottom = GameWorld.FLOOR_Y + footOffsetForRow(sheet.footRowForFrame(frame), size)
+      const rectBottom = FLOOR_Y + footOffsetForRow(sheet.footRowForFrame(frame), size)
       // ...so walking back up by that frame's own padding lands on the plane.
       const visibleFeet = rectBottom - footOffsetForRow(sheet.footRowForFrame(frame), size)
-      worst = Math.max(worst, Math.abs(visibleFeet - GameWorld.FLOOR_Y))
+      worst = Math.max(worst, Math.abs(visibleFeet - FLOOR_Y))
     }
     check(`${sheetFile}: all ${sheet.frameCount} frames put their visible feet on FLOOR_Y`, worst < 1e-9, `worst ${worst}`)
   }
@@ -686,110 +880,103 @@ console.log("the sprite cell is anchored on each frame's own opaque bottom")
   }
 }
 
+resetWorld()
 console.log('IDLE: feet pinned to the ground plane')
 // resetPlayer() intentionally does not clear held input (releasing the stick is the
 // caller's job), and earlier blocks left movement input asserted, so neutralise it.
 player.setMovementInput(0)
-player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
-check('idle feet on the plane', Math.abs(player.groundY - GameWorld.FLOOR_Y) < 1e-6, `got ${player.groundY}`)
+player.resetPlayer(SPAWN_X, FLOOR_Y)
+check('idle feet on the plane', Math.abs(player.groundY - FLOOR_Y) < 1e-6, `got ${player.groundY}`)
 check('idle state active', anim.currentAction === PlayerAction.IDLE)
 {
   let worst = 0
   for (let i = 0; i < 600; i++) {
     world.update(1 / 60)
-    worst = Math.max(worst, Math.abs(player.groundY - GameWorld.FLOOR_Y))
+    worst = Math.max(worst, Math.abs(player.groundY - FLOOR_Y))
   }
   check('idle holds the plane for 10s with zero drift', worst < 1e-6, `worst deviation ${worst}`)
-  check('idle does not drift horizontally', Math.abs(player.x - GameWorld.SPAWN_X) < 1e-6, `got ${player.x}`)
+  check('idle does not drift horizontally', Math.abs(player.x - SPAWN_X) < 1e-6, `got ${player.x}`)
   check('still IDLE after 10s', anim.currentAction === PlayerAction.IDLE, `got ${anim.currentAction}`)
 }
 
+resetWorld()
 console.log('WALK: travels along the plane without floating or sinking')
 {
-  player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
-  player.setMovementInput(1)
+  player.resetPlayer(SPAWN_X, FLOOR_Y)
+  // Right then left, and deliberately short of both the exit at 618 and the left
+  // wall at 22: a scene is one viewport wide, so a long one-way walk would end on a
+  // wall or hand over to the next scene rather than testing the walk cycle.
   let worst = 0
-  let minX = player.x
   let maxX = player.x
-  for (let i = 0; i < 180; i++) {
-    world.update(1 / 60)
-    worst = Math.max(worst, Math.abs(player.groundY - GameWorld.FLOOR_Y))
-    minX = Math.min(minX, player.x)
-    maxX = Math.max(maxX, player.x)
+  for (const dir of [1, -1]) {
+    player.setMovementInput(dir)
+    for (let i = 0; i < 100; i++) {
+      world.update(1 / 60)
+      worst = Math.max(worst, Math.abs(player.groundY - FLOOR_Y))
+      maxX = Math.max(maxX, player.x)
+    }
   }
-  check('walk keeps feet on the plane (3s)', worst < 1e-6, `worst deviation ${worst}`)
+  check('the walk stayed inside this scene', maxX < 618, `reached ${maxX.toFixed(1)}, exit 618`)
+  check('walk keeps feet on the plane', worst < 1e-6, `worst deviation ${worst}`)
   check('walk state active', anim.currentAction === PlayerAction.WALK, `got ${anim.currentAction}`)
   check('grounded throughout the walk', player.isGrounded)
 }
 
-console.log('SECTION BORDER: walking right crosses from prison into cavern')
+resetWorld()
+console.log('SCENE WALK: grounded inside a scene, handed over at the exit')
 {
-  // Prison -> cavern. The world is two sections now, so a sustained walk must
-  // carry the player across the boundary and on to the far wall, and his feet
-  // must stay on the one ground plane the whole way -- the cavern is a separate
-  // image at a different vertical offset, so a mis-aligned floor would show up
-  // here as the player stepping up or down, or floating, at the seam.
-  player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
-  world.cameraX = world.cameraXForPlayerX(player.x)
-  player.setMovementInput(1)
+  // A sustained walk must keep the feet exactly on the active scene's own plane for
+  // its whole length, then hand over at the exit instead of running on into a
+  // neighbouring environment. Each scene's floor is measured from its own artwork, so
+  // a wrongly placed plane would show up here as the player sinking or floating.
+  const w = new GameWorld(stubAnimations())
+  const p = w.player
+  const prisonFloor = w.floorY
 
-  const boundary = GameWorld.BACKGROUND_LOGICAL_WIDTH
-  const rightLimit = GameWorld.WORLD_WIDTH - player.width / 2
+  p.setMovementInput(1)
   let worst = 0
-  let worstInCavern = 0
-  let maxX = player.x
-  let crossedAt = -1
-  let cameraAtCross = -1
-
-  for (let i = 0; i < 1200; i++) {
-    world.update(1 / 60)
-    worst = Math.max(worst, Math.abs(player.groundY - GameWorld.FLOOR_Y))
-    if (player.x > boundary) {
-      worstInCavern = Math.max(worstInCavern, Math.abs(player.groundY - GameWorld.FLOOR_Y))
-      if (crossedAt < 0) {
-        crossedAt = player.x
-        cameraAtCross = world.cameraX
-      }
-    }
-    maxX = Math.max(maxX, player.x)
+  let maxX = p.x
+  for (let i = 0; i < 1200 && w.activeSceneIndex === 0; i++) {
+    w.update(1 / 60)
+    worst = Math.max(worst, Math.abs(p.groundY - w.floorY))
+    maxX = Math.max(maxX, p.x)
   }
-  player.setMovementInput(0)
+  p.setMovementInput(0)
 
-  check('the walk reaches the far wall of the cavern section', Math.abs(maxX - rightLimit) < 1e-6, `stopped at ${maxX.toFixed(2)}, limit ${rightLimit}`)
-  check('the player actually crossed into the cavern', crossedAt > boundary, `first crossed at ${crossedAt.toFixed(2)}, boundary ${boundary}`)
-  check('the camera had already scrolled past the boundary when he crossed', cameraAtCross > 0, `cameraX ${cameraAtCross}`)
-  check('feet stay exactly on the plane across the whole world', worst < 1e-6, `worst deviation ${worst}`)
-  check('feet stay exactly on the plane inside the cavern', worstInCavern < 1e-6, `worst deviation ${worstInCavern}`)
-}
+  check(
+    'the walk reaches the prison exit exactly',
+    Math.abs(maxX - FORGOTTEN_PRISON.exitX!) < 1e-6,
+    `stopped at ${maxX.toFixed(2)}, exit ${FORGOTTEN_PRISON.exitX}`,
+  )
+  check('feet stay exactly on the prison plane throughout', worst < 1e-6, `worst deviation ${worst}`)
+  check('the walk handed over to the cavern', w.activeSceneIndex === 1, `${w.activeScene.definition.id}`)
 
-console.log('SECTION BORDER: walking left returns from cavern to prison')
-{
-  player.resetPlayer(GameWorld.WORLD_WIDTH - 4, GameWorld.FLOOR_Y)
-  world.cameraX = world.cameraXForPlayerX(player.x)
-  player.setMovementInput(-1)
+  for (let i = 0; i < Math.ceil((TRANSITION_TOTAL + 0.2) * 60); i++) w.update(1 / 60)
+  const cavernFloor = w.floorY
+  check('the cavern floor is its own plane, not the prison one', Math.abs(cavernFloor - prisonFloor) > 1, `${cavernFloor} vs ${prisonFloor}`)
 
-  const leftLimit = player.width / 2
-  let worst = 0
-  let minX = player.x
-  let leftCameraMax = 0
-  for (let i = 0; i < 1200; i++) {
-    world.update(1 / 60)
-    worst = Math.max(worst, Math.abs(player.groundY - GameWorld.FLOOR_Y))
-    minX = Math.min(minX, player.x)
-    leftCameraMax = Math.max(leftCameraMax, world.cameraX)
+  let worstCavern = 0
+  p.setMovementInput(1)
+  for (let i = 0; i < 600; i++) {
+    w.update(1 / 60)
+    worstCavern = Math.max(worstCavern, Math.abs(p.groundY - w.floorY))
   }
-  player.setMovementInput(0)
+  p.setMovementInput(0)
 
-  check('the walk reaches the far wall of the prison section', Math.abs(minX - leftLimit) < 1e-6, `stopped at ${minX.toFixed(2)}, limit ${leftLimit}`)
-  check('the camera scrolled left across the boundary', leftCameraMax > 1, `max cameraX seen ${leftCameraMax}`)
-  check('feet stay exactly on the plane walking back', worst < 1e-6, `worst deviation ${worst}`)
+  check('feet stay exactly on the cavern plane throughout', worstCavern < 1e-6, `worst deviation ${worstCavern}`)
+  check(
+    'the cavern walk stops at the cavern bound',
+    Math.abs(p.x - (UNDERGROUND_CAVERN.worldWidth - p.width / 2)) < 1e-6,
+    `stopped at ${p.x}`,
+  )
+  check('and no further handover starts from a dead-end scene', w.activeSceneIndex === 1 && !w.isTransitioning, w.transitionPhase)
 }
 
 console.log('JUMP: leaves from the plane and returns to it')
 {
-  player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+  player.resetPlayer(SPAWN_X, FLOOR_Y)
   const launchY = player.groundY
-  check('jump launches from exactly the plane', Math.abs(launchY - GameWorld.FLOOR_Y) < 1e-6, `got ${launchY}`)
+  check('jump launches from exactly the plane', Math.abs(launchY - FLOOR_Y) < 1e-6, `got ${launchY}`)
   check('jump accepted', player.onJump())
 
   let peak = launchY
@@ -802,7 +989,7 @@ console.log('JUMP: leaves from the plane and returns to it')
   }
   check('jump gains real height', launchY - peak > 50, `peak rise ${(launchY - peak).toFixed(1)}px`)
   check('airborne for a plausible number of frames', airFrames > 20 && airFrames < 120, `got ${airFrames}`)
-  check('lands exactly on the plane', Math.abs(player.groundY - GameWorld.FLOOR_Y) < 1e-6, `got ${player.groundY}`)
+  check('lands exactly on the plane', Math.abs(player.groundY - FLOOR_Y) < 1e-6, `got ${player.groundY}`)
   check('grounded again after landing', player.isGrounded)
   check('vertical velocity cleared on landing', player.vy === 0, `got ${player.vy}`)
 }
@@ -852,28 +1039,28 @@ console.log('BLOCK ANIMATION: plays once and holds the stance')
 
 console.log('LANDING: repeated jumps never accumulate error')
 {
-  player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+  player.resetPlayer(SPAWN_X, FLOOR_Y)
   let worst = 0
   for (let jump = 0; jump < 25; jump++) {
     if (!player.isGrounded) {
       // wait for touchdown
       for (let i = 0; i < 300 && !player.isGrounded; i++) world.update(1 / 60)
     }
-    worst = Math.max(worst, Math.abs(player.groundY - GameWorld.FLOOR_Y))
+    worst = Math.max(worst, Math.abs(player.groundY - FLOOR_Y))
     if (!player.onJump()) break
     for (let i = 0; i < 300; i++) {
       world.update(1 / 60)
       if (player.isGrounded) break
     }
-    worst = Math.max(worst, Math.abs(player.groundY - GameWorld.FLOOR_Y))
+    worst = Math.max(worst, Math.abs(player.groundY - FLOOR_Y))
   }
   check('25 jump/land cycles stay on the plane', worst < 1e-6, `worst deviation ${worst}`)
-  check('final groundY is the plane', Math.abs(player.groundY - GameWorld.FLOOR_Y) < 1e-6, `got ${player.groundY}`)
+  check('final groundY is the plane', Math.abs(player.groundY - FLOOR_Y) < 1e-6, `got ${player.groundY}`)
 }
 
 console.log('JUMP + WALK: airborne then moving, lands on the same plane')
 {
-  player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+  player.resetPlayer(SPAWN_X, FLOOR_Y)
   const startX = player.x
   player.onJump()
   for (let i = 0; i < 5; i++) {
@@ -887,22 +1074,22 @@ console.log('JUMP + WALK: airborne then moving, lands on the same plane')
     world.update(1 / 60)
   }
   player.setMovementInput(0)
-  check('landed on the plane after moving jump', Math.abs(player.groundY - GameWorld.FLOOR_Y) < 1e-6, `got ${player.groundY}`)
+  check('landed on the plane after moving jump', Math.abs(player.groundY - FLOOR_Y) < 1e-6, `got ${player.groundY}`)
   check('horizontal travel happened in the air', player.x - startX > 30, `moved ${(player.x - startX).toFixed(1)}px`)
   for (let i = 0; i < 60; i++) world.update(1 / 60)
-  check('settles back to the plane at rest', Math.abs(player.groundY - GameWorld.FLOOR_Y) < 1e-6, `got ${player.groundY}`)
+  check('settles back to the plane at rest', Math.abs(player.groundY - FLOOR_Y) < 1e-6, `got ${player.groundY}`)
 }
 
 console.log('HITBOX bottom sits on the plane')
 {
-  player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
-  check('hitbox bottom == ground plane', Math.abs(player.hitbox.bottom - GameWorld.FLOOR_Y) < 1e-6, `got ${player.hitbox.bottom}`)
+  player.resetPlayer(SPAWN_X, FLOOR_Y)
+  check('hitbox bottom == ground plane', Math.abs(player.hitbox.bottom - FLOOR_Y) < 1e-6, `got ${player.hitbox.bottom}`)
   const dummy = world.dummies[0]
-  check('training dummy also stands on the plane', Math.abs(dummy.groundY - GameWorld.FLOOR_Y) < 1e-6, `got ${dummy.groundY}`)
-  check('dummy hitbox bottom == ground plane', Math.abs(dummy.hitbox.bottom - GameWorld.FLOOR_Y) < 1e-6)
+  check('training dummy also stands on the plane', Math.abs(dummy.groundY - FLOOR_Y) < 1e-6, `got ${dummy.groundY}`)
+  check('dummy hitbox bottom == ground plane', Math.abs(dummy.hitbox.bottom - FLOOR_Y) < 1e-6)
   player.onJump()
   world.update(1 / 60)
-  check('hitbox bottom rises off the plane in the air', player.hitbox.bottom < GameWorld.FLOOR_Y - 1, `got ${player.hitbox.bottom}`)
+  check('hitbox bottom rises off the plane in the air', player.hitbox.bottom < FLOOR_Y - 1, `got ${player.hitbox.bottom}`)
 }
 
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) FAILED.`)

@@ -73,12 +73,15 @@ await page.evaluate(() => {
   window.__spawn = {
     playerX: g.world.player.x,
     cameraX: g.world.cameraX,
-    spawnX: g.GameWorld.SPAWN_X,
-    arenaCenter: g.GameWorld.ARENA_CENTER_X,
-    worldWidth: g.GameWorld.WORLD_WIDTH,
+    sceneIndex: g.world.activeSceneIndex,
+    spawnX: g.world.activeScene.definition.spawnX,
+    worldWidth: g.world.worldWidth,
+    floorY: g.world.floorY,
     logicalWidth: g.GameWorld.LOGICAL_WIDTH,
+    logicalHeight: g.GameWorld.LOGICAL_HEIGHT,
     playerWidth: g.world.player.width,
-    dummyX: g.world.dummies[0].x,
+    dummyXs: g.world.dummies.map((d) => d.x),
+    exitX: g.world.activeScene.definition.exitX,
   }
 })
 
@@ -121,6 +124,49 @@ await page.evaluate(() => {
     b.translate(-g.world.cameraX, 0)
     g.backdropOnly(b)
     return b.getImageData(0, 0, c.width, c.height).data
+  }
+
+  /**
+   * Counts pixels of the viewport the backdrop never painted.
+   *
+   * The surface is pre-filled with a sentinel magenta that appears in neither
+   * backdrop, then the scene's own drawing path is run over it. Anything still
+   * magenta was never covered -- which is what a black gap actually is.
+   *
+   * Testing for the canvas clear colour instead would be unreliable: these are dark
+   * night-time scenes, and the artwork can legitimately contain those exact values,
+   * which reads as a gap where there is none.
+   */
+  g.unpaintedPixels = () => {
+    const c = document.createElement('canvas')
+    c.width = canvas.width
+    c.height = canvas.height
+    const b = c.getContext('2d')
+    b.imageSmoothingEnabled = false
+    b.fillStyle = '#ff00ff'
+    b.fillRect(0, 0, c.width, c.height)
+    const s = g.scale()
+    b.setTransform(1, 0, 0, 1, 0, 0)
+    b.translate(g.offX(), g.offY())
+    b.scale(s, s)
+    b.translate(-g.world.cameraX, 0)
+    g.backdropOnly(b)
+    const d = b.getImageData(0, 0, c.width, c.height).data
+    let unpainted = 0
+    let edgeUnpainted = 0
+    const at = (lx, ly) =>
+      (Math.round(g.offY() + (ly + 0.5) * s) * c.width + Math.round(g.offX() + (lx + 0.5) * s)) * 4
+    const magenta = (i) => d[i] === 0xff && d[i + 1] === 0x00 && d[i + 2] === 0xff
+    for (let ly = 0; ly < g.GameWorld.LOGICAL_HEIGHT; ly++) {
+      for (let lx = 0; lx < g.GameWorld.LOGICAL_WIDTH; lx++) {
+        if (!magenta(at(lx, ly))) continue
+        unpainted++
+        if (lx === 0 || ly === 0 || lx === g.GameWorld.LOGICAL_WIDTH - 1 || ly === g.GameWorld.LOGICAL_HEIGHT - 1) {
+          edgeUnpainted++
+        }
+      }
+    }
+    return { unpainted, edgeUnpainted }
   }
 
   /** The canvas the game renders into, so checks can index its pixels. */
@@ -244,7 +290,7 @@ await page.evaluate(() => {
     if (action) g.setFrame(action, frame)
     g.world.player.x = playerX
     g.world.cameraX = cameraX
-    g.world.player.groundY = g.GameWorld.FLOOR_Y
+    g.world.player.groundY = g.world.floorY
     await g.settle()
   }
 
@@ -330,7 +376,7 @@ await page.evaluate(() => {
    * own rows, then converted to logical Y with the single BACKGROUND_SCALE factor.
    */
   g.plateRowStats = () => {
-    const bg = g.world.background
+    const bg = g.world.activeScene.background
     const c = document.createElement('canvas')
     c.width = bg.width
     c.height = bg.height
@@ -353,76 +399,157 @@ await page.evaluate(() => {
     return rows
   }
 
+  /**
+   * Bounding box of the character sprite as actually rendered, in logical units.
+   *
+   * Measured off the alpha channel of the real drawing path, so it reflects the
+   * shipped sprite pipeline (sheet display scale, per-frame cell, foot correction)
+   * rather than any constant. Comparing this box between scenes is what proves the
+   * player is not being scaled to suit a backdrop.
+   */
+  g.spriteBounds = () => {
+    const s = g.scale()
+    const c = document.createElement('canvas')
+    c.width = canvas.width
+    c.height = canvas.height
+    const b = c.getContext('2d')
+    b.setTransform(1, 0, 0, 1, 0, 0)
+    b.translate(g.offX(), g.offY())
+    b.scale(s, s)
+    b.translate(-g.world.cameraX, 0)
+    g.world.renderCharacter(b)
+    const d = b.getImageData(0, 0, c.width, c.height).data
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, count = 0
+    for (let ly = 0; ly < g.GameWorld.LOGICAL_HEIGHT; ly++) {
+      for (let lx = 0; lx < g.GameWorld.LOGICAL_WIDTH; lx++) {
+        const x = Math.round(g.offX() + (lx - g.world.cameraX) * s)
+        const y = Math.round(g.offY() + ly * s)
+        if (x < 0 || x >= c.width || y < 0 || y >= c.height) continue
+        if (d[(y * c.width + x) * 4 + 3] < 32) continue
+        minX = Math.min(minX, lx); maxX = Math.max(maxX, lx)
+        minY = Math.min(minY, ly); maxY = Math.max(maxY, ly)
+        count++
+      }
+    }
+    if (!count) return null
+    return { minX, maxX, minY, maxY, width: maxX - minX + 1, height: maxY - minY + 1, count }
+  }
+
   /** Logical Y -> source row of the backdrop artwork. */
-  g.srcRow = (ly) => Math.round(ly * (g.world.background.height / g.GameWorld.LOGICAL_HEIGHT))
+  g.srcRow = (ly) => Math.round((ly - g.world.activeScene.fit.offsetY) / g.world.activeScene.fit.scale)
+
+  /** The active scene's decoded plate, for comparing source pixels to drawn ones. */
+  g.scenePlate = () => g.world.activeScene.background
+
+  /**
+   * Logical Y -> source row, for a specific scene.
+   *
+   * Each scene is scaled and cropped on its own terms, so a row cannot be derived
+   * from a shared factor any more -- it has to go through that scene's fit.
+   */
+  g.rowForScene = (sceneIndex, ly) => {
+    const fit = g.world.scenes[sceneIndex].fit
+    return (ly - fit.offsetY) / fit.scale
+  }
 })
 
-// --- 1. The plate's own horizon ------------------------------------------------
-const plate = await page.evaluate(() => {
+// --- 1. Each plate's own horizon ------------------------------------------------
+// Run for every scene, not just the opening one. The floor row is declared per scene
+// and each scene is scaled and cropped on its own terms, so the only way to know the
+// declared plane really lands on the drawn floor is to find the horizon in the
+// rendered plate and compare.
+const horizons = await page.evaluate(async () => {
   const g = window.__game
-  const rows = g.plateRowStats()
-  const H = rows.length
-  // 8 logical rows expressed in the artwork's own rows.
-  const W = Math.round(8 * (H / g.GameWorld.LOGICAL_HEIGHT))
+  const out = []
+  for (let i = 0; i < g.world.scenes.length; i++) {
+    g.loadScene(i)
+    g.setCamera(0)
+    await g.settle()
+    const rows = g.plateRowStats()
+    const H = rows.length
+    const fit = g.world.activeScene.fit
+    // 8 logical rows expressed in the artwork's own rows, via this scene's scale.
+    const W = Math.max(2, Math.round(8 / fit.scale))
+    const toLogical = (srcRow) => fit.offsetY + srcRow * fit.scale
+    const toSrc = (ly) => (ly - fit.offsetY) / fit.scale
 
-  // The horizon is where the plate gets broadly brighter, so compare mean luma
-  // across a window rather than a single row. A one-row difference is not
-  // usable here: the bright flagstone joint lower down the floor jumps further
-  // than the real horizon does, which is precisely how the old row-620 value was
-  // chosen.
-  let bestDelta = -Infinity
-  let bestSrc = -1
-  for (let y = W; y < H - W; y++) {
-    let below = 0
-    let above = 0
-    for (let k = 0; k < W; k++) {
-      below += rows[y + k].mean
-      above += rows[y - 1 - k].mean
+    // The horizon is where the plate gets broadly brighter, so compare mean luma
+    // across a window rather than a single row. A one-row difference is not usable
+    // here: the prison's bright flagstone joint lower down the floor jumps further
+    // than the real horizon does, which is precisely how the old row-620 value was
+    // chosen.
+    let bestDelta = -Infinity
+    let bestSrc = -1
+    for (let y = W; y < H - W; y++) {
+      let below = 0
+      let above = 0
+      for (let k = 0; k < W; k++) {
+        below += rows[y + k].mean
+        above += rows[y - 1 - k].mean
+      }
+      const delta = below / W - above / W
+      if (delta > bestDelta) {
+        bestDelta = delta
+        bestSrc = y
+      }
     }
-    const delta = below / W - above / W
-    if (delta > bestDelta) {
-      bestDelta = delta
-      bestSrc = y
+    // Largest single-row mean jump, kept to prove the seam is not the horizon.
+    let maxStep = { delta: -Infinity, y: -1 }
+    for (let y = 1; y < H; y++) {
+      const d = rows[y].mean - rows[y - 1].mean
+      if (d > maxStep.delta) maxStep = { delta: d, y }
     }
+    const floorY = g.world.floorY
+    out.push({
+      id: g.world.activeScene.definition.id,
+      horizon: toLogical(bestSrc),
+      horizonSrc: bestSrc,
+      maxStepSrc: maxStep.y,
+      bestDelta,
+      floorY,
+      declaredFloorRow: g.world.activeScene.definition.floorRow,
+      srcRowOfFloor: toSrc(floorY),
+      meanAbove: rows[Math.round(toSrc(floorY - 3))].mean,
+      meanAt: rows[Math.round(toSrc(floorY + 3))].mean,
+    })
   }
-
-  // Largest single-row mean jump, kept only to prove the seam is not the horizon.
-  let maxStep = { delta: -Infinity, y: -1 }
-  for (let y = 1; y < H; y++) {
-    const d = rows[y].mean - rows[y - 1].mean
-    if (d > maxStep.delta) maxStep = { delta: d, y }
-  }
-
-  const toLogical = (srcRow) => (srcRow * g.GameWorld.LOGICAL_HEIGHT) / H
-  const horizon = toLogical(bestSrc)
-  return {
-    horizon,
-    horizonSrc: bestSrc,
-    maxStepLogicalY: toLogical(maxStep.y),
-    maxStepSrc: maxStep.y,
-    bestDelta,
-    floorY: g.GameWorld.FLOOR_Y,
-    floorSrc: Math.round((g.GameWorld.FLOOR_Y * H) / g.GameWorld.LOGICAL_HEIGHT),
-    meanAbove: rows[Math.round(((g.GameWorld.FLOOR_Y - 3) * H) / g.GameWorld.LOGICAL_HEIGHT)].mean,
-    meanAt: rows[Math.round(((g.GameWorld.FLOOR_Y + 3) * H) / g.GameWorld.LOGICAL_HEIGHT)].mean,
-  }
+  g.loadScene(0)
+  await g.settle()
+  return out
 })
 
 console.log('rendered backdrop')
+for (const plate of horizons) {
+  check(
+    `${plate.id}: the widest brightening band in its plate is its floor plane`,
+    Math.abs(plate.horizon - plate.floorY) <= 1.5,
+    `horizon at source row ${plate.horizonSrc} = logical y ${plate.horizon.toFixed(2)}, floor plane ${plate.floorY.toFixed(3)} (windowed jump ${plate.bestDelta.toFixed(2)})`,
+  )
+  check(
+    `${plate.id}: its floor plane is the declared artwork row, not a rounded guess`,
+    Math.abs(plate.srcRowOfFloor - plate.declaredFloorRow) < 1,
+    `floor plane maps back to source row ${plate.srcRowOfFloor.toFixed(2)}, declared ${plate.declaredFloorRow}`,
+  )
+  check(
+    `${plate.id}: the wall above its floor is darker than the floor below`,
+    plate.meanAbove < plate.meanAt,
+    `mean luma ${plate.meanAbove.toFixed(1)} above vs ${plate.meanAt.toFixed(1)} below`,
+  )
+}
+const prison = horizons.find((h) => h.id === 'forgotten_prison')
 check(
-  'widest brightening band in the rendered plate is the floor plane',
-  plate.horizon !== null && Math.abs(plate.horizon - plate.floorY) <= 1.5,
-  `horizon at source row ${plate.horizonSrc} = logical y=${plate.horizon.toFixed(2)}, FLOOR_Y=${plate.floorY.toFixed(3)} (windowed jump ${plate.bestDelta.toFixed(2)})`,
+  "the prison's bright flagstone seam is NOT its horizon",
+  prison && Math.abs(prison.maxStepSrc - prison.horizonSrc) > 20,
+  prison
+    ? `largest one-row mean jump is at source row ${prison.maxStepSrc} (the flagstone joint), horizon is ${prison.horizonSrc}`
+    : 'prison scene missing',
 )
 check(
-  'the bright flagstone seam is NOT the horizon',
-  Math.abs(plate.maxStepSrc - plate.horizonSrc) > 20,
-  `largest one-row mean jump is at source row ${plate.maxStepSrc} (the flagstone joint), horizon is ${plate.horizonSrc}`,
-)
-check(
-  'the wall above the horizon is darker than the floor below it',
-  plate.meanAbove < plate.meanAt,
-  `mean luma ${plate.meanAbove.toFixed(1)} above vs ${plate.meanAt.toFixed(1)} below`,
+  'each scene finds its horizon at its own scale, not a shared one',
+  horizons.length >= 2 &&
+    horizons.every((h) => Math.abs(h.horizonSrc - h.declaredFloorRow) <= 1) &&
+    horizons[0].horizonSrc !== horizons[1].horizonSrc,
+  horizons.map((h) => `${h.id}: row ${h.horizonSrc} -> y ${h.horizon.toFixed(2)}`).join(' | '),
 )
 
 // --- 2. Feet vs. that horizon, for every measured frame row --------------------
@@ -451,7 +578,7 @@ for (const [action, frame, label] of frames) {
     async ({ action, frame }) => {
       const g = window.__game
       await g.pin({ action, frame, playerX: 320, cameraX: 0 })
-      return { footRow: g.footRow(), footY: g.footY(), floorY: g.GameWorld.FLOOR_Y, action: g.animations.currentAction, frame: g.animations.currentFrameIndex }
+      return { footRow: g.footRow(), footY: g.footY(), floorY: g.world.floorY, action: g.animations.currentAction, frame: g.animations.currentFrameIndex }
     },
     { action, frame },
   )
@@ -485,61 +612,99 @@ console.log('per-frame correction is actually doing work')
 }
 
 // --- 4. Camera is clamped to the world ---------------------------------------
-console.log('camera clamping')
+console.log('camera resets per scene')
 {
   const res = await page.evaluate(async () => {
     const g = window.__game
     g.resume()
     const out = []
-    // Start each run near the edge it is testing rather than traversing the whole
-    // 1280px world, so the clamp is exercised in a bounded number of frames.
-    for (const [dir, startX] of [[1, 1200], [-1, 60], [1, 300], [-1, 1100]]) {
-      g.world.player.x = startX
-      g.setCamera(g.world.cameraXForPlayerX(startX))
-      g.world.player.setMovementInput(dir)
-      for (let i = 0; i < 400; i++) await new Promise((r) => requestAnimationFrame(r))
-      out.push({ dir, startX, playerX: g.world.player.x, cameraX: g.world.cameraX })
+    for (const index of [0, 1]) {
+      g.loadScene(index)
+      await new Promise((r) => requestAnimationFrame(r))
+      const scene = g.world.activeScene
+      // Walk toward the right edge, sampling the camera as we go.
+      const seen = []
+      g.world.player.setMovementInput(1)
+      for (let i = 0; i < 400; i++) {
+        await new Promise((r) => requestAnimationFrame(r))
+        if (i % 40 === 0) seen.push({ cameraX: g.world.cameraX, scene: g.world.activeSceneIndex })
+        // Stop short of the exit so the camera is observed, not the handover.
+        if (g.world.player.x > 560) g.world.player.setMovementInput(0)
+      }
+      g.world.player.setMovementInput(0)
+      out.push({
+        id: scene.definition.id,
+        worldWidth: g.world.worldWidth,
+        maxCamera: g.world.maxCameraX,
+        spawnCamera: g.world.cameraXForPlayerX(scene.definition.spawnX),
+        seen,
+        samples: seen.every((c) => c.cameraX >= -1e-6 && c.cameraX <= g.world.maxCameraX + 1e-6),
+      })
     }
-    g.world.player.setMovementInput(0)
-    // Hand later sections the same start state they had when the world was one
-    // screen wide, so they are not looking at wherever this section finished.
-    g.world.player.x = g.GameWorld.SPAWN_X
-    g.setCamera(g.world.cameraXForPlayerX(g.GameWorld.SPAWN_X))
-    return {
-      out,
-      maxCamera: g.GameWorld.WORLD_WIDTH - g.GameWorld.LOGICAL_WIDTH,
-      worldWidth: g.GameWorld.WORLD_WIDTH,
-      halfWidth: g.world.player.width / 2,
-    }
+    g.loadScene(0)
+    // Let the game draw the restored scene before anything samples the live canvas.
+    await g.settle()
+    return out
   })
 
-  const cams = res.out.map((r) => r.cameraX)
+  for (const r of res) {
+    check(
+      `${r.id}: the camera stays inside that scene's bounds`,
+      r.samples,
+      `cameras ${r.seen.map((c) => c.cameraX.toFixed(2)).join(', ')}, allowed 0..${r.maxCamera}`,
+    )
+    check(
+      `${r.id}: the camera starts reset at the scene entrance`,
+      Math.abs(r.spawnCamera - Math.min(Math.max(r.worldWidth > 640 ? 0 : 0, 0), r.maxCamera)) < 1e-9,
+      `entrance camera ${r.spawnCamera}, allowed 0..${r.maxCamera}`,
+    )
+  }
+}
+
+console.log('exactly one scene is on screen at a time')
+{
+  const res = await page.evaluate(async () => {
+    const g = window.__game
+    const out = []
+    for (const index of [0, 1]) {
+      g.loadScene(index)
+      await g.settle()
+      const plate = g.scenePlate()
+      // Mean luma of the drawn backdrop, which is what tells the two plates apart.
+      const d = g.backdropPixels()
+      let sum = 0
+      let n = 0
+      for (let ly = 0; ly < g.GameWorld.LOGICAL_HEIGHT; ly += 4) {
+        for (let lx = 0; lx < g.GameWorld.LOGICAL_WIDTH; lx += 4) {
+          const x = Math.round(g.offX() + lx * g.scale())
+          const y = Math.round(g.offY() + ly * g.scale())
+          sum += g.luma(d, (y * g.canvas.width + x) * 4)
+          n++
+        }
+      }
+      out.push({
+        index,
+        id: g.world.activeScene.definition.id,
+        asset: plate ? plate.width + 'x' + plate.height : 'missing',
+        mean: sum / n,
+      })
+    }
+    g.loadScene(0)
+    await g.settle()
+    return out
+  })
+  const prison = res.find((r) => r.index === 0)
+  const cavern = res.find((r) => r.index === 1)
+  check('each scene draws its own plate', res.every((r) => r.asset !== 'missing'), res.map((r) => `${r.id}:${r.asset}`).join(', '))
   check(
-    'the camera never leaves [0, WORLD_WIDTH - LOGICAL_WIDTH]',
-    cams.every((c) => c >= -1e-6 && c <= res.maxCamera + 1e-6),
-    `cameras ${cams.map((c) => c.toFixed(2)).join(', ')}, max allowed ${res.maxCamera}`,
+    'the two scenes are genuinely different pictures, not the same one twice',
+    prison && cavern && Math.abs(prison.mean - cavern.mean) > 1,
+    `prison mean luma ${prison?.mean.toFixed(2)}, cavern ${cavern?.mean.toFixed(2)}`,
   )
   check(
-    'the world is wider than the screen, so the camera has room to scroll',
-    res.maxCamera > 0,
-    `scroll range ${res.maxCamera}`,
-  )
-  check(
-    'the player is stopped at the world boundaries, never past them',
-    res.out.every(
-      (r) => r.playerX >= res.halfWidth - 0.001 && r.playerX <= res.worldWidth - res.halfWidth + 0.001,
-    ),
-    res.out.map((r) => r.playerX.toFixed(1)).join(', '),
-  )
-  check(
-    'walking left reaches the left world edge',
-    Math.abs(Math.min(...res.out.map((r) => r.playerX)) - res.halfWidth) < 1e-6,
-    `min ${Math.min(...res.out.map((r) => r.playerX)).toFixed(2)}`,
-  )
-  check(
-    'walking right from near the seam reaches the right world edge',
-    Math.abs(Math.max(...res.out.map((r) => r.playerX)) - (res.worldWidth - res.halfWidth)) < 1e-6,
-    `max ${Math.max(...res.out.map((r) => r.playerX)).toFixed(2)}, edge ${(res.worldWidth - res.halfWidth).toFixed(2)}`,
+    'each scene uses a differently sized source plate',
+    prison && cavern && prison.asset !== cavern.asset,
+    `${prison?.asset} vs ${cavern?.asset}`,
   )
 }
 
@@ -556,7 +721,7 @@ console.log('backdrop is not painted over')
     let mismatched = 0
     let sampled = 0
     for (const lx of [200, 260, 380, 440, 500]) {
-      for (const ly of [g.GameWorld.FLOOR_Y + 6, g.GameWorld.FLOOR_Y + 20, g.GameWorld.FLOOR_Y + 45]) {
+      for (const ly of [g.world.floorY + 6, g.world.floorY + 20, g.world.floorY + 45]) {
         const x = Math.round(g.offX() + lx * s)
         const y = Math.round(g.offY() + ly * s)
         const i = (y * width + x) * 4
@@ -640,7 +805,7 @@ console.log('dummy drawn in world space, not screen space')
       cameraX: g.world.cameraX,
       scrolled,
       foot: g.dummyFootRow(g.world.dummies[0]),
-      floorY: g.GameWorld.FLOOR_Y,
+      floorY: g.world.floorY,
       playerX: g.world.player.x,
     }
   })
@@ -679,7 +844,7 @@ console.log('hitbox and health bar are anchored to the dummy')
     const after = { ...d.hitbox }
     d.x = originX
     d.hp = 100
-    return { before, after, delta: 150, floorY: g.GameWorld.FLOOR_Y, width: d.width, height: d.height }
+    return { before, after, delta: 150, floorY: g.world.floorY, width: d.width, height: d.height }
   })
   check(
     'hitbox follows the dummy world X',
@@ -699,166 +864,422 @@ console.log('hitbox and health bar are anchored to the dummy')
   )
 }
 
-// --- 9. Spawn at the arena centre -------------------------------------------
-console.log('player spawns at the arena centre')
+// --- 9. Scene spawning ---------------------------------------------------------
+console.log('each scene spawns the player at its own entrance')
 {
-  const res = await page.evaluate(() => ({
-    ...window.__spawn,
-    playerScreenX: window.__spawn.playerX - window.__spawn.cameraX,
-  }))
-  check(
-    'spawn X is the arena centre, not a screen constant',
-    res.spawnX === res.arenaCenter && res.spawnX === res.logicalWidth / 2,
-    `spawnX ${res.spawnX}, arena centre ${res.arenaCenter}, half width ${res.logicalWidth / 2}`,
-  )
-  check('player starts at the spawn X', Math.abs(res.playerX - res.spawnX) < 1e-6, `playerX ${res.playerX}`)
-  check(
-    'spawn leaves room to walk both ways',
-    res.playerX - res.playerWidth / 2 > 100 && res.worldWidth - res.playerX - res.playerWidth / 2 > 100,
-    `${(res.playerX - res.playerWidth / 2).toFixed(0)}px to the left wall, ${(res.worldWidth - res.playerX - res.playerWidth / 2).toFixed(0)}px to the right`,
-  )
-  check(
-    'camera starts centred on the player',
-    Math.abs(res.playerScreenX - res.logicalWidth / 2) < 1e-6,
-    `player at screen x ${res.playerScreenX.toFixed(1)}, centre ${res.logicalWidth / 2}`,
-  )
-  check(
-    'a dummy sits to the right of the player, inside the arena',
-    res.dummyX > res.spawnX && res.dummyX < res.worldWidth,
-    `dummy at world x ${res.dummyX}`,
-  )
-}
-
-// --- 9b. Second world section: the Underground Cavern -------------------------
-console.log('cavern renders as its own section, not a repeat of the arena')
-{
-  // Camera fully inside the cavern: the whole viewport should be that one plate.
-  const inCavern = await page.evaluate(() => {
-    const g = window.__game
-    g.setCamera(g.GameWorld.WORLD_WIDTH - g.GameWorld.LOGICAL_WIDTH)
-    return { cols: g.columnProfile(), camera: g.world.cameraX }
-  })
-
-  const spread = Math.max(...inCavern.cols) - Math.min(...inCavern.cols)
-  check(
-    'the cavern section renders real scenery, not a flat fill',
-    spread > 12,
-    `column luminance spread ${spread.toFixed(1)}`,
-  )
-
-  // Mirroring or tiling would flip or repeat the column profile. The brightest
-  // column of the source artwork must land at the same logical x when drawn.
-  const orient = await page.evaluate(() => {
-    const g = window.__game
-    const src = g.world.cavernBackground
-    const srcCols = g.sourceColumnProfile(src.image)
-    const drawnCols = g.columnProfile()
-    const bright = g.argmax(srcCols)
-    // The plate is drawn once at world x = arena width; with the camera pinned to
-    // the far side it covers the viewport exactly, so source x maps straight to
-    // logical x.
-    return {
-      srcBright: (bright / srcCols.length) * g.GameWorld.LOGICAL_WIDTH,
-      drawnBright: g.argmax(drawnCols),
-      width: g.GameWorld.LOGICAL_WIDTH,
-    }
-  })
-
-  check(
-    'the cavern is drawn in original orientation, not mirrored',
-    Math.abs(orient.drawnBright - orient.srcBright) <= 2,
-    `brightest column drawn ${orient.drawnBright}, source ${orient.srcBright.toFixed(1)}, mirrored would be ${orient.width - orient.srcBright.toFixed(1)}`,
-  )
-}
-
-console.log('the two sections meet without a vertical jump')
-{
-  // Camera centred on the boundary, so the seam sits mid-viewport and the prison is
-  // on the left half and the cavern on the right.
-  //
-  // The horizon is searched only within a few rows of FLOOR_Y. Searching the whole
-  // column picks the arena's bright flagstone joint lower down its floor, which is
-  // a real painted edge but not the walkable surface -- the same decoy the arena's
-  // own floor row had to be distinguished from. Confining the search to the known
-  // plane makes this a direct test of whether the two sections agree there.
-  const seam = await page.evaluate(() => {
-    const g = window.__game
-    g.setCamera(g.GameWorld.BACKGROUND_LOGICAL_WIDTH - g.GameWorld.LOGICAL_WIDTH / 2)
-    const d = g.backdropPixels()
-    const H = g.GameWorld.LOGICAL_HEIGHT
-    const W = g.GameWorld.LOGICAL_WIDTH
-
-    const meanAt = (ly, half) => {
-      let sum = 0, n = 0
-      for (let lx = 0; lx < W; lx++) {
-        const inLeft = lx < W / 2 - 40
-        if (half === 'l' && !inLeft) continue
-        if (half === 'r' && inLeft) continue
-        const x = Math.round(g.offX() + lx * g.scale())
-        const y = Math.round(g.offY() + ly * g.scale())
-        sum += g.luma(d, (y * g.canvas.width + x) * 4)
-        n++
-      }
-      return sum / n
-    }
-
-    const SEARCH = 10
-    const horizon = (half) => {
-      let best = -Infinity, at = -1
-      for (let ly = Math.ceil(g.GameWorld.FLOOR_Y) - SEARCH; ly <= Math.ceil(g.GameWorld.FLOOR_Y) + SEARCH; ly++) {
-        const step = meanAt(ly + 1, half) - meanAt(ly - 1, half)
-        if (step > best) { best = step; at = ly }
-      }
-      return { at, best }
-    }
-    return { left: horizon('l'), right: horizon('r'), floorY: g.GameWorld.FLOOR_Y, height: H }
-  })
-
-  check(
-    'the prison shows a floor edge at the shared plane',
-    seam.left.at > 0 && seam.left.best > 2,
-    `row ${seam.left.at}, step ${seam.left.best.toFixed(1)}`,
-  )
-  check(
-    'the cavern shows a floor edge at the shared plane',
-    seam.right.at > 0 && seam.right.best > 2,
-    `row ${seam.right.at}, step ${seam.right.best.toFixed(1)}`,
-  )
-  check(
-    'the floor does not step up or down across the boundary',
-    Math.abs(seam.left.at - seam.right.at) <= 2,
-    `prison row ${seam.left.at}, cavern row ${seam.right.at}`,
-  )
-  check(
-    'the cavern floor sits on the shared ground plane',
-    Math.abs(seam.right.at - seam.floorY) <= 2,
-    `cavern row ${seam.right.at}, FLOOR_Y ${seam.floorY.toFixed(2)}`,
-  )
-}
-
-console.log('the player stands on the same floor inside the cavern')
-{
-  const res = await page.evaluate(() => {
+  const res = await page.evaluate(async () => {
     const g = window.__game
     const out = []
-    for (const x of [g.GameWorld.SPAWN_X, 700, 900, g.GameWorld.WORLD_WIDTH - 20]) {
-      g.world.player.x = x
-      g.world.player.groundY = g.GameWorld.FLOOR_Y
-      g.setCamera(g.world.cameraXForPlayerX(x))
-      out.push({ x, foot: g.footRow(), groundY: g.world.player.groundY })
+    for (let i = 0; i < g.world.scenes.length; i++) {
+      g.loadScene(i)
+      await g.settle()
+      const sc = g.world.activeScene
+      out.push({
+        id: sc.definition.id,
+        spawnX: sc.definition.spawnX,
+        playerX: g.world.player.x,
+        floorY: g.world.floorY,
+        sceneFloorY: sc.fit.floorY,
+        cameraX: g.world.cameraX,
+        expectedCamera: g.world.cameraXForPlayerX(sc.definition.spawnX),
+        dummyXs: g.world.dummies.map((d) => d.x),
+        declaredDummies: [...sc.definition.dummyXs],
+        dummyGroundY: g.world.dummies.map((d) => d.groundY),
+      })
     }
-    g.world.player.x = g.GameWorld.SPAWN_X
-    g.setCamera(g.world.cameraXForPlayerX(g.GameWorld.SPAWN_X))
-    return { samples: out, floorY: g.GameWorld.FLOOR_Y }
+    g.loadScene(0)
+    return out
   })
 
-  for (const s of res.samples) {
+  for (const r of res) {
+    check(`${r.id}: the player spawns at the scene entrance`, Math.abs(r.playerX - r.spawnX) < 1e-9, `playerX ${r.playerX}, entrance ${r.spawnX}`)
+    check(`${r.id}: the player is grounded on that scene's floor plane`, Math.abs(r.floorY - r.sceneFloorY) < 1e-9, `${r.floorY} vs ${r.sceneFloorY}`)
+    check(`${r.id}: the camera resets to the new scene`, Math.abs(r.cameraX - r.expectedCamera) < 1e-9, `cameraX ${r.cameraX}, expected ${r.expectedCamera}`)
+    check(`${r.id}: the scene's own dummies, and only its own`, JSON.stringify(r.dummyXs) === JSON.stringify(r.declaredDummies), `got ${JSON.stringify(r.dummyXs)}, declared ${JSON.stringify(r.declaredDummies)}`)
+    check(`${r.id}: every dummy stands on that scene's floor`, r.dummyGroundY.every((y) => Math.abs(y - r.sceneFloorY) < 1e-9), r.dummyGroundY.join(', '))
+  }
+
+  const prison = res[0]
+  const cavern = res[1]
+  check(
+    "one scene's fixtures do not carry into the next",
+    cavern && !cavern.dummyXs.some((x) => prison.dummyXs.includes(x)),
+    `prison ${JSON.stringify(prison?.dummyXs)} vs cavern ${JSON.stringify(cavern?.dummyXs)}`,
+  )
+}
+
+// --- 10. The backdrop fills its scene, with no black gap anywhere --------------
+console.log('no black background gaps in either scene')
+{
+  const res = await page.evaluate(async () => {
+    const g = window.__game
+    const out = []
+    for (let i = 0; i < g.world.scenes.length; i++) {
+      g.loadScene(i)
+      g.setCamera(0)
+      await g.settle()
+      out.push({
+        id: g.world.activeScene.definition.id,
+        ...g.unpaintedPixels(),
+        total: g.GameWorld.LOGICAL_WIDTH * g.GameWorld.LOGICAL_HEIGHT,
+        fit: g.world.activeScene.fit,
+        worldWidth: g.world.worldWidth,
+      })
+    }
+    g.loadScene(0)
+    await g.settle()
+    return out
+  })
+
+  for (const r of res) {
     check(
-      `feet on FLOOR_Y at world x ${s.x.toFixed(0)}`,
-      s.foot !== null && Math.abs(s.foot + 1 - res.floorY) <= 1,
-      `foot row ${s.foot}, FLOOR_Y ${res.floorY.toFixed(2)}`,
+      `${r.id}: the backdrop paints the whole viewport, no unfilled gap`,
+      r.unpainted === 0,
+      `${r.unpainted}/${r.total} logical pixels never painted`,
+    )
+    check(
+      `${r.id}: the viewport border is fully painted`,
+      r.edgeUnpainted === 0,
+      `${r.edgeUnpainted} border pixels never painted`,
+    )
+    check(
+      `${r.id}: the plate is at least as large as the area it covers`,
+      r.fit.drawWidth >= r.worldWidth && r.fit.drawHeight >= 360,
+      `draw ${r.fit.drawWidth}x${r.fit.drawHeight} vs world ${r.worldWidth}x360`,
+    )
+    check(
+      `${r.id}: the fit crops rather than insets`,
+      r.fit.offsetX <= 0 && r.fit.offsetY <= 0,
+      `offset ${r.fit.offsetX},${r.fit.offsetY}`,
     )
   }
+}
+
+// --- 11. The player keeps one size and stays grounded, in every scene ----------
+console.log('player scale is identical in every scene')
+{
+  const res = await page.evaluate(async () => {
+    const g = window.__game
+    const out = []
+    for (let i = 0; i < g.world.scenes.length; i++) {
+      g.loadScene(i)
+      await g.pin({ action: 'IDLE', frame: 0, playerX: g.world.activeScene.definition.spawnX, cameraX: 0 })
+      out.push({ id: g.world.activeScene.definition.id, box: g.spriteBounds(), scale: g.world.activeScene.fit.scale })
+    }
+    g.loadScene(0)
+    return out
+  })
+
+  const ref = res[0]?.box
+  check('the sprite renders with a measurable box in every scene', res.every((r) => r.box), res.map((r) => `${r.id}:${r.box ? 'ok' : 'none'}`).join(', '))
+  for (const r of res.slice(1)) {
+    check(
+      `${r.id}: the sprite is the same size as in ${res[0].id}, despite a different backdrop scale`,
+      r.box && ref && r.box.width === ref.width && r.box.height === ref.height,
+      `${r.box?.width}x${r.box?.height} vs ${ref?.width}x${ref?.height} (backdrop scales ${res[0].scale.toFixed(4)} vs ${r.scale.toFixed(4)})`,
+    )
+  }
+  check(
+    'the scenes really do use different backdrop scales, so this is a real test',
+    res.length >= 2 && Math.abs(res[0].scale - res[1].scale) > 1e-6,
+    res.map((r) => r.scale.toFixed(4)).join(' vs '),
+  )
+}
+
+console.log('the player is grounded on each scene floor, on every walk frame')
+{
+  const res = await page.evaluate(async () => {
+    const g = window.__game
+    const out = []
+    for (let i = 0; i < g.world.scenes.length; i++) {
+      g.loadScene(i)
+      const spawn = g.world.activeScene.definition.spawnX
+      const samples = []
+      for (const [action, frame] of [['IDLE', 0], ['IDLE', 7], ['WALK', 0], ['WALK', 2], ['WALK', 5], ['WALK', 8], ['WALK', 11], ['JUMP', 4]]) {
+        await g.pin({ action, frame, playerX: spawn, cameraX: 0 })
+        samples.push({ action, frame, foot: g.footRow(), floorY: g.world.floorY })
+      }
+      out.push({ id: g.world.activeScene.definition.id, floorY: g.world.floorY, samples })
+    }
+    g.loadScene(0)
+    return out
+  })
+
+  for (const r of res) {
+    for (const s of r.samples) {
+      check(
+        `${r.id}: ${s.action} frame ${s.frame} feet sit on the scene floor`,
+        s.foot !== null && Math.abs(s.foot - r.floorY) <= 1.5,
+        `foot row ${s.foot}, floor ${r.floorY.toFixed(3)}`,
+      )
+    }
+  }
+  check(
+    'the scenes really do have different floor planes',
+    res.length >= 2 && Math.abs(res[0].floorY - res[1].floorY) > 1,
+    res.map((r) => r.floorY.toFixed(2)).join(' vs '),
+  )
+}
+
+// --- 12. The handover: one scene at a time, dark at the swap -------------------
+console.log('scene transition on the web: dark, single-scene, and lands correctly')
+{
+  const res = await page.evaluate(async () => {
+    const g = window.__game
+    g.pause()
+
+    // Full-viewport rendered backdrop for each scene, captured before the handover
+    // so every transition frame can be attributed to exactly one of them.
+    const plates = {}
+    const ids = []
+    for (let i = 0; i < g.world.scenes.length; i++) {
+      g.loadScene(i)
+      g.setCamera(0)
+      await g.settle()
+      const id = g.world.activeScene.definition.id
+      ids.push(id)
+      plates[id] = g.backdropPixels()
+    }
+
+    // Subsampled device pixels, so the fit below stays cheap over ~100 frames.
+    const pts = []
+    const lxOf = []
+    for (let ly = 0; ly < g.GameWorld.LOGICAL_HEIGHT; ly += 5) {
+      for (let lx = 0; lx < g.GameWorld.LOGICAL_WIDTH; lx += 5) {
+        pts.push(Math.round(g.offY() + ly * g.scale()) * g.canvas.width + Math.round(g.offX() + lx * g.scale()))
+        lxOf.push(lx)
+      }
+    }
+
+    /**
+     * Logical columns covered by what the world draws on top of the backdrop: the
+     * boundary pillars at each end of the scene, the knight (a 100px cell) and the
+     * dummies (a 52px crossbeam).
+     *
+     * Those are drawn over the veiled scene during a handover, so they are excluded
+     * from the model below. Without the exclusion they would dominate the residual
+     * and mask a real two-scene blend, which is the opposite of what this check is
+     * for. Everything else in the frame must still be one scene under a veil.
+     */
+    const objectColumns = (dummies) => {
+      const m = new Uint8Array(g.GameWorld.LOGICAL_WIDTH)
+      const mark = (cx, half) => {
+        for (let x = Math.max(0, Math.floor(cx - half)); x <= Math.min(g.GameWorld.LOGICAL_WIDTH - 1, Math.ceil(cx + half)); x++) {
+          m[x] = 1
+        }
+      }
+      // The two boundary pillars, which the renderer draws on every frame.
+      const W = g.GameWorld.LOGICAL_WIDTH
+      for (let x = 0; x < 26; x++) m[x] = 1
+      for (let x = W - 26; x < W; x++) m[x] = 1
+      mark(g.world.player.x - g.world.cameraX, 56)
+      for (const d of dummies) mark(d.x - g.world.cameraX, 32)
+      return m
+    }
+
+    // A transition frame is the scene uniformly veiled toward rgb(2,3,6). Fit that
+    // single alpha per scene; if any frame were a blend of two environments, it
+    // would fit neither and leave a large residual.
+    const VEIL = [2, 3, 6]
+    const fit = (frame, plate, mask) => {
+      let num = 0
+      let den = 0
+      for (let k = 0; k < pts.length; k++) {
+        if (mask[lxOf[k]]) continue
+        const i = pts[k] * 4
+        for (let c = 0; c < 3; c++) {
+          const s = plate[i + c] - VEIL[c]
+          const f = frame[i + c] - VEIL[c]
+          num += s * f
+          den += s * s
+        }
+      }
+      const a = den > 0 ? Math.min(1, Math.max(0, 1 - num / den)) : 1
+      // 95th percentile of the per-pixel error, not the mean: fog motes, the ember
+      // glow and the title glyphs are sparse bright pixels drawn over the veil and
+      // would dominate an average, whereas a genuine two-scene blend is wrong almost
+      // everywhere and still shows up here.
+      const errs = []
+      for (let k = 0; k < pts.length; k++) {
+        if (mask[lxOf[k]]) continue
+        const i = pts[k] * 4
+        let worst = 0
+        for (let c = 0; c < 3; c++) {
+          const pred = (1 - a) * plate[i + c] + a * VEIL[c]
+          worst = Math.max(worst, Math.abs(frame[i + c] - pred))
+        }
+        errs.push(worst)
+      }
+      errs.sort((x, y) => x - y)
+      return { alpha: a, p95: errs[Math.floor(errs.length * 0.95)] ?? 0, used: errs.length }
+    }
+
+    // The median is the right measure of "is this frame dark": the title glyphs and
+    // the ember glow are meant to be visible, but they cover a small minority of the
+    // screen, so an un-veiled scene would still show a bright median.
+    const meanLuma = (d) => {
+      const lumas = []
+      let bright = 0
+      for (let ly = 0; ly < g.GameWorld.LOGICAL_HEIGHT; ly++) {
+        for (let lx = 0; lx < g.GameWorld.LOGICAL_WIDTH; lx++) {
+          const x = Math.round(g.offX() + lx * g.scale())
+          const y = Math.round(g.offY() + ly * g.scale())
+          const i = (y * g.canvas.width + x) * 4
+          const l = g.luma(d, i)
+          lumas.push(l)
+          if (l > 120) bright++
+        }
+      }
+      lumas.sort((a, b) => a - b)
+      return { median: lumas[Math.floor(lumas.length / 2)], max: lumas[lumas.length - 1], bright }
+    }
+
+    // Drive the handover by hand so the frames are sampled deterministically.
+    g.loadScene(0)
+    await g.settle()
+    const fromId = g.world.activeScene.definition.id
+    g.world.player.setMovementInput(1)
+    for (let i = 0; i < 600 && !g.world.isTransitioning; i++) g.world.update(1 / 60)
+    g.world.player.setMovementInput(0)
+    const exitX = g.world.player.x
+
+    g.startTransition()
+    const frames = []
+    for (let step = 0; step < 200; step++) {
+      // Only sample while the handover is running. The first frame after it completes
+      // is ordinary gameplay -- player, dummies and shadow included -- which is not a
+      // veiled scene and would not fit the model below.
+      if (!g.world.isTransitioning) break
+      await g.settle()
+      const plateNow = g.pixels()
+      const mask = objectColumns(g.world.dummies)
+      const fits = {}
+      for (const id of ids) fits[id] = fit(plateNow, plates[id], mask)
+      const stats = meanLuma(plateNow)
+      frames.push({
+        phase: g.world.transitionPhase,
+        scene: g.world.activeScene.definition.id,
+        rms: Object.fromEntries(ids.map((id) => [id, fits[id].p95])),
+        alpha: Object.fromEntries(ids.map((id) => [id, fits[id].alpha])),
+        luma: stats,
+      })
+      g.world.update(1 / 120)
+    }
+    // Finish the handover so the landing state can be asserted.
+    for (let step = 0; step < 200 && g.world.isTransitioning; step++) g.world.update(1 / 120)
+    return {
+      ids,
+      fromId,
+      exitX,
+      frames,
+      finalScene: g.world.activeScene.definition.id,
+      finalPlayerX: g.world.player.x,
+      finalFloorY: g.world.floorY,
+      finalCamera: g.world.cameraX,
+      expectedCamera: g.world.cameraXForPlayerX(g.world.player.x),
+      finalDummies: g.world.dummies.map((d) => d.x),
+      finalPhase: g.world.transitionPhase,
+      title: g.world.transitionTitle,
+    }
+  })
+
+  const ids = res.ids
+  check('the handover starts from the prison', res.fromId === 'forgotten_prison', res.fromId)
+  check('the player reached the exit to trigger it', res.exitX > 600, `exit reached at x ${res.exitX}`)
+  check('it lands on the cavern', res.finalScene === 'underground_cavern', res.finalScene)
+  check('gameplay resumes when it ends', res.finalPhase === 'idle', res.finalPhase)
+  check('the title is cleared afterwards', res.title === '', res.title)
+
+  const phases = new Set(res.frames.map((f) => f.phase))
+  check(
+    'it fades out, holds the title, then fades back in',
+    phases.has('fadingOut') && phases.has('title') && phases.has('fadingIn'),
+    [...phases].join(','),
+  )
+
+  // During the fades, every visible frame must be ONE scene under a veil: a frame
+  // mixing two environments would fit both poorly, and a seam would fit neither.
+  //
+  // The title card is excluded because it deliberately paints an ember glow and the
+  // area name over the veil. It is covered by its own check below, which is the
+  // stronger statement for that phase anyway: an opaque veil means no scenery is
+  // visible at all, so there is nothing there to seam.
+  const fadeFrames = res.frames.filter((f) => f.phase === 'fadingOut' || f.phase === 'fadingIn')
+  const worst = fadeFrames.map((f) => ({ phase: f.phase, rms: Math.min(...Object.values(f.rms)), scene: f.scene }))
+  const worstOverall = worst.length ? worst.reduce((a, b) => (b.rms > a.rms ? b : a)) : null
+  check(
+    'both fade phases were sampled',
+    res.frames.some((f) => f.phase === 'fadingOut') && res.frames.some((f) => f.phase === 'fadingIn'),
+    `${res.frames.filter((f) => f.phase === 'fadingOut').length} out / ${res.frames.filter((f) => f.phase === 'fadingIn').length} in`,
+  )
+  check(
+    'every faded frame is a single scene under a veil, never a blend of two',
+    worstOverall !== null && worstOverall.rms < 8,
+    worstOverall
+      ? `worst 95th-percentile residual ${worstOverall.rms.toFixed(2)} luma levels during "${worstOverall.phase}" on ${worstOverall.scene}`
+      : 'no fade frames sampled',
+  )
+  // Each fade frame must match its own scene better than the other one, which is what
+  // makes "one scene at a time" a positive identification rather than a loose bound:
+  // a frame showing both would fit neither.
+  const bestFit = (f) => ids.reduce((a, b) => (f.rms[b] < f.rms[a] ? b : a), ids[0])
+  // Frames where the veil is still opaque carry no scenery at all -- both plates fit
+  // them exactly, because the screen is uniformly the veil colour. There is nothing
+  // to identify there, so they are excluded rather than counted as a mismatch.
+  const visibleFadeFrames = fadeFrames.filter((f) => f.alpha[f.scene] < 0.95)
+  const misidentified = visibleFadeFrames.filter((f) => bestFit(f) !== f.scene)
+  check(
+    'each fade frame is identified as the scene it is actually showing',
+    visibleFadeFrames.length > 0 && misidentified.length === 0,
+    misidentified.length
+      ? `${misidentified.length} frames matched the wrong plate, e.g. "${misidentified[0].phase}" showed ${misidentified[0].scene} but fitted ${bestFit(misidentified[0])}`
+      : `${visibleFadeFrames.length} visible fade frames all matched their own plate`,
+  )
+  check('the frame sample actually covers the handover', res.frames.length > 30, `${res.frames.length} frames`)
+
+  // The swap must happen in the dark, or the change of scenery is visible.
+  const titleFrames = res.frames.filter((f) => f.phase === 'title')
+  check(
+    'the screen is fully dark while the area title is up',
+    titleFrames.length > 0 && titleFrames.every((f) => f.luma.median < 6),
+    `title frames ${titleFrames.length}, brightest median ${Math.max(...titleFrames.map((f) => f.luma.median)).toFixed(2)}`,
+  )
+  const swapIndex = res.frames.findIndex((f) => f.scene === 'underground_cavern')
+  const swapFrame = res.frames[swapIndex]
+  check(
+    'the scene swap happens behind the opaque part of the fade',
+    swapFrame && swapFrame.phase === 'title' && swapFrame.luma.median < 6,
+    swapFrame ? `swapped during "${swapFrame.phase}", median luma ${swapFrame.luma.median.toFixed(2)}` : 'never swapped',
+  )
+  check(
+    'the previous scene is still on screen while it fades out',
+    res.frames.filter((f) => f.phase === 'fadingOut').every((f) => f.scene === 'forgotten_prison'),
+    '',
+  )
+
+  // The title is actually drawn, not merely scheduled.
+  const brightTitle = titleFrames.filter((f) => f.luma.bright > 200)
+  check(
+    'the area name is actually rendered on screen',
+    brightTitle.length > 0,
+    `frames with title pixels ${brightTitle.length}, peak count ${Math.max(0, ...titleFrames.map((f) => f.luma.bright))}`,
+  )
+
+  check(
+    'the player is placed at the cavern entrance',
+    Math.abs(res.finalPlayerX - 120) < 1e-9,
+    `playerX ${res.finalPlayerX}`,
+  )
+  check(
+    'the camera is reset for the cavern',
+    Math.abs(res.finalCamera - res.expectedCamera) < 1e-9,
+    `cameraX ${res.finalCamera}, expected ${res.expectedCamera}`,
+  )
+  check(
+    "the prison's dummies did not follow the player",
+    JSON.stringify(res.finalDummies) === JSON.stringify([400, 520]),
+    `cavern dummies ${JSON.stringify(res.finalDummies)}`,
+  )
 }
 
 // --- 10. Action buttons carry no coloured circle -----------------------------

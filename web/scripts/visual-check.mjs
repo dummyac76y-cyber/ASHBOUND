@@ -85,7 +85,7 @@ console.log('both dummies are world fixtures on the floor')
       maxHp: d.maxHp,
       top: d.hitbox.top,
       bottom: d.hitbox.bottom,
-      floorY: g.GameWorld.FLOOR_Y,
+      floorY: g.world.floorY,
     }))
   })
   check('two dummies exist', res.length === 2, `${res.length}`)
@@ -144,7 +144,7 @@ console.log('the backdrop is drawn once, unmirrored, untiled')
     // Freeze at the spawn frame so the dummies and player are stationary.
     g.resume()
     g.setFrame('idle', 0)
-    g.world.player.x = g.GameWorld.SPAWN_X
+    g.world.player.x = g.world.activeScene.definition.spawnX
     g.world.cameraX = 0
     g.pause()
 
@@ -156,8 +156,12 @@ console.log('the backdrop is drawn once, unmirrored, untiled')
     return new Promise((resolve, reject) => {
       bg.onload = () => {
         try {
-        const SW = g.GameWorld.BACKGROUND_WIDTH
-        const SH = g.GameWorld.BACKGROUND_HEIGHT
+        // The active scene's own plate and fit: each environment is scaled to fill
+        // on its own terms, so there is no single shared scale to read here.
+        const scene = g.world.activeScene
+        const SW = scene.definition.sourceWidth
+        const SH = scene.definition.sourceHeight
+        const fit = scene.fit
 
         // Renders the plate into a lw x lh surface using the exact transform the
         // game applies: device scale, letterbox offset, camera translate at 0.
@@ -175,26 +179,27 @@ console.log('the backdrop is drawn once, unmirrored, untiled')
           b.scale(g.scale(), g.scale())
           b.translate(-g.world.cameraX, 0)
           if (pre) pre(b)
-          // The game's own single-backdrop draw: identity transform, no flip.
-          b.drawImage(bg, 0, 0, SW, SH, 0, 0, SW * g.GameWorld.BACKGROUND_SCALE, SH * g.GameWorld.BACKGROUND_SCALE)
-          // The arena boundary pillars the game also paints, so the reference
-          // matches the live frame everywhere rather than only over open wall.
+          // The game's own single-backdrop draw: one uniform scale, no flip, cropped
+          // by the scene's fit.
+          b.drawImage(bg, 0, 0, SW, SH, fit.offsetX, fit.offsetY, fit.drawWidth, fit.drawHeight)
+          // The boundary pillars the game also paints, so the reference matches the
+          // live frame everywhere rather than only over open wall.
           b.fillStyle = 'rgb(50, 55, 70)'
-          b.fillRect(0, 0, 24, g.GameWorld.FLOOR_Y)
-          b.fillRect(g.GameWorld.WORLD_WIDTH - 24, 0, g.GameWorld.WORLD_WIDTH, g.GameWorld.FLOOR_Y)
+          b.fillRect(0, 0, 24, g.world.floorY)
+          b.fillRect(g.world.worldWidth - 24, 0, g.world.worldWidth, g.world.floorY)
           return b.getImageData(0, 0, lw, lh).data
         }
 
         const refData = renderRef(null)
         // A horizontally mirrored copy of the same reference.
         const mirrorData = renderRef((b) => {
-          b.translate(SW * g.GameWorld.BACKGROUND_SCALE, 0)
+          b.translate(fit.offsetX + fit.drawWidth, 0)
           b.scale(-1, 1)
         })
 
         // The backdrop's logical footprint, in device pixels.
-        const bgDeviceW = SW * g.GameWorld.BACKGROUND_SCALE * g.scale()
-        const bgDeviceH = SH * g.GameWorld.BACKGROUND_SCALE * g.scale()
+        const bgDeviceW = fit.drawWidth * g.scale()
+        const bgDeviceH = fit.drawHeight * g.scale()
 
         // Number of vertical sample columns used for the comparison.
         const bands = 18
