@@ -31,6 +31,9 @@ export const FOOT_ROWS_BY_SHEET: Readonly<Record<string, readonly number[]>> = {
   'idle.png': [111, 111, 111, 111, 111, 111],
   'walk.png': [111, 111, 110, 110, 110, 111, 110, 111, 112, 112, 112, 112],
   'jump.png': [115, 115, 115, 115, 115, 115, 115, 115],
+  // The block sheet is 8 frames of the 128px strip and holds one foot row across
+  // all of them, so the guard stance stays planted while it cycles.
+  'block.png': [115, 115, 115, 115, 115, 115, 115, 115],
   // The attack sheet is a 4x4 grid of 256px cells and every frame plants its feet
   // on the same row, so the constant 198 keeps the whole swing seated on the
   // floor. These are rows within a 256 cell, not a 128 one.

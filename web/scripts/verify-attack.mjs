@@ -203,6 +203,7 @@ if (reference) {
     'walk.png': 81.0,
     'jump.png': 85.0,
     'attack.png': 84.5,
+    'block.png': 84.5,
     'heavy_attack.png': 95.0,
   }
   const TOLERANCE = 2

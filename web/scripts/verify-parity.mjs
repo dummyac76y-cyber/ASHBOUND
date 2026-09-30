@@ -307,9 +307,18 @@ console.log('CHARACTER SIZE: every sheet renders the character the same height')
 // engine's config drifts from the values those measurements were calibrated on.
 // Two sheets are deliberately off the common size, in opposite directions: the
 // walk cycle is drawn smaller, the heavy attack larger.
-const MEDIAN_RENDERED = { idle: 84.5, walk: 81.0, jump: 85.0, attack: 84.5, heavy: 95.0 }
-const SCALE = { idle: 1, walk: WALK_SCALE, jump: JUMP_SCALE, attack: ATTACK_SCALE, heavy: HEAVY_SCALE }
-const CELL = { idle: 128, walk: 128, jump: 128, attack: 256, heavy: 256 }
+const MEDIAN_RENDERED = { idle: 84.5, walk: 81.0, jump: 85.0, attack: 84.5, block: 84.5, heavy: 95.0 }
+// Read from the configs so a stale copy cannot mislabel the output.
+const SCALE = {
+  idle: scaleOf('PlayerAction.IDLE'),
+  walk: WALK_SCALE,
+  jump: JUMP_SCALE,
+  attack: ATTACK_SCALE,
+  block: scaleOf('PlayerAction.BLOCK'),
+  heavy: HEAVY_SCALE,
+}
+// Intrinsic to the artwork: the strip sheets are 128px cells, the grids 256px.
+const CELL = { idle: 128, walk: 128, jump: 128, attack: 256, block: 128, heavy: 256 }
 
 const DEVIATIONS = ['heavy', 'walk']
 const standard = Object.entries(MEDIAN_RENDERED).filter(([name]) => !DEVIATIONS.includes(name))

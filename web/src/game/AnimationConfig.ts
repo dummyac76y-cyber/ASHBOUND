@@ -133,9 +133,12 @@ export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
     [PlayerAction.HEAVY_ATTACK, config(PlayerAction.HEAVY_ATTACK, 'heavy_attack.png', 25, 20, false, 4, {
       columns: 5, cellSize: 256, displayScale: 1.78, hitFrames: [14, 18],
     })],
-    // These four have no art of their own yet and stand in on idle.png, so they
+    // block.png is 8 frames of the 128px strip. It draws the character slightly
+    // taller than idle.png, so it scales down to match, and every frame plants
+    // its feet on the same row.
+    [PlayerAction.BLOCK, config(PlayerAction.BLOCK, 'block.png', 8, 12, true, 2, { displayScale: 1.031 })],
+    // These three have no art of their own yet and stand in on idle.png, so they
     // must carry idle's scale or they render at a different size from it.
-    [PlayerAction.BLOCK, config(PlayerAction.BLOCK, 'idle.png', 6, 12, true, 2, { displayScale: 1.063 })],
     [PlayerAction.DASH, config(PlayerAction.DASH, 'idle.png', 6, 15, false, 5, { displayScale: 1.063 })],
     [PlayerAction.HURT, config(PlayerAction.HURT, 'idle.png', 4, 12, false, 6, { displayScale: 1.063 })],
     [PlayerAction.DEATH, config(PlayerAction.DEATH, 'idle.png', 6, 8, false, 10, { displayScale: 1.063 })],

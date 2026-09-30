@@ -109,18 +109,21 @@ object DefaultAnimationConfigs {
             displayScale = 1.78f,
             hitFrames = listOf(14, 18)
         ),
-        // These four have no art of their own yet, so they stand in on idle.png.
-        // They must carry idle's scale or they would render at a different size.
+        // block.png is 8 frames of the 128px strip. It draws the character slightly
+        // taller than idle.png, so it scales down to match, and every frame plants
+        // its feet on the same row.
         PlayerAction.BLOCK to AnimationConfig(
             action = PlayerAction.BLOCK,
-            sourceFileName = "idle.png",
-            frameCount = 6,
+            sourceFileName = "block.png",
+            frameCount = 8,
             fps = 12,
             loop = true,
             priority = 2,
             canBeCancelledByMovement = true,
-            displayScale = 1.063f
+            displayScale = 1.031f
         ),
+        // These three have no art of their own yet, so they stand in on idle.png.
+        // They must carry idle's scale or they would render at a different size.
         PlayerAction.DASH to AnimationConfig(
             action = PlayerAction.DASH,
             sourceFileName = "idle.png",
