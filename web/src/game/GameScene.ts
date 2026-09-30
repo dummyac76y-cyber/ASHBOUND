@@ -54,7 +54,7 @@ export interface SceneBackdropFit {
    * The two paintings put their floor at different heights inside the frame, so
    * without this the same world Y would put the knight near the bottom in one
    * scene and much higher in the other. This shifts the entire world -- backdrop,
-   * player, dummies, particles -- up or down as one, cropping excess background
+   * player, NPCs, particles -- up or down as one, cropping excess background
    * at the top or bottom and nothing else. It is a camera offset only: it never
    * touches the scale, and it never moves the player relative to [floorY], which
    * stays the world coordinate the physics works in.
@@ -182,13 +182,13 @@ export interface SceneDefinition {
   /** World X the player is placed at when this scene loads. */
   readonly spawnX: number
   /**
-   * World X of this scene's training dummies, in world units.
+   * World X of this scene's NPCs, in world units.
    *
    * Explicit per scene: objects belong to the scene that declares them and are
    * rebuilt on entry, so one scene's fixtures never carry into the next unless that
    * scene lists its own.
    */
-  readonly dummyXs: readonly number[]
+  readonly npcXs: readonly number[]
   /**
    * World X at which this scene hands over to the next one, or null when the scene
    * is a dead end and has nowhere to go.
@@ -214,7 +214,7 @@ export const FORGOTTEN_PRISON: SceneDefinition = {
   floorRow: 533,
   worldWidth: 640,
   spawnX: 320,
-  dummyXs: [450, 570],
+  npcXs: [450, 570],
   // The player is clamped to worldWidth - width/2, so the exit sits exactly where
   // walking into the right-hand wall brings them to a stop.
   exitX: 618,
@@ -245,8 +245,8 @@ export const UNDERGROUND_CAVERN: SceneDefinition = {
   worldWidth: 1536,
   // Entered from the left, at the mouth of the cave, with room to walk both ways.
   spawnX: 768,
-  // Deliberately not the prison's 450/570: the cavern declares its own fixtures.
-  dummyXs: [900, 1020],
+  // Deliberately not the prison's 450/570: the cavern declares its own NPCs.
+  npcXs: [900, 1020],
   exitX: null,
 }
 

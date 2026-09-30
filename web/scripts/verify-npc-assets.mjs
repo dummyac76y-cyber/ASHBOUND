@@ -28,6 +28,7 @@ import {
   NPC_BASELINE_Y,
   NPC_CELL_SIZE,
   NPC_CLIPS,
+  NPC_IDLE_FPS,
   NPC_IDLE_WALK_SHEET,
   NPC_NEAREST_NEIGHBOR,
   NPC_WALK_FPS,
@@ -216,13 +217,12 @@ console.log('\neach motion is bound to frames that exist, and can be bound indep
   }
 
   const walk = NPC_CLIPS.find((c) => c.name === 'walk')
+  const idle = NPC_CLIPS.find((c) => c.name === 'idle')
   check('walk plays the full cycle, since the sheet is one continuous stride', walk.frameCount === 12, `${walk.frameCount} frames`)
   check('walk loops', walk.loops === true)
-  check('walk runs at a sane cadence', NPC_WALK_FPS > 0 && NPC_WALK_FPS <= 24, `${NPC_WALK_FPS} fps`)
-
-  // A motion is only free to be re-pointed if moving it cannot disturb the other.
-  const idle = NPC_CLIPS.find((c) => c.name === 'idle')
-  check('assigning idle later would not require touching walk', idle !== walk && idle.sheet !== walk.sheet || idle.sheet === null)
+  check('walk runs at 12 fps as specified', walk.fps === NPC_WALK_FPS && NPC_WALK_FPS === 12, `${walk.fps} fps`)
+  check('idle runs at 6 fps as specified', idle.fps === NPC_IDLE_FPS && NPC_IDLE_FPS === 6, `${idle.fps} fps`)
+  check('idle and walk are separate bindings that name their own frame ranges', idle !== walk && (idle.firstFrame !== walk.firstFrame || idle.frameCount !== walk.frameCount), `idle ${idle.frameCount} frame(s), walk ${walk.frameCount}`)
 }
 
 console.log('\nthe remaining sheets are declared but genuinely absent')

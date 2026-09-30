@@ -169,6 +169,12 @@ export function npcSheetHeight(sheet: NpcSheetDefinition): number {
   return sheet.layout === 'grid' ? NPC_CELL_SIZE * 8 : NPC_CELL_SIZE
 }
 
+/** Frames played per second by walk, matching the player's own cadence. */
+export const NPC_WALK_FPS = 12
+
+/** Frames played per second by idle. Idle holds a single frame, so this only sets the cadence it would run at. */
+export const NPC_IDLE_FPS = 6
+
 /**
  * A motion, bound to a run of frames on a sheet.
  *
@@ -188,6 +194,8 @@ export interface NpcClip {
   readonly frameCount: number
   /** Whether the last frame wraps to the first. */
   readonly loops: boolean
+  /** Frames played per second while this clip runs. */
+  readonly fps: number
 }
 
 /**
@@ -196,21 +204,27 @@ export interface NpcClip {
  * The 12-frame sheet is named idle-and-walk, but measuring it shows one continuous
  * stride: in all twelve frames the two feet sit at different heights and different
  * x positions, and the foot that is forward alternates across the file, wrapping
- * from the last frame back to the first. No frame is a planted, stationary stance,
- * so there is no idle range to cut from it. Rather than re-time a walk frame to
- * fake a standing pose -- which would be a pose that was never drawn -- idle is
- * left unassigned and walk takes the whole cycle.
+ * from the last frame back to the first. No two frames are alike -- the closest pair
+ * still differs over a fifth of the silhouette -- so there is no planted, stationary
+ * sub-loop to cut out for idle.
  *
- * When idle artwork arrives, either point `idle` at its own sheet or hand it a
- * range of a shared one; neither binding disturbs walk.
+ * Rather than re-time a walk frame into a standing pose that was never drawn, idle
+ * holds frame 0 alone. That is the frame the single reference sprite is a still of,
+ * so it is the pose the NPC is known to have stood in. Walk takes the whole cycle.
+ *
+ * Both clips already name their own sheet and frame range, so the moment real idle
+ * artwork arrives -- as `npc_idle.png`, or as a range of some future shared sheet --
+ * only the `idle` entry below changes. Walk is untouched by that edit, and because
+ * both draw against `NPC_BASELINE_Y`, re-pointing one cannot move the NPC's feet.
  */
 export const NPC_CLIPS: readonly NpcClip[] = [
   {
     name: 'idle',
-    sheet: null,
+    sheet: NPC_IDLE_WALK_SHEET.file,
     firstFrame: 0,
-    frameCount: 0,
+    frameCount: 1,
     loops: true,
+    fps: NPC_IDLE_FPS,
   },
   {
     name: 'walk',
@@ -218,11 +232,9 @@ export const NPC_CLIPS: readonly NpcClip[] = [
     firstFrame: 0,
     frameCount: NPC_IDLE_WALK_SHEET.frames,
     loops: true,
+    fps: NPC_WALK_FPS,
   },
 ]
-
-/** Frames played per second by walk, matching the player's own cadence. */
-export const NPC_WALK_FPS = 12
 
 /** True while this clip has artwork behind it. */
 export function isClipAssigned(clip: NpcClip): boolean {

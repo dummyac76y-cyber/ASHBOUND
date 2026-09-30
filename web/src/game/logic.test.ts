@@ -15,6 +15,7 @@ import {
   TRANSITION_TOTAL,
 } from './GameScene.ts'
 import { PlayerController, rectsIntersect } from './PlayerController.ts'
+import { NPC_CLIPS, NPC_IDLE_WALK_SHEET } from './npcAssets.ts'
 import { PlayerAction } from './PlayerAction.ts'
 import type { SpriteAnimationSystem } from './SpriteAnimationSystem.ts'
 import { createDefaultConfigs } from './AnimationConfig.ts'
@@ -172,8 +173,8 @@ check('invulnerability ends after dash', !player.isInvulnerable)
 
 console.log('attack hit detection')
 player.resetPlayer(SPAWN_X, FLOOR_Y)
-const dummy = world.dummies[0]
-player.x = dummy.x - 30
+const npc = world.npcs[0]
+player.x = npc.x - 30
 player.isFacingRight = true
 const attackCfg = createDefaultConfigs().get(PlayerAction.ATTACK)!
 const attackWindow = attackCfg.hitFrames!
@@ -185,12 +186,12 @@ check('heavy attack has a hit window', Array.isArray(heavyWindow) && heavyWindow
 check('attack accepted', player.onAttack())
 check('ATTACK state active', anim.currentAction === PlayerAction.ATTACK, `got ${anim.currentAction}`)
 
-const hpBefore = dummy.hp
+const hpBefore = npc.hp
 // The world owns the hit check, so the active frame must be current *before*
 // update() runs — that is how the real game loop drives it.
 anim.currentFrameIndex = attackWindow[0]
 world.update(1 / 60)
-check('dummy took light damage', dummy.hp === hpBefore - 18, `got ${dummy.hp} from ${hpBefore}`)
+check('the NPC took light damage', npc.hp === hpBefore - 18, `got ${npc.hp} from ${hpBefore}`)
 check('hitbox consumed once', !player.shouldCheckAttackHit())
 check('damage text spawned', world.damageTexts.length > 0)
 check('sparks spawned', world.particles.length > 0)
@@ -199,60 +200,60 @@ console.log('the hit waits for the blade instead of landing on the windup')
 // Every frame before the window is a windup frame: the swing must not have
 // connected yet, so no damage and no effect.
 for (let f = 0; f < attackWindow[0]; f++) {
-  player.resetPlayer(dummy.x - 30, FLOOR_Y)
+  player.resetPlayer(npc.x - 30, FLOOR_Y)
   player.isFacingRight = true
   player.onAttack()
-  const hp = dummy.hp
+  const hp = npc.hp
   anim.currentFrameIndex = f
   world.update(1 / 60)
-  check(`light attack deals no damage on windup frame ${f}`, dummy.hp === hp, `took ${hp - dummy.hp} too early`)
+  check(`light attack deals no damage on windup frame ${f}`, npc.hp === hp, `took ${hp - npc.hp} too early`)
 }
 
 // The last frame of the window still connects.
-player.resetPlayer(dummy.x - 30, FLOOR_Y)
+player.resetPlayer(npc.x - 30, FLOOR_Y)
 player.isFacingRight = true
 player.onAttack()
-const lateHp = dummy.hp
+const lateHp = npc.hp
 anim.currentFrameIndex = attackWindow[1]
 world.update(1 / 60)
-check('light attack still connects on the last window frame', dummy.hp === lateHp - 18, `got ${dummy.hp} from ${lateHp}`)
+check('light attack still connects on the last window frame', npc.hp === lateHp - 18, `got ${npc.hp} from ${lateHp}`)
 
 // One swing connects once, even though the window spans several frames.
 check('a swing cannot hit twice', !player.shouldCheckAttackHit())
 for (let f = attackWindow[0]; f <= attackWindow[1]; f++) anim.currentFrameIndex = f
 check('a swing cannot hit twice across the window', !player.shouldCheckAttackHit())
-player.resetPlayer(dummy.x - 30, FLOOR_Y)
+player.resetPlayer(npc.x - 30, FLOOR_Y)
 player.isFacingRight = true
 player.onAttack()
 anim.currentFrameIndex = attackWindow[0]
 world.update(1 / 60)
-check('a second swing hits again', dummy.hp < lateHp, `got ${dummy.hp} from ${lateHp}`)
+check('a second swing hits again', npc.hp < lateHp, `got ${npc.hp} from ${lateHp}`)
 
 console.log('heavy attack')
 for (let f = 0; f < heavyWindow[0]; f++) {
-  player.resetPlayer(dummy.x - 30, FLOOR_Y)
+  player.resetPlayer(npc.x - 30, FLOOR_Y)
   player.isFacingRight = true
   player.onHeavyAttack()
-  const hp = dummy.hp
+  const hp = npc.hp
   anim.currentFrameIndex = f
   world.update(1 / 60)
-  check(`heavy attack deals no damage on windup frame ${f}`, dummy.hp === hp, `took ${hp - dummy.hp} too early`)
+  check(`heavy attack deals no damage on windup frame ${f}`, npc.hp === hp, `took ${hp - npc.hp} too early`)
 }
-player.resetPlayer(dummy.x - 30, FLOOR_Y)
+player.resetPlayer(npc.x - 30, FLOOR_Y)
 player.isFacingRight = true
 player.onHeavyAttack()
-const heavyBefore = dummy.hp
+const heavyBefore = npc.hp
 anim.currentFrameIndex = heavyWindow[0]
 world.update(1 / 60)
-check('dummy took heavy damage', dummy.hp === heavyBefore - 45, `got ${dummy.hp} from ${heavyBefore}`)
+check('the NPC took heavy damage', npc.hp === heavyBefore - 45, `got ${npc.hp} from ${heavyBefore}`)
 
 console.log('attack out of range')
-player.resetPlayer(dummy.x - 300, FLOOR_Y)
-const missBefore = dummy.hp
+player.resetPlayer(npc.x - 300, FLOOR_Y)
+const missBefore = npc.hp
 check('attack still animates out of range', player.onAttack())
 anim.currentFrameIndex = attackWindow[0]
 world.update(1 / 60)
-check('dummy untouched out of range', dummy.hp === missBefore, `got ${dummy.hp}`)
+check('the NPC is untouched out of range', npc.hp === missBefore, `got ${npc.hp}`)
 
 console.log('attack cannot be started mid-air')
 player.resetPlayer(SPAWN_X, FLOOR_Y)
@@ -391,9 +392,9 @@ console.log('the cavern floor is one flat plane, walked and jumped on')
     `world ${cavernWorld.floorY}, scene fit ${scene.fit.floorY}`,
   )
   check(
-    'the cavern dummies stand on that same plane, not on a ledge',
-    cavernWorld.dummies.every((d) => Math.abs(d.groundY - plane) < 1e-9),
-    `dummies at ${cavernWorld.dummies.map((d) => d.groundY).join(', ')}, plane ${plane}`,
+    'the cavern NPCs stand on that same plane, not on a ledge',
+    cavernWorld.npcs.every((d) => Math.abs(d.groundY - plane) < 1e-9),
+    `NPCs at ${cavernWorld.npcs.map((d) => d.groundY).join(', ')}, plane ${plane}`,
   )
 
   // 6. Scrolling the camera must not move the ground vertically. The camera is
@@ -522,7 +523,7 @@ const solo = new PlayerController(anim, 200, 260)
 check('solo controller defaults sane', solo.width === 44 && solo.height === 70 && solo.maxHp === 100)
 
 // ---------------------------------------------------------------------------
-// World space: the dummies are arena fixtures, not screen or player-relative.
+// World space: the NPCs are arena fixtures, not screen or player-relative.
 // ---------------------------------------------------------------------------
 
 console.log('the opening scene places the player at its own entrance')
@@ -552,78 +553,141 @@ check(
   `cameraX ${spawnWorld.cameraX}`,
 )
 check(
-  'dummies come from the opening scene, to the right of the spawn',
-  spawnWorld.dummies.every((d) => d.x > scene.definition.spawnX && d.x < scene.definition.worldWidth),
-  spawnWorld.dummies.map((d) => d.x).join(', '),
+  'NPCs come from the opening scene, to the right of the spawn',
+  spawnWorld.npcs.every((d) => d.x > scene.definition.spawnX && d.x < scene.definition.worldWidth),
+  spawnWorld.npcs.map((d) => d.x).join(', '),
 )
 check(
-  'dummies stand on the same floor plane as the player',
-  spawnWorld.dummies.every((d) => Math.abs(d.groundY - scene.fit.floorY) < 1e-9),
+  'NPCs stand on the same floor plane as the player',
+  spawnWorld.npcs.every((d) => Math.abs(d.groundY - scene.fit.floorY) < 1e-9),
   '',
 )
 }
 
 resetWorld()
-console.log('dummies are fixed in world space while the camera follows the player')
+console.log('NPCs live in world space, and the camera is what moves them on screen')
 {
-  const dummy = world.dummies[0]
-  const worldX = dummy.x
-  const seen: Array<{ screen: number; camera: number; player: number }> = []
+  const npc = world.npcs[0]
+  const spawnX = npc.x
+  const seen: Array<{ screen: number; camera: number; world: number; player: number; state: string }> = []
+  const sample = () => seen.push({ screen: npc.x - world.cameraX, camera: world.cameraX, world: npc.x, player: world.player.x, state: npc.state })
 
-  // Walk right a little, sample, walk back, sample. Kept short of the exit at
-  // world 618: crossing it would hand the player to another scene, and these are
-  // checks about one scene's fixtures.
+  // The NPC opens standing still, so the first sample is taken inside that window,
+  // before its own patrol has started. Anything that had moved by then would be the
+  // camera or a scene change rather than the NPC's own behaviour.
   world.player.setMovementInput(1)
   for (let i = 0; i < 50; i++) world.update(1 / 60)
   world.player.setMovementInput(0)
-  for (let i = 0; i < 60; i++) world.update(1 / 60)
-  seen.push({ screen: dummy.x - world.cameraX, camera: world.cameraX, player: world.player.x })
+  for (let i = 0; i < 40; i++) world.update(1 / 60)
+  sample()
+  const stoodStillAt = npc.x
 
   world.player.setMovementInput(-1)
   for (let i = 0; i < 400; i++) world.update(1 / 60)
   world.player.setMovementInput(0)
   for (let i = 0; i < 60; i++) world.update(1 / 60)
-  seen.push({ screen: dummy.x - world.cameraX, camera: world.cameraX, player: world.player.x })
+  sample()
 
-  check('dummy world X is constant through the whole walk', dummy.x === worldX, `${worldX} -> ${dummy.x}`)
-  // Each scene is one viewport wide, so the camera is pinned at 0 -- but it is
-  // still clamped to that scene's bounds rather than assumed, and the fixture is
-  // still placed through the single world->screen transform rather than baked in.
-  check(
-    'the camera stays inside the scene on both legs',
+  check('the NPC stands still for its first idle window, so it is not camera-driven', stoodStillAt === spawnX, `${spawnX} -> ${stoodStillAt}`)
+  check('the camera stays inside the scene on both legs',
     seen.every((r) => r.camera >= -1e-9 && r.camera <= world.maxCameraX + 1e-9),
-    `cameraX ${seen[0].camera} / ${seen[1].camera}`,
-  )
-  check(
-    'screen position = worldX - cameraX in both samples',
-    Math.abs(seen[0].screen - (worldX - seen[0].camera)) < 1e-9 && Math.abs(seen[1].screen - (worldX - seen[1].camera)) < 1e-9,
-    '',
-  )
-  // The camera is pinned, so the fixture holds its screen X too. What matters is that
-  // the screen X comes from world X through the shared transform on both samples,
-  // not that it was baked in at spawn.
-  check(
-    'the dummy holds its world X, and its screen X follows from it',
-    Math.abs(dummy.x - worldX) < 1e-9 &&
-      Math.abs(seen[0].screen - worldX) < 1e-9 &&
-      Math.abs(seen[1].screen - worldX) < 1e-9,
-    `worldX ${dummy.x}, screens ${seen[0].screen} / ${seen[1].screen}`,
-  )
+    `cameraX ${seen[0].camera} / ${seen[1].camera}`)
+  // The one invariant that has to hold at every instant: whatever the camera and the
+  // patrol are both doing, the sprite is placed at worldX - cameraX and nowhere else.
+  check('screen position = worldX - cameraX in both samples',
+    seen.every((r) => Math.abs(r.screen - (r.world - r.camera)) < 1e-9),
+    seen.map((r) => `${r.world}@${r.camera}=${r.screen}`).join(' '))
+  check('the NPC moved on its own, under its patrol, not with the camera',
+    npc.x !== spawnX, `${spawnX} -> ${npc.x.toFixed(2)}`)
+  check('and stayed inside its patrol limits throughout',
+    npc.x >= npc.patrolLeft - 1e-9 && npc.x <= npc.patrolRight + 1e-9,
+    `${npc.x.toFixed(2)} within ${npc.patrolLeft}..${npc.patrolRight}`)
+  check('the NPC never leaves the scene',
+    npc.x > 0 && npc.x < world.worldWidth,
+    `${npc.x.toFixed(2)} within 0..${world.worldWidth}`)
   check('the player actually moved', Math.abs(seen[0].player - SPAWN_X) > 50, `player reached ${seen[0].player.toFixed(1)}`)
 }
 
-resetWorld()
-console.log('dummy hitbox and health bar are anchored to the dummy')
+console.log('NPC PATROL: stands, walks a short way, stops, and turns at its limit')
 {
-  const dummy = world.dummies[0]
-  const before = { ...dummy.hitbox }
-  dummy.x += 200
-  const after = { ...dummy.hitbox }
-  dummy.x = FORGOTTEN_PRISON.dummyXs[0]
+  // Re-enter the scene first: the previous block left the NPC mid-patrol, and this
+  // one is about where a patrol *begins*.
+  resetWorld()
+  const npc = world.npcs[0]
+  const order: string[] = []
+  let sawWalk = false
+  let sawIdleAfterWalk = false
+  let reachedLimit = false
+  let flipped = false
+  const startFacing = npc.facingRight
+  const homeX = npc.x
 
-  check('hitbox left/right follow the dummy world X', after.left - before.left === 200 && after.right - before.right === 200, `moved ${after.left - before.left}`)
+  for (let i = 0; i < 60 * 30; i++) {
+    world.update(1 / 60)
+    const seenBefore = order[order.length - 1]
+    const label = npc.state
+    if (label !== seenBefore) order.push(label)
+    if (npc.state === 'walk') sawWalk = true
+    if (sawWalk && npc.state === 'idle') sawIdleAfterWalk = true
+    // Turning round is only ever allowed to happen on the way into a stop, at the
+    // limit itself -- never out in the open, and never by walking past the limit.
+    if (npc.state === 'idle' && npc.facingRight !== startFacing) {
+      reachedLimit = npc.x === npc.patrolRight || npc.x === npc.patrolLeft
+      flipped = true
+    }
+  }
+
+  check('the NPC starts idle', order[0] === 'idle', order.join(' -> '))
+  check('it stands for a while before setting off', sawWalk, order.join(' -> '))
+  check('it stops and returns to idle after walking', sawIdleAfterWalk, order.join(' -> '))
+  check('it turns around at its patrol limit rather than walking past it', reachedLimit && flipped, `limits ${npc.patrolLeft}..${npc.patrolRight}`)
+  check('the cycle alternates idle and walk several times over half a minute', order.filter((s) => s === 'walk').length >= 3, order.join(' -> '))
+  check('it heads right first, then reverses on the way home', npc.patrolRight === homeX + 40 && npc.patrolLeft === homeX - 40, `home ${homeX}`)
+  check('the NPC never leaves its patrol', npc.x >= npc.patrolLeft - 1e-9 && npc.x <= npc.patrolRight + 1e-9, `${npc.x.toFixed(2)}`)
+}
+
+console.log('NPC ANIMATION: frames advance at the declared rate for the running clip')
+{
+  const npc = world.npcs[0]
+  const walk = NPC_CLIPS.find((c) => c.name === 'walk')!
+  const idle = NPC_CLIPS.find((c) => c.name === 'idle')!
+  check('walk is bound to the supplied sheet', walk.sheet === NPC_IDLE_WALK_SHEET.file, `${walk.sheet}`)
+  check('walk plays the whole 12-frame cycle', walk.frameCount === 12, `${walk.frameCount} frames`)
+  check('walk runs at 12 fps as specified', walk.fps === 12, `${walk.fps}`)
+  check('idle runs at 6 fps as specified', idle.fps === 6, `${idle.fps}`)
+  check('idle and walk are bound independently of one another', idle.sheet !== walk.sheet || idle.firstFrame !== walk.firstFrame || idle.frameCount !== walk.frameCount)
+
+  // Frame maths is checked directly so the cadence does not depend on frame pacing.
+  // The running state selects the clip, so it is set to match what is being checked.
+  npc.state = 'walk'
+  const walkFrames = new Set<number>()
+  for (let t = 0; t < 1; t += 1 / 240) walkFrames.add(npc.frameForElapsed(t))
+  check('a second of walking passes through every frame exactly once, in order',
+    walkFrames.size === 12 && [...walkFrames].every((f) => f >= 0 && f < 12), `${walkFrames.size} distinct frames`)
+  const ordered = Array.from({ length: 24 }, (_, i) => npc.frameForElapsed(i / 12)).join(',')
+  check('the walk advances monotonically and wraps at the end of the cycle', ordered.startsWith('0,1,2,3') && ordered.includes('10,11,0,1'), ordered)
+
+  npc.state = 'idle'
+  check('idle holds its single frame however long it has been standing', [0, 0.4, 3, 99].every((t) => npc.frameForElapsed(t) === 0), `frames ${[0, 0.4, 3, 99].map((t) => npc.frameForElapsed(t)).join(',')}`)
+  npc.state = 'idle'
+  const idleFps = npc.fps
+  npc.state = 'walk'
+  const walkFps = npc.fps
+  check('the running clip reports its own frame rate', idleFps === 6 && walkFps === 12, `idle ${idleFps} fps, walk ${walkFps} fps`)
+}
+
+resetWorld()
+console.log('NPC hitbox and health bar are anchored to the NPC')
+{
+  const npc = world.npcs[0]
+  const before = { ...npc.hitbox }
+  npc.x += 200
+  const after = { ...npc.hitbox }
+  npc.x = FORGOTTEN_PRISON.npcXs[0]
+
+  check('hitbox left/right follow the NPC world X', after.left - before.left === 200 && after.right - before.right === 200, `moved ${after.left - before.left}`)
   check('hitbox bottom is the floor plane', Math.abs(after.bottom - FLOOR_Y) < 1e-9, `got ${after.bottom}`)
-  check('hitbox top is the floor minus the dummy height', Math.abs(after.top - (FLOOR_Y - dummy.height)) < 1e-9, `got ${after.top}`)
+  check('hitbox top is the floor minus the NPC height', Math.abs(after.top - (FLOOR_Y - npc.height)) < 1e-9, `got ${after.top}`)
 }
 
 console.log('SCENES: one full-screen environment at a time')
@@ -828,15 +892,15 @@ console.log('SCENE TRANSITION: exit, fade, title, fade in')
     `cameraX ${w.cameraX}, allowed 0..${w.maxCameraX}`,
   )
   check(
-    "the prison's dummies did not carry into the cavern",
-    w.dummies.every((d) => !FORGOTTEN_PRISON.dummyXs.includes(d.x)) &&
-      w.dummies.length === UNDERGROUND_CAVERN.dummyXs.length &&
-      w.dummies.every((d, i) => d.x === UNDERGROUND_CAVERN.dummyXs[i]),
-    w.dummies.map((d) => d.x).join(', '),
+    "the prison's NPCs did not carry into the cavern",
+    w.npcs.every((d) => !FORGOTTEN_PRISON.npcXs.includes(d.x)) &&
+      w.npcs.length === UNDERGROUND_CAVERN.npcXs.length &&
+      w.npcs.every((d, i) => d.x === UNDERGROUND_CAVERN.npcXs[i]),
+    w.npcs.map((d) => d.x).join(', '),
   )
   check(
-    'cavern dummies stand on the cavern floor',
-    w.dummies.every((d) => Math.abs(d.groundY - w.floorY) < 1e-9),
+    'cavern NPCs stand on the cavern floor',
+    w.npcs.every((d) => Math.abs(d.groundY - w.floorY) < 1e-9),
     '',
   )
 
@@ -1333,9 +1397,9 @@ console.log('HITBOX bottom sits on the plane')
 {
   player.resetPlayer(SPAWN_X, FLOOR_Y)
   check('hitbox bottom == ground plane', Math.abs(player.hitbox.bottom - FLOOR_Y) < 1e-6, `got ${player.hitbox.bottom}`)
-  const dummy = world.dummies[0]
-  check('training dummy also stands on the plane', Math.abs(dummy.groundY - FLOOR_Y) < 1e-6, `got ${dummy.groundY}`)
-  check('dummy hitbox bottom == ground plane', Math.abs(dummy.hitbox.bottom - FLOOR_Y) < 1e-6)
+  const npc = world.npcs[0]
+  check('the NPC also stands on the plane', Math.abs(npc.groundY - FLOOR_Y) < 1e-6, `got ${npc.groundY}`)
+  check('NPC hitbox bottom == ground plane', Math.abs(npc.hitbox.bottom - FLOOR_Y) < 1e-6)
   player.onJump()
   world.update(1 / 60)
   check('hitbox bottom rises off the plane in the air', player.hitbox.bottom < FLOOR_Y - 1, `got ${player.hitbox.bottom}`)

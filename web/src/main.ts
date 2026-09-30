@@ -1,5 +1,6 @@
 import { assetUrl } from './assetUrl'
 import { GameWorld } from './game/GameWorld'
+import { NPC_IDLE_WALK_SHEET } from './game/npcAssets'
 import type { PlayerAction } from './game/PlayerAction'
 import { SpriteAnimationSystem } from './game/SpriteAnimationSystem'
 import { AnimationInspectorDialog } from './ui/AnimationInspectorDialog'
@@ -87,6 +88,12 @@ async function boot(): Promise<void> {
 
   // Sheets must be decoded before the first update(), otherwise frame 0 is skipped.
   await animations.reloadAll()
+
+  // The NPC walk sheet, decoded with the backdrops so an NPC standing in the very
+  // first frame is never a gap in the scene. A missing one is survivable: the NPC
+  // still draws its shadow and HP bar.
+  const npcImage = await loadImage(assetUrl(`sprites/${NPC_IDLE_WALK_SHEET.file}`))
+  world.setNpcSprite(npcImage ? { image: npcImage, width: npcImage.width, height: npcImage.height } : null)
 
   const hud = new GameHud(
     () => world.player,
@@ -250,7 +257,10 @@ async function boot(): Promise<void> {
             playerX: world.player.x,
             spawnX: scene.definition.spawnX,
             exitX: scene.definition.exitX,
-            dummyXs: world.dummies.map((d) => d.x),
+            npcXs: world.npcs.map((n) => n.x),
+            npcStates: world.npcs.map((n) => n.state),
+            npcFrames: world.npcs.map((n) => n.currentFrame),
+            npcSpriteLoaded: world.npcSprite !== null,
             phase: world.transitionPhase,
             elapsed: world.transitionElapsed,
             title2: world.transitionTitle,
@@ -263,6 +273,65 @@ async function boot(): Promise<void> {
          * re-drawing the plates keeps the reference honest.
          */
         backdropOnly: (ctx: CanvasRenderingContext2D): void => world.renderBackdrop(ctx),
+        /**
+         * The NPCs alone, through their real drawing path, in world space.
+         *
+         * The harness renders this onto a transparent surface to measure the sprite
+         * by its alpha channel. The NPC is dark artwork on dark scenery, so its
+         * silhouette cannot be picked out of a composited frame by colour.
+         */
+        npcOnly: (ctx: CanvasRenderingContext2D, index?: number): void => {
+          if (index === undefined) {
+            for (const npc of world.npcs) npc.render(ctx)
+            return
+          }
+          const npc = world.npcs[index]
+          if (npc) npc.render(ctx)
+        },
+        /**
+         * The player alone, through the real drawing path, for comparing a
+         * character's on-screen size against the NPC's on the same surface.
+         */
+        characterOnly: (ctx: CanvasRenderingContext2D): void => world.renderCharacter(ctx),
+        /**
+         * Pins an NPC's state and frame, for pixel-stable captures.
+         *
+         * The game loop keeps ticking, so a captured frame is only reproducible if
+         * the animation is held rather than left to advance.
+         */
+        setNpcFrame(index: number, state: 'idle' | 'walk', frame: number): void {
+          const npc = world.npcs[index]
+          if (!npc) return
+          npc.state = state
+          npc.currentFrame = frame
+        },
+        /** Forces an NPC to face a given way, for checking the horizontal mirror. */
+        setNpcFacing(index: number, facingRight: boolean): void {
+          const npc = world.npcs[index]
+          if (npc) npc.facingRight = facingRight
+        },
+        /** Readable snapshot of an NPC, for assertions. */
+        npcState: (index: number): Record<string, unknown> => {
+          const npc = world.npcs[index]
+          if (!npc) return {}
+          return {
+            x: npc.x,
+            groundY: npc.groundY,
+            state: npc.state,
+            frame: npc.currentFrame,
+            facingRight: npc.facingRight,
+            isWalking: npc.isWalking,
+            fps: npc.fps,
+            hp: npc.hp,
+            maxHp: npc.maxHp,
+            hitbox: { ...npc.hitbox },
+            patrolLeft: npc.patrolLeft,
+            patrolRight: npc.patrolRight,
+            width: npc.width,
+            height: npc.height,
+            spriteLoaded: npc.sprite !== null,
+          }
+        },
       },
     })
   }

@@ -50,7 +50,7 @@ data class SceneBackdropFit(
      * The two paintings put their floor at different heights inside the frame, so
      * without this the same world Y would put the knight near the bottom in one
      * scene and much higher in the other. This shifts the entire world -- backdrop,
-     * player, dummies, particles -- up or down as one, cropping excess background
+     * player, NPCs, particles -- up or down as one, cropping excess background
      * and nothing else. It is a camera offset only: it never touches the scale, and
      * it never moves the player relative to [floorY].
      */
@@ -157,13 +157,13 @@ data class SceneDefinition(
     /** World X the player is placed at when this scene loads. */
     val spawnX: Float,
     /**
-     * World X of this scene's training dummies, in world units.
+     * World X of this scene's training NPCs, in world units.
      *
      * Explicit per scene: objects belong to the scene that declares them and are
      * rebuilt on entry, so one scene's fixtures never carry into the next unless that
      * scene lists its own.
      */
-    val dummyXs: List<Float>,
+    val npcXs: List<Float>,
     /**
      * World X at which this scene hands over to the next one, or null when the scene
      * is a dead end and has nowhere to go.
@@ -187,7 +187,7 @@ val FORGOTTEN_PRISON = SceneDefinition(
     floorRow = 533f,
     worldWidth = 640f,
     spawnX = 320f,
-    dummyXs = listOf(450f, 570f),
+    npcXs = listOf(450f, 570f),
     // The player is clamped to worldWidth - width/2, so the exit sits exactly where
     // walking into the right-hand wall brings them to a stop.
     exitX = 618f
@@ -219,7 +219,7 @@ val UNDERGROUND_CAVERN = SceneDefinition(
     // Entered from the left, at the mouth of the cave, with room to walk both ways.
     spawnX = 768f,
     // Deliberately not the prison's 450/570: the cavern declares its own fixtures.
-    dummyXs = listOf(900f, 1020f),
+    npcXs = listOf(900f, 1020f),
     exitX = null
 )
 

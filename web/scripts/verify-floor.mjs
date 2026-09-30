@@ -50,7 +50,7 @@ const server = createServer(async (req, res) => {
 await new Promise((r) => server.listen(0, r))
 const base = `http://127.0.0.1:${server.address().port}`
 
-const GameWorld_DUMMY_X_EXPECTED = 450
+const GameWorld_NPC_X_EXPECTED = 450
 
 let failures = 0
 function check(name, ok, detail = '') {
@@ -80,7 +80,7 @@ await page.evaluate(() => {
     logicalWidth: g.GameWorld.LOGICAL_WIDTH,
     logicalHeight: g.GameWorld.LOGICAL_HEIGHT,
     playerWidth: g.world.player.width,
-    dummyXs: g.world.dummies.map((d) => d.x),
+    npcXs: g.world.npcs.map((n) => n.x),
     exitX: g.world.activeScene.definition.exitX,
   }
 })
@@ -215,49 +215,14 @@ await page.evaluate(() => {
   g.luma = luma
 
   /**
-   * Horizontal profile of a colour, used to locate the dummy's straw torso.
-   * Returns logical screen X positions where the pixel is close to the given rgb.
-   */
-  g.strawColumns = (cr, cg, cb, tol = 26) => {
-    const s = g.scale()
-    const d = g.pixels()
-    const width = canvas.width
-    const hits = new Set()
-    for (let ly = 0; ly < g.GameWorld.LOGICAL_HEIGHT; ly++) {
-      const y = Math.round(g.offY() + ly * s)
-      for (let lx = 0; lx < g.GameWorld.LOGICAL_WIDTH; lx++) {
-        const x = Math.round(g.offX() + lx * s)
-        const i = (y * width + x) * 4
-        if (Math.abs(d[i] - cr) <= tol && Math.abs(d[i + 1] - cg) <= tol && Math.abs(d[i + 2] - cb) <= tol) {
-          hits.add(lx)
-        }
-      }
-    }
-    return [...hits].sort((a, c) => a - c)
-  }
-
-  /** Longest contiguous run in a sorted column list, as its midpoint and width. */
-  g.strawRun = (cols) => {
-    if (!cols.length) return { mid: NaN, width: 0 }
-    let best = [cols[0], cols[0]]
-    let start = cols[0]
-    for (let i = 1; i < cols.length; i++) {
-      if (cols[i] !== cols[i - 1] + 1) {
-        if (cols[i - 1] - start > best[1] - best[0]) best = [start, cols[i - 1]]
-        start = cols[i]
-      }
-    }
-    if (cols[cols.length - 1] - start > best[1] - best[0]) best = [start, cols[cols.length - 1]]
-    return { mid: (best[0] + best[1]) / 2, width: best[1] - best[0] }
-  }
-
-  /**
-   * Lowest logical row of the dummy's solid body, using the real draw path.
+   * Renders one NPC alone, through the real draw path and the real world transform,
+   * onto a transparent surface.
    *
-   * The threshold is 128 rather than 16 so the soft contact shadow (alpha ~0.39)
-   * is excluded: the shadow hangs a few px below groundY by design and is not a foot.
+   * Isolating the NPC this way is what makes its silhouette measurable: the sprite is
+   * dark artwork on dark scenery, so a colour profile against the composited frame
+   * cannot pick it out. The alpha channel of this private surface can.
    */
-  g.dummyFootRow = (dummy) => {
+  g.npcLayer = (npc) => {
     const s = g.scale()
     const c = document.createElement('canvas')
     c.width = canvas.width
@@ -268,19 +233,56 @@ await page.evaluate(() => {
     b.translate(g.offX(), g.offY())
     b.scale(s, s)
     b.translate(-g.world.cameraX, g.world.cameraY)
-    dummy.render(b)
-    const d = b.getImageData(0, 0, c.width, c.height).data
-    const lx = dummy.x - g.world.cameraX
-    const x0 = Math.round(g.offX() + (lx - dummy.width / 2 - 4) * s)
-    const x1 = Math.round(g.offX() + (lx + dummy.width / 2 + 4) * s)
-    for (let ly = g.GameWorld.LOGICAL_HEIGHT - 1; ly >= 0; ly--) {
+    npc.render(b)
+    return { data: b.getImageData(0, 0, c.width, c.height).data, canvas: c }
+  }
+
+  /**
+   * Where the NPC's solid pixels landed, in logical screen coordinates.
+   *
+   * The alpha threshold is 128 so the contact shadow (alpha ~0.32) is excluded: the
+   * shadow hangs a few px below groundY by design and is not a foot. The HP bar is
+   * drawn above the head, so it widens the top of the box but never the foot row --
+   * `foot` is therefore a real measure of the feet, and `top` is deliberately the
+   * top of the whole drawn figure including the bar.
+   */
+  g.npcBounds = (npc) => {
+    const s = g.scale()
+    const { data, canvas: c } = g.npcLayer(npc)
+    const lx = npc.x - g.world.cameraX
+    // Generous window: the sprite is drawn wider than its hitbox, and a face flip
+    // mirrors it, so neither edge is known in advance.
+    const x0 = Math.max(0, Math.round(g.offX() + (lx - 70) * s))
+    const x1 = Math.min(c.width - 1, Math.round(g.offX() + (lx + 70) * s))
+    let left = null
+    let right = null
+    let top = null
+    let foot = null
+    for (let ly = 0; ly < g.GameWorld.LOGICAL_HEIGHT; ly++) {
       const y = Math.round(g.offY() + ly * s)
+      if (y < 0 || y >= c.height) continue
+      let rowMin = null
+      let rowMax = null
       for (let x = x0; x <= x1; x++) {
-        if (x < 0 || x >= c.width || y < 0 || y >= c.height) continue
-        if (d[(y * c.width + x) * 4 + 3] >= 128) return ly
+        if (data[(y * c.width + x) * 4 + 3] < 128) continue
+        if (rowMin === null) rowMin = x
+        rowMax = x
       }
+      if (rowMin === null) continue
+      if (left === null) left = rowMin
+      right = rowMax
+      if (top === null) top = ly
+      foot = ly
     }
-    return null
+    const toLogical = (v) => (v === null ? null : v / s - g.offX() / s)
+    return {
+      foot,
+      top,
+      left: toLogical(left),
+      right: toLogical(right),
+      mid: left === null || right === null ? NaN : ((left + right) / 2) / s - g.offX() / s,
+      width: left === null || right === null ? 0 : (right - left) / s,
+    }
   }
 
   g.pixels = () => ctx.getImageData(0, 0, canvas.width, canvas.height).data
@@ -773,7 +775,7 @@ console.log('backdrop is not painted over')
     const live = g.pixels()
     const bare = g.barePlate()
     const width = document.querySelector('canvas.game-canvas').width
-    // Sample the floor well away from the character and the dummies.
+    // Sample the floor well away from the character and the NPCs.
     const s = g.scale()
     let mismatched = 0
     const drawnFloorY = g.world.floorY + g.world.cameraY
@@ -797,33 +799,34 @@ console.log('backdrop is not painted over')
   )
 }
 
-// --- 6. Training dummies live in world space ----------------------------------
-console.log('training dummy is a world fixture')
+// --- 6. The NPC lives in world space, feet on the floor -----------------------
+console.log('NPC is a world character, grounded on the drawn floor')
 {
   const res = await page.evaluate(async () => {
     const g = window.__game
-    g.loadScene(0)
     // The camera can only travel in the cavern: the prison's world is exactly one
     // viewport wide, so its camera range is zero. This test therefore runs there,
-    // and asserts against that scene's own first dummy.
+    // against that scene's own first NPC.
     g.loadScene(1)
     g.resume()
-    const expectedX = g.world.activeScene.definition.dummyXs[0]
     const worldId = g.world.activeScene.definition.id
     const out = []
 
-    // Re-centre on the dummy before every measurement: after a long walk the
-    // camera can leave it off screen entirely, where it has no painted feet to
-    // measure.
+    // Re-centre on the NPC before every measurement: after a long walk the camera
+    // can leave it off screen entirely, where it has no painted feet to measure.
     const measure = (phase) => {
-      const d = g.world.dummies[0]
-      g.setCamera(d.x - g.GameWorld.LOGICAL_WIDTH / 2)
+      const n = g.world.npcs[0]
+      g.setCamera(n.x - g.GameWorld.LOGICAL_WIDTH / 2)
+      const b = g.npcBounds(n)
       out.push({
         phase,
         sceneId: g.world.activeScene.definition.id,
-        dummyWorldX: d.x,
+        worldX: n.x,
         cameraX: g.world.cameraX,
-        footRow: g.dummyFootRow(d),
+        patrolLeft: n.patrolLeft,
+        patrolRight: n.patrolRight,
+        state: n.state,
+        footRow: b.foot,
         drawnFloorY: g.world.floorY + g.world.cameraY,
       })
     }
@@ -840,25 +843,24 @@ console.log('training dummy is a world fixture')
     g.world.player.setMovementInput(0)
     for (let i = 0; i < 60; i++) await new Promise((r) => requestAnimationFrame(r))
     measure('walked back')
-    return { out, worldId, expectedX }
+    return { out, worldId }
   })
-
   for (const r of res.out) {
     check(
-      `${r.phase}: dummy world X unchanged while the camera moves`,
-      r.sceneId === res.worldId && r.dummyWorldX === res.expectedX,
-      `scene ${r.sceneId}, worldX ${r.dummyWorldX}, cameraX ${r.cameraX.toFixed(2)}, dummy screen x ${(r.dummyWorldX - r.cameraX).toFixed(1)}`,
+      `${r.phase}: the NPC is a world character, inside its own patrol`,
+      r.sceneId === res.worldId && r.worldX >= r.patrolLeft - 1e-6 && r.worldX <= r.patrolRight + 1e-6,
+      `worldX ${r.worldX.toFixed(2)} within ${r.patrolLeft}..${r.patrolRight}, cameraX ${r.cameraX.toFixed(2)}`,
     )
     check(
-      `${r.phase}: dummy feet on the drawn floor`,
+      `${r.phase}: NPC feet on the drawn floor`,
       r.footRow !== null && Math.abs(r.footRow - r.drawnFloorY) <= 1.5,
       `feet at y=${r.footRow}, drawn floor ${r.drawnFloorY?.toFixed(2)}`,
     )
   }
 }
 
-// --- 7. The dummy is a fixed object in the rendered frame --------------------
-console.log('dummy drawn in world space, not screen space')
+// --- 7. The NPC is drawn through the world transform -------------------------
+console.log('NPC drawn in world space, not screen space')
 {
   const res = await page.evaluate(async () => {
     const g = window.__game
@@ -870,24 +872,27 @@ console.log('dummy drawn in world space, not screen space')
     for (let i = 0; i < 60; i++) await new Promise((r) => requestAnimationFrame(r))
     const scrolled = g.world.cameraX
     g.pause()
-    // ...then pin the camera so the dummy sits in the middle of the sampling
+    // ...then pin the camera so the NPC sits in the middle of the sampling
     // window. A screen-space draw would ignore both the scroll and this offset.
-    g.setCamera(g.world.dummies[0].x - 225)
+    g.setCamera(g.world.npcs[0].x - 225)
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    const b = g.npcBounds(g.world.npcs[0])
     return {
-      mid: g.strawRun(g.strawColumns(180, 150, 90)).mid,
-      worldX: g.world.dummies[0].x,
+      mid: b.mid,
+      width: b.width,
+      top: b.top,
+      worldX: g.world.npcs[0].x,
       cameraX: g.world.cameraX,
       scrolled,
-      foot: g.dummyFootRow(g.world.dummies[0]),
+      foot: b.foot,
       drawnFloorY: g.world.floorY + g.world.cameraY,
       floorY: g.world.floorY,
       playerX: g.world.player.x,
     }
   })
   check(
-    'dummy renders at world X minus camera, not at a screen constant',
-    Math.abs(res.mid - (res.worldX - res.cameraX)) < 3,
+    'the NPC renders at world X minus camera, not at a screen constant',
+    Math.abs(res.mid - (res.worldX - res.cameraX)) < 6,
     `rendered at screen x ${res.mid.toFixed(1)}, world x ${res.worldX} - camera ${res.cameraX} = ${res.worldX - res.cameraX}`,
   )
   check(
@@ -896,23 +901,28 @@ console.log('dummy drawn in world space, not screen space')
     `camera reached ${res.scrolled.toFixed(2)} before being pinned`,
   )
   check(
-    'dummy feet sit on the drawn floor',
+    'NPC feet sit on the drawn floor',
     res.foot !== null && Math.abs(res.foot - res.drawnFloorY) <= 1.5,
     `feet at y=${res.foot}, drawn floor ${res.drawnFloorY?.toFixed(2)} (world ${res.floorY.toFixed(3)})`,
   )
   check(
-    'the player did move while the dummy held its world X',
+    'the NPC has real width on screen, so artwork is being drawn',
+    res.width > 40,
+    `${res.width.toFixed(1)} logical px wide`,
+  )
+  check(
+    'the player did move while the NPC held its patrol',
     res.playerX > 600,
     `player at ${res.playerX.toFixed(1)}`,
   )
 }
 
-// --- 8. Dummy hitbox and HP bar follow the dummy ----------------------------
-console.log('hitbox and health bar are anchored to the dummy')
+// --- 8. Hitbox and HP bar follow the NPC -------------------------------------
+console.log('hitbox and health bar are anchored to the NPC')
 {
   const res = await page.evaluate(() => {
     const g = window.__game
-    const d = g.world.dummies[0]
+    const d = g.world.npcs[0]
     d.hp = 40
     const originX = d.x
     const before = { ...d.hitbox }
@@ -931,7 +941,7 @@ console.log('hitbox and health bar are anchored to the dummy')
     }
   })
   check(
-    'hitbox follows the dummy world X',
+    'hitbox follows the NPC world X',
     Math.abs(res.after.left - (res.before.left + res.delta)) < 1e-6 &&
       Math.abs(res.after.right - (res.before.right + res.delta)) < 1e-6,
     `moved ${(res.after.left - res.before.left).toFixed(1)}px for a ${res.delta}px move`,
@@ -942,7 +952,7 @@ console.log('hitbox and health bar are anchored to the dummy')
     `bottom ${res.after.bottom}, floor ${res.floorY.toFixed(3)}`,
   )
   check(
-    'hitbox top is anchored to the dummy height',
+    'hitbox top is anchored to the NPC height',
     Math.abs(res.after.top - (res.floorY - res.height)) < 1e-6,
     `top ${res.after.top}, expected ${(res.floorY - res.height).toFixed(3)}`,
   )
@@ -966,9 +976,9 @@ console.log('each scene spawns the player at its own entrance')
         sceneFloorY: sc.fit.floorY,
         cameraX: g.world.cameraX,
         expectedCamera: g.world.cameraXForPlayerX(sc.definition.spawnX),
-        dummyXs: g.world.dummies.map((d) => d.x),
-        declaredDummies: [...sc.definition.dummyXs],
-        dummyGroundY: g.world.dummies.map((d) => d.groundY),
+        npcXs: g.world.npcs.map((n) => n.x),
+        declaredNpcs: [...sc.definition.npcXs],
+        npcGroundY: g.world.npcs.map((n) => n.groundY),
       })
     }
     g.loadScene(0)
@@ -979,16 +989,16 @@ console.log('each scene spawns the player at its own entrance')
     check(`${r.id}: the player spawns at the scene entrance`, Math.abs(r.playerX - r.spawnX) < 1e-9, `playerX ${r.playerX}, entrance ${r.spawnX}`)
     check(`${r.id}: the player is grounded on that scene's floor plane`, Math.abs(r.floorY - r.sceneFloorY) < 1e-9, `${r.floorY} vs ${r.sceneFloorY}`)
     check(`${r.id}: the camera resets to the new scene`, Math.abs(r.cameraX - r.expectedCamera) < 1e-9, `cameraX ${r.cameraX}, expected ${r.expectedCamera}`)
-    check(`${r.id}: the scene's own dummies, and only its own`, JSON.stringify(r.dummyXs) === JSON.stringify(r.declaredDummies), `got ${JSON.stringify(r.dummyXs)}, declared ${JSON.stringify(r.declaredDummies)}`)
-    check(`${r.id}: every dummy stands on that scene's floor`, r.dummyGroundY.every((y) => Math.abs(y - r.sceneFloorY) < 1e-9), r.dummyGroundY.join(', '))
+    check(`${r.id}: the scene's own NPCs, and only its own`, JSON.stringify(r.npcXs) === JSON.stringify(r.declaredNpcs), `got ${JSON.stringify(r.npcXs)}, declared ${JSON.stringify(r.declaredNpcs)}`)
+    check(`${r.id}: every NPC stands on that scene's floor`, r.npcGroundY.every((y) => Math.abs(y - r.sceneFloorY) < 1e-9), r.npcGroundY.join(', '))
   }
 
   const prison = res[0]
   const cavern = res[1]
   check(
     "one scene's fixtures do not carry into the next",
-    cavern && !cavern.dummyXs.some((x) => prison.dummyXs.includes(x)),
-    `prison ${JSON.stringify(prison?.dummyXs)} vs cavern ${JSON.stringify(cavern?.dummyXs)}`,
+    cavern && !cavern.npcXs.some((x) => prison.npcXs.includes(x)),
+    `prison ${JSON.stringify(prison?.npcXs)} vs cavern ${JSON.stringify(cavern?.npcXs)}`,
   )
 }
 
@@ -1125,7 +1135,7 @@ console.log('scene transition on the web: dark, single-scene, and lands correctl
     // own drawings at one reference pixel per logical pixel, so a frame taken at any
     // camera can be compared against the right part of the right scene.
     const plates = {}
-    const dummyXsById = {}
+    const npcXsById = {}
     const spawnById = {}
     const ids = []
     for (let i = 0; i < g.world.scenes.length; i++) {
@@ -1135,7 +1145,7 @@ console.log('scene transition on the web: dark, single-scene, and lands correctl
       const id = g.world.activeScene.definition.id
       ids.push(id)
       plates[id] = g.worldPlate()
-      dummyXsById[id] = [...g.world.activeScene.definition.dummyXs]
+      npcXsById[id] = [...g.world.activeScene.definition.npcXs]
       spawnById[id] = g.world.activeScene.definition.spawnX
     }
 
@@ -1157,12 +1167,13 @@ console.log('scene transition on the web: dark, single-scene, and lands correctl
     /**
      * Logical columns covered by what the world draws on top of the backdrop: the
      * boundary pillars at each end of the scene, the knight (a 100px cell) and the
-     * dummies (a 52px crossbeam).
+     * NPCs. The old placeholder's crossbeam is gone; the band now clears the
+     * character's full drawn width, which is wider than its hitbox.
      *
      * The pillars are placed in world space, so where they land on screen depends on
      * the camera -- mid-scroll they are off-screen entirely.
      */
-    const objectColumns = (dummies, cameraX, worldWidth) => {
+    const objectColumns = (npcs, cameraX, worldWidth) => {
       const m = new Uint8Array(LX)
       const band = (a, b) => {
         for (let x = Math.max(0, Math.ceil(a)); x <= Math.min(LX - 1, Math.floor(b)); x++) m[x] = 1
@@ -1170,7 +1181,7 @@ console.log('scene transition on the web: dark, single-scene, and lands correctl
       band(-cameraX, 24 - cameraX)
       band(worldWidth - 24 - cameraX, worldWidth - cameraX)
       band(g.world.player.x - cameraX - 56, g.world.player.x - cameraX + 56)
-      for (const d of dummies) band(d.x - cameraX - 32, d.x - cameraX + 32)
+      for (const n of npcs) band(n.x - cameraX - 70, n.x - cameraX + 70)
       return m
     }
 
@@ -1271,7 +1282,7 @@ console.log('scene transition on the web: dark, single-scene, and lands correctl
       if (!g.world.isTransitioning) break
       await g.settle()
       const now = g.pixels()
-      const mask = objectColumns(g.world.dummies, g.world.cameraX, g.world.worldWidth)
+      const mask = objectColumns(g.world.npcs, g.world.cameraX, g.world.worldWidth)
       const fits = {}
       for (const id of ids) fits[id] = fit(now, plates[id], g.world.cameraX, g.world.cameraY, mask)
       frames.push({
@@ -1295,12 +1306,12 @@ console.log('scene transition on the web: dark, single-scene, and lands correctl
       finalPlayerX: g.world.player.x,
       finalCamera: g.world.cameraX,
       expectedCamera: g.world.cameraXForPlayerX(g.world.player.x),
-      finalDummies: g.world.dummies.map((d) => d.x),
+      finalNpcs: g.world.npcs.map((n) => n.x),
       finalPhase: g.world.transitionPhase,
       title: g.world.transitionTitle,
       expectedSpawn: spawnById[g.world.activeScene.definition.id],
-      expectedDummies: dummyXsById[g.world.activeScene.definition.id],
-      previousDummies: dummyXsById[fromId],
+      expectedNpcs: npcXsById[g.world.activeScene.definition.id],
+      previousNpcs: npcXsById[fromId],
       maxCamera: g.world.maxCameraX,
       worldWidth: g.world.worldWidth,
     }
@@ -1398,10 +1409,10 @@ console.log('scene transition on the web: dark, single-scene, and lands correctl
     `entrance camera ${res.expectedCamera} of 0..${res.maxCamera}`,
   )
   check(
-    "the prison's dummies did not follow the player",
-    JSON.stringify(res.finalDummies) === JSON.stringify(res.expectedDummies) &&
-      !res.finalDummies.some((x) => res.previousDummies.includes(x)),
-    `cavern dummies ${JSON.stringify(res.finalDummies)}, prison had ${JSON.stringify(res.previousDummies)}`,
+    "the prison's NPCs did not follow the player",
+    JSON.stringify(res.finalNpcs) === JSON.stringify(res.expectedNpcs) &&
+      !res.finalNpcs.some((x) => res.previousNpcs.includes(x)),
+    `cavern NPCs ${JSON.stringify(res.finalNpcs)}, prison had ${JSON.stringify(res.previousNpcs)}`,
   )
 }
 

@@ -1,4 +1,5 @@
-import { DamageText, SparkParticle, TrainingDummy } from './CombatEntity'
+import { DamageText, SparkParticle } from './CombatEntity'
+import { Npc, NPC_SPRITE_DISPLAY_SIZE, type NpcImage } from './Npc'
 import {
   buildFogMotes,
   fitBackdrop,
@@ -41,7 +42,7 @@ export interface SceneRuntime {
  *
  * Exactly one scene is active at a time. Its backdrop is the only environment drawn,
  * scaled to cover that scene's world, and its own bounds and floor plane are what the
- * player, the dummies and the camera are measured against.
+ * player, the NPCs and the camera are measured against.
  *
  * Mirrors GameWorld.kt.
  */
@@ -56,7 +57,7 @@ export class GameWorld {
    * the knight is exactly as large in the cavern as he is in the prison even though
    * the two artworks need very different scales to fill the screen.
    */
-  static readonly SPRITE_DISPLAY_SIZE = 100
+  static readonly SPRITE_DISPLAY_SIZE = NPC_SPRITE_DISPLAY_SIZE
 
   /**
    * Rest-pose foot offset, i.e. the padding below the opaque pixels of the idle
@@ -76,14 +77,28 @@ export class GameWorld {
   /** Every scene the game knows, in travel order. Only one is drawn at a time. */
   readonly scenes: SceneRuntime[]
 
-  /** Objects belonging to the active scene. Rebuilt on every scene change. */
-  dummies: TrainingDummy[] = []
+  /**
+   * The NPCs belonging to the active scene. Rebuilt on every scene change.
+   *
+   * Each holds a world X and is drawn through the same camera transform as the
+   * backdrop and the player, so it holds still in the world and only moves across
+   * the screen when the camera scrolls.
+   */
+  npcs: Npc[] = []
+
+  /**
+   * The NPC walk sheet, shared by every NPC in the world.
+   *
+   * Held here rather than per NPC so the decoded image exists once, and so a scene
+   * change -- which rebuilds the NPCs -- cannot drop it.
+   */
+  npcSprite: NpcImage | null = null
 
   private activeIndex: number
 
   /**
    * Camera view offset, in world units. Everything in the scene (backdrop, player,
-   * dummies, hitboxes) lives in world space and is drawn through this single
+   * NPCs, hitboxes) lives in world space and is drawn through this single
    * transform, so a world-fixed object stays locked to its scene as the player walks.
    *
    * Recomputed from the active scene's bounds whenever the scene changes, so a
@@ -192,6 +207,21 @@ export class GameWorld {
   }
 
   /**
+   * Attaches the decoded NPC walk sheet.
+   *
+   * Kept on the world rather than on an NPC, because NPCs are rebuilt on every
+   * scene change: a sheet held by an NPC would be dropped each time the player
+   * walked through a door. Every NPC already in the scene is updated too, so
+   * loading after the scene is entered still shows the artwork.
+   */
+  setNpcSprite(image: NpcImage | null): void {
+    this.npcSprite = image
+    for (const npc of this.npcs) {
+      npc.sprite = image
+    }
+  }
+
+  /**
    * Switches to a scene: rebuilds its objects, places the player at its entrance and
    * snaps the camera to the new bounds.
    *
@@ -203,7 +233,11 @@ export class GameWorld {
   enterScene(index: number): void {
     this.activeIndex = Math.min(Math.max(index, 0), this.scenes.length - 1)
     const scene = this.activeScene
-    this.dummies = scene.definition.dummyXs.map((x) => new TrainingDummy(x, scene.fit.floorY))
+    this.npcs = scene.definition.npcXs.map((x) => {
+      const npc = new Npc(x, scene.fit.floorY)
+      npc.sprite = this.npcSprite
+      return npc
+    })
     this.damageTexts.length = 0
     this.particles.length = 0
     this.player.resetPlayer(scene.definition.spawnX, scene.fit.floorY)
@@ -247,8 +281,8 @@ export class GameWorld {
       this.performAttackHitCheck(45, true)
     }
 
-    for (const dummy of this.dummies) {
-      dummy.update(clampedDt)
+    for (const npc of this.npcs) {
+      npc.update(clampedDt)
     }
 
     for (let i = this.damageTexts.length - 1; i >= 0; i--) {
@@ -335,15 +369,15 @@ export class GameWorld {
 
   private performAttackHitCheck(damage: number, isHeavy: boolean): void {
     const atkBox = this.player.attackHitbox
-    for (const dummy of this.dummies) {
-      if (!rectsIntersect(atkBox, dummy.hitbox)) continue
+    for (const npc of this.npcs) {
+      if (!rectsIntersect(atkBox, npc.hitbox)) continue
 
-      dummy.takeDamage(damage)
+      npc.takeDamage(damage)
 
       // Spawn floating damage text
       const dColor = isHeavy ? 'rgb(255, 180, 50)' : 'rgb(240, 240, 255)'
       const dText = isHeavy ? `CRIT ${damage}!` : `${damage}`
-      this.damageTexts.push(new DamageText(dummy.x, dummy.groundY - dummy.height - 15, dText, dColor))
+      this.damageTexts.push(new DamageText(npc.x, npc.groundY - npc.height - 15, dText, dColor))
 
       // Spawn sparks
       const sparkCount = isHeavy ? 18 : 10
@@ -352,8 +386,8 @@ export class GameWorld {
         const speed = Math.random() * 120 + 50
         this.particles.push(
           new SparkParticle(
-            dummy.x + (Math.random() - 0.5) * 16,
-            dummy.groundY - dummy.height / 2 + (Math.random() - 0.5) * 20,
+            npc.x + (Math.random() - 0.5) * 16,
+            npc.groundY - npc.height / 2 + (Math.random() - 0.5) * 20,
             Math.cos(angle) * speed,
             Math.sin(angle) * speed - 60,
             isHeavy ? 'rgb(255, 200, 80)' : 'rgb(220, 240, 255)',
@@ -413,7 +447,7 @@ export class GameWorld {
     const floorY = this.floorY
 
     ctx.save()
-    // Single world -> screen transform. The backdrop, the player, the dummies and
+    // Single world -> screen transform. The backdrop, the player, the NPCs and
     // every hitbox all live in the same world space, so a world-fixed object stays
     // locked to its scene while the player walks. The vertical term is the scene's
     // own framing, which lines its drawn floor up with every other scene's.
@@ -435,9 +469,9 @@ export class GameWorld {
     ctx.fillRect(0, 0, 24, floorY)
     ctx.fillRect(this.worldWidth - 24, 0, this.worldWidth, floorY)
 
-    // 3. Scene objects, at this scene's own world positions.
-    for (const dummy of this.dummies) {
-      dummy.render(ctx)
+    // 3. Scene characters, at this scene's own world positions.
+    for (const npc of this.npcs) {
+      npc.render(ctx)
     }
 
     // 4. Character contact shadow, seated on the floor line.

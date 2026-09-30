@@ -17,7 +17,7 @@ import com.example.game.animation.SpriteMetrics
 import com.example.game.controller.PlayerController
 import com.example.game.model.DamageText
 import com.example.game.model.SparkParticle
-import com.example.game.model.TrainingDummy
+import com.example.game.model.Npc
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.random.Random
@@ -27,7 +27,7 @@ import kotlin.random.Random
  *
  * Exactly one scene is active at a time. Its backdrop is the only environment drawn,
  * scaled to cover that scene's world, and its own bounds and floor plane are what the
- * player, the dummies and the camera are measured against.
+ * player, the NPCs and the camera are measured against.
  *
  * Mirrors GameWorld.ts.
  */
@@ -44,7 +44,7 @@ class GameWorld(val context: Context) {
          * so the knight is exactly as large in the cavern as he is in the prison even
          * though the two artworks need very different scales to fill the screen.
          */
-        const val SPRITE_DISPLAY_SIZE = 100f
+        const val SPRITE_DISPLAY_SIZE = Npc.NPC_SPRITE_DISPLAY_SIZE
 
         /**
          * Rest-pose foot offset, i.e. the padding below the opaque pixels of the idle
@@ -82,7 +82,22 @@ class GameWorld(val context: Context) {
     }
 
     /** Objects belonging to the active scene. Rebuilt on every scene change. */
-    var dummies: List<TrainingDummy> = emptyList()
+    /**
+     * The NPCs belonging to the active scene. Rebuilt on every scene change.
+     *
+     * Each holds a world X and is drawn through the same camera transform as the
+     * backdrop and the player, so it holds still in the world and only moves across
+     * the screen when the camera scrolls.
+     */
+    var npcs: List<Npc> = emptyList()
+
+    /**
+     * The NPC walk sheet, shared by every NPC in the world.
+     *
+     * Held here rather than per NPC so the decoded image exists once, and so a scene
+     * change -- which rebuilds the NPCs -- cannot drop it.
+     */
+    var npcSprite: Bitmap? = loadNpcSprite()
         private set
 
     // Visual particle effects
@@ -124,7 +139,7 @@ class GameWorld(val context: Context) {
 
     /**
      * Camera view offset, in world units. Everything in the scene (backdrop, player,
-     * dummies, hitboxes) lives in world space and is drawn through this single
+     * NPCs, hitboxes) lives in world space and is drawn through this single
      * transform, so a world-fixed object stays locked to its scene as the player walks.
      *
      * Recomputed from the active scene's bounds whenever the scene changes, so a
@@ -225,6 +240,28 @@ class GameWorld(val context: Context) {
         return null
     }
 
+    /**
+     * Decodes the NPC walk sheet from the shared assets.
+     *
+     * A missing sheet is survivable: the NPC still draws its shadow and HP bar, and
+     * the game does not stall waiting on the network the way a backdrop would.
+     */
+    private fun loadNpcSprite(): Bitmap? = try {
+        val options = BitmapFactory.Options().apply {
+            inScaled = false
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        val stream = context.assets.open("sprites/${Npc.SPRITE_FILE}")
+        stream.use { BitmapFactory.decodeStream(it, null, options) }
+            ?: run {
+                Log.w("GameWorld", "NPC sheet '${Npc.SPRITE_FILE}' did not decode")
+                null
+            }
+    } catch (_: Exception) {
+        Log.w("GameWorld", "NPC sheet '${Npc.SPRITE_FILE}' missing; NPCs render without art")
+        null
+    }
+
     private fun decodeDrawable(name: String): Bitmap? = try {
         val resId = context.resources.getIdentifier(name, "drawable", context.packageName)
         if (resId == 0) {
@@ -249,7 +286,9 @@ class GameWorld(val context: Context) {
     fun enterScene(index: Int) {
         activeSceneIndex = index.coerceIn(0, scenes.size - 1)
         val scene = activeScene
-        dummies = scene.definition.dummyXs.map { TrainingDummy(x = it, groundY = scene.fit.floorY) }
+        npcs = scene.definition.npcXs.map { x ->
+            Npc(x = it, groundY = scene.fit.floorY).also { it.sprite = npcSprite }
+        }
         damageTexts.clear()
         particles.clear()
         player.resetPlayer(scene.definition.spawnX, scene.fit.floorY)
@@ -293,9 +332,9 @@ class GameWorld(val context: Context) {
             performAttackHitCheck(damage = 45, isHeavy = true)
         }
 
-        // Update dummies
-        for (dummy in dummies) {
-            dummy.update(clampedDt)
+        // Update the scene's NPCs
+        for (npc in npcs) {
+            npc.update(clampedDt)
         }
 
         // Update damage texts
@@ -385,14 +424,14 @@ class GameWorld(val context: Context) {
 
     private fun performAttackHitCheck(damage: Int, isHeavy: Boolean) {
         val atkBox = player.attackHitbox
-        for (dummy in dummies) {
-            if (RectF.intersects(atkBox, dummy.hitbox)) {
-                dummy.takeDamage(damage)
+        for (npc in npcs) {
+            if (RectF.intersects(atkBox, npc.hitbox)) {
+                npc.takeDamage(damage)
 
                 // Spawn floating damage text
                 val dColor = if (isHeavy) Color.rgb(255, 180, 50) else Color.rgb(240, 240, 255)
                 val dText = if (isHeavy) "CRIT $damage!" else "$damage"
-                damageTexts.add(DamageText(dummy.x, dummy.groundY - dummy.height - 15f, dText, dColor))
+                damageTexts.add(DamageText(npc.x, npc.groundY - npc.height - 15f, dText, dColor))
 
                 // Spawn sparks
                 val sparkCount = if (isHeavy) 18 else 10
@@ -401,8 +440,8 @@ class GameWorld(val context: Context) {
                     val speed = Random.nextFloat() * 120f + 50f
                     particles.add(
                         SparkParticle(
-                            x = dummy.x + (Random.nextFloat() - 0.5f) * 16f,
-                            y = dummy.groundY - dummy.height / 2f + (Random.nextFloat() - 0.5f) * 20f,
+                            x = npc.x + (Random.nextFloat() - 0.5f) * 16f,
+                            y = npc.groundY - npc.height / 2f + (Random.nextFloat() - 0.5f) * 20f,
                             vx = cos(angle) * speed,
                             vy = kotlin.math.sin(angle) * speed - 60f,
                             color = if (isHeavy) Color.rgb(255, 200, 80) else Color.rgb(220, 240, 255),
@@ -467,7 +506,7 @@ class GameWorld(val context: Context) {
         val sceneFloorY = floorY
 
         canvas.save()
-        // Single world -> screen transform. The backdrop, the player, the dummies and
+        // Single world -> screen transform. The backdrop, the player, the NPCs and
         // every hitbox all live in the same world space, so a world-fixed object stays
         // locked to its scene while the player walks.
         canvas.translate(-cameraX, cameraY)
@@ -489,8 +528,8 @@ class GameWorld(val context: Context) {
         canvas.drawRect(worldWidth - 24f, 0f, worldWidth, sceneFloorY, pixelPaint)
 
         // 3. Scene objects, at this scene's own world positions.
-        for (dummy in dummies) {
-            dummy.render(canvas, pixelPaint)
+        for (npc in npcs) {
+            npc.render(canvas, pixelPaint)
         }
 
         // 4. Character contact shadow, seated on the floor line.

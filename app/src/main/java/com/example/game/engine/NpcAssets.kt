@@ -170,7 +170,9 @@ data class NpcClip(
     /** How many frames play. Zero means the motion is unassigned. */
     val frameCount: Int,
     /** Whether the last frame wraps to the first. */
-    val loops: Boolean
+    val loops: Boolean,
+    /** Frames played per second while this clip runs. */
+    val fps: Int
 )
 
 /**
@@ -188,18 +190,35 @@ data class NpcClip(
  * range of a shared one; neither binding disturbs walk.
  */
 val NPC_CLIPS = listOf(
-    NpcClip(name = "idle", sheet = null, firstFrame = 0, frameCount = 0, loops = true),
+    NpcClip(
+        name = "idle",
+        sheet = NPC_IDLE_WALK_SHEET.file,
+        firstFrame = 0,
+        frameCount = 1,
+        loops = true,
+        fps = NPC_IDLE_FPS
+    ),
     NpcClip(
         name = "walk",
         sheet = NPC_IDLE_WALK_SHEET.file,
         firstFrame = 0,
         frameCount = NPC_IDLE_WALK_SHEET.frames,
-        loops = true
+        loops = true,
+        fps = NPC_WALK_FPS
     )
 )
 
 /** Frames played per second by walk, matching the player's own cadence. */
 const val NPC_WALK_FPS = 12
+
+/**
+ * Frames played per second by idle. Idle holds a single frame, so this only sets the
+ * cadence it would run at.
+ */
+const val NPC_IDLE_FPS = 6
+
+/** A clip with no artwork, used as the fallback for an unbound state. */
+fun emptyClip(name: String, fps: Int): NpcClip = NpcClip(name, null, 0, 0, true, fps)
 
 /** True while this clip has artwork behind it. */
 fun NpcClip.isAssigned(): Boolean = sheet != null && frameCount > 0

@@ -195,7 +195,9 @@ console.log('\nSCENES: both engines declare the same environments, the same way'
 const WEB_SCENE_SRC = readFileSync(join(ROOT, 'web/src/game/GameScene.ts'), 'utf8')
 const KT_SCENE_SRC = readFileSync(join(ROOT, 'app/src/main/java/com/example/game/engine/GameScene.kt'), 'utf8')
 const WEB_NPC_SRC = readFileSync(join(ROOT, 'web/src/game/npcAssets.ts'), 'utf8')
+const WEB_NPC_IMPL = readFileSync(join(ROOT, 'web/src/game/Npc.ts'), 'utf8')
 const KT_NPC_SRC = readFileSync(join(ROOT, 'app/src/main/java/com/example/game/engine/NpcAssets.kt'), 'utf8')
+const KT_NPC_IMPL = readFileSync(join(ROOT, 'app/src/main/java/com/example/game/model/Npc.kt'), 'utf8')
 const WEB_WORLD_SRC = readFileSync(join(ROOT, 'web/src/game/GameWorld.ts'), 'utf8')
 const KT_WORLD_SRC = readFileSync(join(ROOT, 'app/src/main/java/com/example/game/engine/GameWorld.kt'), 'utf8')
 
@@ -224,9 +226,9 @@ function parseScenes(src) {
         return hit ? hit[1] : null
       }
       const listMatch = isWeb
-        ? body.match(/dummyXs\s*[:=]\s*\[([^\]]*)\]/)
-        : body.match(/dummyXs\s*=\s*listOf\(([^)]*)\)/)
-      const dummyXs = listMatch
+        ? body.match(/npcXs\s*[:=]\s*\[([^\]]*)\]/)
+        : body.match(/npcXs\s*=\s*listOf\(([^)]*)\)/)
+      const npcXs = listMatch
         ? listMatch[1].split(',').map((v) => Number(v.trim().replace('f', ''))).filter((v) => !Number.isNaN(v))
         : null
       const exitMatch = body.match(/exitX\s*[:=]\s*(null|(-?[\d.]+)f?)/)
@@ -239,7 +241,7 @@ function parseScenes(src) {
         floorRow: num('floorRow'),
         worldWidth: num('worldWidth'),
         spawnX: num('spawnX'),
-        dummyXs,
+        npcXs,
         exitX: exitMatch ? (exitMatch[1] === 'null' ? null : Number(exitMatch[2])) : undefined,
       }
     }
@@ -266,9 +268,9 @@ for (const name of sceneNames) {
     check(`${name}.${field}: same in both engines`, w[field] === k[field], `web ${w[field]} vs android ${k[field]}`)
   }
   check(
-    `${name}.dummyXs: same fixtures, in the same order`,
-    JSON.stringify(w.dummyXs) === JSON.stringify(k.dummyXs),
-    `web ${JSON.stringify(w.dummyXs)} vs android ${JSON.stringify(k.dummyXs)}`,
+    `${name}.npcXs: the same NPCs, in the same order`,
+    JSON.stringify(w.npcXs) === JSON.stringify(k.npcXs),
+    `web ${JSON.stringify(w.npcXs)} vs android ${JSON.stringify(k.npcXs)}`,
   )
 }
 
@@ -638,6 +640,26 @@ console.log('\nNPC asset set is declared identically in both engines')
     `web ${web.length} vs android ${kt.length}`,
   )
   check('both engines declare the same number of NPC sheets', web.length === kt.length && web.length > 0, `web ${web.length} vs android ${kt.length}`)
+  // The player and the NPC must stay the same size, and the player must not have
+  // been resized to achieve it. Both engines derive the NPC's figure from one
+  // constant and hand the player that same number.
+  const sizeOf = (src, name) => {
+    const m = new RegExp(`${name}\\s*=\\s*(\\d+(?:\\.\\\\d+)?)f?`).exec(src)
+    return m ? Number(m[1]) : null
+  }
+  check(
+    'both engines draw a 128px cell at 100 logical px for the NPC',
+    sizeOf(WEB_NPC_IMPL, 'NPC_SPRITE_DISPLAY_SIZE') === 100 && sizeOf(KT_NPC_IMPL, 'NPC_SPRITE_DISPLAY_SIZE') === 100,
+    `web ${sizeOf(WEB_NPC_IMPL, 'NPC_SPRITE_DISPLAY_SIZE')} vs android ${sizeOf(KT_NPC_IMPL, 'NPC_SPRITE_DISPLAY_SIZE')}`,
+  )
+  check(
+    'and the player uses that same figure, so the NPC matches the knight scale without resizing the player',
+    /SPRITE_DISPLAY_SIZE\s*=\s*NPC_SPRITE_DISPLAY_SIZE/.test(WEB_NPC_SRC.replace(/\s+/g, ' ')) ||
+      /SPRITE_DISPLAY_SIZE\s*=\s*NPC_SPRITE_DISPLAY_SIZE/.test(readFileSync(join(ROOT, 'web/src/game/GameWorld.ts'), 'utf8')) ||
+      /SPRITE_DISPLAY_SIZE\s*=\s*Npc\.NPC_SPRITE_DISPLAY_SIZE/.test(KT_SCENE_SRC) ||
+      /SPRITE_DISPLAY_SIZE\s*=\s*Npc\.NPC_SPRITE_DISPLAY_SIZE/.test(readFileSync(join(ROOT, 'app/src/main/java/com/example/game/engine/GameWorld.kt'), 'utf8')),
+    'each engine points the player at the same constant the NPC uses',
+  )
   check('both engines use the same 128px cell size',
     /NPC_CELL_SIZE\s*=\s*128/.test(WEB_NPC_SRC) && /NPC_CELL_SIZE\s*=\s*128/.test(KT_NPC_SRC), '128')
   check('both engines pin sprite filtering to nearest-neighbour, so neither engine blurs the pixel art',
@@ -688,14 +710,23 @@ console.log('\nNPC asset set is declared identically in both engines')
     }
     return NaN
   }
-  const webClipRe = /name:\s*'(\w+)'[\s\S]*?sheet:\s*([^,\n]+),[\s\S]*?firstFrame:\s*(\d+)[\s\S]*?frameCount:\s*([^,\n]+),[\s\S]*?loops:\s*(true|false)/g
-  const ktClipRe = /NpcClip\(\s*name\s*=\s*"(\w+)",\s*sheet\s*=\s*([^,\n]+),\s*firstFrame\s*=\s*(\d+),\s*frameCount\s*=\s*([^,\n]+),\s*loops\s*=\s*(true|false)/g
+  // A frame rate may be written as a literal or as the module's constant, so it is
+  // resolved the same way a frame count is rather than matched as digits only.
+  const resolveFps = (expr) => {
+    const t = expr.trim()
+    const n = /^(\d+)$/.exec(t)
+    if (n) return Number(n[1])
+    const declared = new RegExp(`${t}\\s*=\\s*(\\d+)`)
+    return Number((WEB_NPC_SRC.match(declared) || KT_NPC_SRC.match(declared) || [])[1])
+  }
+  const webClipRe = /name:\s*'(\w+)'[\s\S]*?sheet:\s*([^,\n]+),[\s\S]*?firstFrame:\s*(\d+)[\s\S]*?frameCount:\s*([^,\n]+),[\s\S]*?loops:\s*(true|false),[\s\S]*?fps:\s*([^,\n}]+)/g
+  const ktClipRe = /NpcClip\(\s*name\s*=\s*"(\w+)",\s*sheet\s*=\s*([^,\n]+),\s*firstFrame\s*=\s*(\d+),\s*frameCount\s*=\s*([^,\n]+),\s*loops\s*=\s*(true|false),\s*fps\s*=\s*([^)]+)/g
   const grab = (src, re, sheets) => {
     const out = []
     let m
     re.lastIndex = 0
     while ((m = re.exec(src)) !== null) {
-      out.push({ name: m[1], sheet: resolve(m[2], sheets), firstFrame: +m[3], frames: resolveCount(m[4], sheets), loops: m[5] === 'true' })
+      out.push({ name: m[1], sheet: resolve(m[2], sheets), firstFrame: +m[3], frames: resolveCount(m[4], sheets), loops: m[5] === 'true', fps: resolveFps(m[6]) })
     }
     return out
   }
@@ -704,7 +735,7 @@ console.log('\nNPC asset set is declared identically in both engines')
   check('every clip resolves to a real sheet or to an explicit empty binding, in both engines',
     webClips.length > 0 && [...webClips, ...ktClips].every((c) => Number.isFinite(c.frames) && (c.sheet === null || !String(c.sheet).startsWith('unresolved:'))),
     [...webClips, ...ktClips].map((c) => `${c.name}=${c.sheet}`).join(' '))
-  check('both engines bind the same motions', webClips.length === ktClips.length, `web [${webClips.map((c) => c.name)}] vs android [${ktClips.map((c) => c.name)}]`)
+  check('both engines bind the same motions', webClips.length === ktClips.length && webClips.length > 0, `web [${webClips.map((c) => c.name)}] vs android [${ktClips.map((c) => c.name)}]`)
 
   const ktByClip = new Map(ktClips.map((c) => [c.name, c]))
   for (const w of webClips) {
@@ -714,9 +745,9 @@ console.log('\nNPC asset set is declared identically in both engines')
       continue
     }
     check(
-      `${w.name}: plays the same frames from the same sheet in both engines`,
-      k.sheet === w.sheet && k.firstFrame === w.firstFrame && k.frames === w.frames && k.loops === w.loops,
-      `web ${w.sheet}[${w.firstFrame}..${w.firstFrame + w.frames - 1}] vs android ${k.sheet}[${k.firstFrame}..${k.firstFrame + k.frames - 1}]`,
+      `${w.name}: plays the same frames from the same sheet, at the same rate, in both engines`,
+      k.sheet === w.sheet && k.firstFrame === w.firstFrame && k.frames === w.frames && k.loops === w.loops && k.fps === w.fps,
+      `web ${w.sheet}[${w.firstFrame}..${w.firstFrame + w.frames - 1}] @${w.fps}fps vs android ${k.sheet}[${k.firstFrame}..${k.firstFrame + k.frames - 1}] @${k.fps}fps`,
     )
   }
 
