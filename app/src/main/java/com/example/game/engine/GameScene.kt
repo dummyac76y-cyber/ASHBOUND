@@ -150,11 +150,15 @@ val FORGOTTEN_PRISON = SceneDefinition(
 /**
  * The Underground Cavern: the scene that follows the prison.
  *
- * The cavern art is 1536x512, so covering 360 logical rows of height needs 45/64
- * rather than the prison's 5/12 -- about 1.69x larger. That is expected here and is
- * precisely why the two are separate scenes: the scenery is drawn at whatever scale
- * fills the screen, while the knight keeps his own fixed size and simply stands on
- * this scene's own floor plane.
+ * The cavern is a *world*, not a backdrop: its width is the artwork's own 1536px,
+ * and the 640px viewport is a window the camera moves across it. That is why the
+ * world is not fitted to the viewport -- fitting would shrink a 1536x512 plate down
+ * to fill 640x360 and leave nothing to scroll through.
+ *
+ * At its native size the plate already covers the world's full width, so the fit
+ * lands on a scale of exactly 1 and crops only vertically, centring the 512px
+ * artwork in the 360px viewport. The camera then shows a genuine cropped section of
+ * one continuous painting: nothing is stretched, mirrored, tiled or repeated.
  */
 val UNDERGROUND_CAVERN = SceneDefinition(
     id = "underground_cavern",
@@ -163,11 +167,13 @@ val UNDERGROUND_CAVERN = SceneDefinition(
     sourceWidth = 1536f,
     sourceHeight = 512f,
     floorRow = 391f,
-    worldWidth = 640f,
-    // Entered from the left, at the mouth of the cave.
-    spawnX = 120f,
+    // The world's width is the artwork's own, so the whole painting is the world and
+    // the camera scrolls across all of it.
+    worldWidth = 1536f,
+    // Entered from the left, at the mouth of the cave, with room to walk both ways.
+    spawnX = 768f,
     // Deliberately not the prison's 450/570: the cavern declares its own fixtures.
-    dummyXs = listOf(400f, 520f),
+    dummyXs = listOf(900f, 1020f),
     exitX = null
 )
 

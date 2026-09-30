@@ -71,7 +71,6 @@ const OPENING_FIT = fitBackdrop(
 )
 const FLOOR_Y = OPENING_FIT.floorY
 const SPAWN_X = FORGOTTEN_PRISON.spawnX
-const WORLD_WIDTH = FORGOTTEN_PRISON.worldWidth
 
 const anim = stubAnimations()
 const world = new GameWorld(anim)
@@ -128,12 +127,27 @@ for (let i = 0; i < 10; i++) world.update(1 / 60)
 check('returns to IDLE when stopped', anim.currentAction === PlayerAction.IDLE, `got ${anim.currentAction}`)
 
 console.log('world bounds')
+// Each scene bounds itself, so the right-hand limit belongs to whichever scene is
+// active -- and walking right far enough leaves this one entirely.
 player.setMovementInput(-1)
-for (let i = 0; i < 600; i++) world.update(1 / 60)
+for (let i = 0; i < 600 && world.activeSceneIndex === 0; i++) world.update(1 / 60)
+player.setMovementInput(0)
 check('clamped to left bound', player.x >= player.width / 2 - 0.001, `got ${player.x}`)
+check(
+  'the left bound is the player half-width inside the scene',
+  Math.abs(player.x - player.width / 2) < 1e-6,
+  `got ${player.x}, scene starts at 0`,
+)
 player.setMovementInput(1)
-for (let i = 0; i < 1200; i++) world.update(1 / 60)
-check('clamped to right bound', player.x <= WORLD_WIDTH - player.width / 2 + 0.001, `got ${player.x}`)
+for (let i = 0; i < 2400 && world.activeSceneIndex === 0; i++) world.update(1 / 60)
+const boundScene = world.activeScene
+for (let i = 0; i < 2400 && world.activeSceneIndex === 1; i++) world.update(1 / 60)
+player.setMovementInput(0)
+check(
+  `clamped to the right bound of ${boundScene.definition.id}`,
+  Math.abs(player.x - (boundScene.definition.worldWidth - player.width / 2)) < 1e-3,
+  `got ${player.x}, bound ${boundScene.definition.worldWidth - player.width / 2}`,
+)
 
 resetWorld()
 console.log('jump')
@@ -461,9 +475,26 @@ console.log('SCENES: one full-screen environment at a time')
     `scale ${prison.fit.scale}, offsets ${prison.fit.offsetX},${prison.fit.offsetY}`,
   )
   check(
-    'the cavern fills on its own terms, at its own scale',
-    Math.abs(cavern.fit.scale - GameWorld.LOGICAL_HEIGHT / 512) < 1e-12,
-    `cavern scale ${cavern.fit.scale}`,
+    'the cavern is a world, not a fitted backdrop: it renders at its native size',
+    Math.abs(cavern.fit.scale - 1) < 1e-12 &&
+      cavern.fit.drawWidth >= UNDERGROUND_CAVERN.worldWidth &&
+      UNDERGROUND_CAVERN.worldWidth > GameWorld.LOGICAL_WIDTH,
+    `scale ${cavern.fit.scale}, drawn ${cavern.fit.drawWidth} wide over a ${UNDERGROUND_CAVERN.worldWidth} world (viewport ${GameWorld.LOGICAL_WIDTH})`,
+  )
+  check(
+    'the cavern keeps the whole artwork width, so nothing is cropped horizontally',
+    cavern.fit.offsetX === 0 && cavern.fit.drawWidth === UNDERGROUND_CAVERN.sourceWidth,
+    `offsetX ${cavern.fit.offsetX}, drawWidth ${cavern.fit.drawWidth} of ${UNDERGROUND_CAVERN.sourceWidth}`,
+  )
+  check(
+    'the cavern world is at least twice the viewport, so there is something to scroll',
+    UNDERGROUND_CAVERN.worldWidth >= GameWorld.LOGICAL_WIDTH * 2,
+    `world ${UNDERGROUND_CAVERN.worldWidth} vs viewport ${GameWorld.LOGICAL_WIDTH}`,
+  )
+  check(
+    'the cavern camera has real range to travel',
+    UNDERGROUND_CAVERN.worldWidth - GameWorld.LOGICAL_WIDTH > 400,
+    `camera range 0..${UNDERGROUND_CAVERN.worldWidth - GameWorld.LOGICAL_WIDTH}`,
   )
   check(
     'the two scenes are scaled independently, not forced to share one scale',
@@ -936,10 +967,15 @@ console.log('SCENE WALK: grounded inside a scene, handed over at the exit')
   p.setMovementInput(1)
   let worst = 0
   let maxX = p.x
+  // Sampled before the update, because the update that completes the handover also
+  // teleports the player to the next scene's entrance -- reading the position
+  // afterwards would record the cavern spawn, not where the walk got to.
   for (let i = 0; i < 1200 && w.activeSceneIndex === 0; i++) {
+    if (w.activeSceneIndex === 0) {
+      worst = Math.max(worst, Math.abs(p.groundY - w.floorY))
+      maxX = Math.max(maxX, p.x)
+    }
     w.update(1 / 60)
-    worst = Math.max(worst, Math.abs(p.groundY - w.floorY))
-    maxX = Math.max(maxX, p.x)
   }
   p.setMovementInput(0)
 
