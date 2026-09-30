@@ -1,4 +1,6 @@
 {
+  "./bg/arena_bg.png": "e33e8ab8",
+  "./bg/cavern_bg.png": "1a6b6792",
   "./sprites/attack.png": "c6220c80",
   "./sprites/block.png": "80de4728",
   "./sprites/exiled_knight_portrait.png": "810a94ed",

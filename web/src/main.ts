@@ -10,6 +10,9 @@ import './style.css'
 const SPRITE_BASE = assetUrl('sprites')
 const BACKGROUND_URL = assetUrl('bg/arena_bg.png')
 
+/** Underground Cavern: the world section that follows the Forgotten Prison. */
+const CAVERN_BACKGROUND_URL = assetUrl('bg/cavern_bg.png')
+
 async function loadImage(url: string): Promise<HTMLImageElement | null> {
   return new Promise((resolve) => {
     const img = new Image()
@@ -58,7 +61,13 @@ async function boot(): Promise<void> {
 
   const animations = new SpriteAnimationSystem(SPRITE_BASE)
   const background = await loadImage(BACKGROUND_URL)
-  const world = new GameWorld(animations, background ? { image: background, width: background.width, height: background.height } : null)
+  // The second world section, loaded from the same synced asset the APK uses.
+  const cavernBackground = await loadImage(CAVERN_BACKGROUND_URL)
+  const world = new GameWorld(
+    animations,
+    background ? { image: background, width: background.width, height: background.height } : null,
+    cavernBackground ? { image: cavernBackground, width: cavernBackground.width, height: cavernBackground.height } : null,
+  )
 
   // Sheets must be decoded before the first update(), otherwise frame 0 is skipped.
   await animations.reloadAll()
@@ -195,6 +204,12 @@ async function boot(): Promise<void> {
         setCamera(x: number): void {
           world.cameraX = x
         },
+        /**
+         * The backdrop alone, through the real drawing path. The harness subtracts
+         * this to isolate world objects; going through the world rather than
+         * re-drawing the plates keeps the reference honest.
+         */
+        backdropOnly: (ctx: CanvasRenderingContext2D): void => world.renderBackdrop(ctx),
       },
     })
   }

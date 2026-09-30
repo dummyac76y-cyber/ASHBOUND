@@ -9,7 +9,7 @@
  * means the two engines would draw different cells from the same artwork, which
  * is exactly the failure this change is meant to avoid.
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -187,7 +187,123 @@ function check(name, ok, detail = '') {
   if (!ok) failures++
 }
 
-console.log('SHEET GEOMETRY: the web and Android rules agree, over the real artwork')
+console.log('\nWORLD GEOMETRY: both engines build the same two-section world')
+// The world is the Forgotten Prison followed by the Underground Cavern, laid end to
+// end. Everything the player, the dummies, collision and the backdrop share lives in
+// that one space, so these constants have to agree or the two platforms would put
+// the ground plane in a different place.
+const WEB_WORLD_SRC = readFileSync(join(ROOT, 'web/src/game/GameWorld.ts'), 'utf8')
+const KT_WORLD_SRC = readFileSync(join(ROOT, 'app/src/main/java/com/example/game/engine/GameWorld.kt'), 'utf8')
+
+/** Literal `static readonly X = <n>` / `const val X = <n>f` values from each engine. */
+function literals(src, web) {
+  const out = {}
+  const re = web
+    ? /static\s+readonly\s+(\w+)\s*=\s*(-?[\d.]+)\s*$/gm
+    : /const\s+val\s+(\w+)\s*(?::\s*Float\s*)?=\s*(-?[\d.]+)f?\s*$/gm
+  for (const m of src.matchAll(re)) out[m[1]] = Number(m[2])
+  return out
+}
+const WEB_LIT = literals(WEB_WORLD_SRC, true)
+const KT_LIT = literals(KT_WORLD_SRC, false)
+
+const SHARED = [
+  'LOGICAL_WIDTH', 'LOGICAL_HEIGHT', 'BACKGROUND_HEIGHT',
+  'CAVERN_WIDTH', 'CAVERN_HEIGHT', 'BACKGROUND_FLOOR_ROW', 'CAVERN_FLOOR_ROW',
+  'SPRITE_DISPLAY_SIZE',
+]
+for (const name of SHARED) {
+  check(
+    `${name}: same literal in both engines`,
+    WEB_LIT[name] !== undefined && WEB_LIT[name] === KT_LIT[name],
+    `web ${WEB_LIT[name]} vs android ${KT_LIT[name]}`,
+  )
+}
+
+// The arena plate is 1536 wide in both. Web names the constant; Kotlin inlines the
+// literal into the scaled expression, so both spellings are checked.
+// Note web qualifies its constants with `GameWorld.`, so every pattern below
+// tolerates that prefix rather than assuming a bare name.
+const ARENA_W = WEB_LIT.BACKGROUND_WIDTH
+check(
+  'the arena plate is 1536 wide in both engines',
+  ARENA_W === 1536 && /BACKGROUND_LOGICAL_WIDTH\s*:\s*Float\s*=\s*1536/.test(KT_WORLD_SRC),
+  `web BACKGROUND_WIDTH ${ARENA_W}, kotlin inline 1536`,
+)
+
+// Recomputed from the shared literals, so the two plates cannot drift apart from
+// each other even if both engines agreed on a wrong number.
+const WORLD_SCALE = WEB_LIT.LOGICAL_HEIGHT / WEB_LIT.BACKGROUND_HEIGHT
+const FLOOR_Y = WEB_LIT.BACKGROUND_FLOOR_ROW * WORLD_SCALE
+const ARENA_LOGICAL_W = (WEB_LIT.BACKGROUND_WIDTH ?? 1536) * WORLD_SCALE
+const CAVERN_W = WEB_LIT.CAVERN_WIDTH * WORLD_SCALE
+const CAVERN_H = WEB_LIT.CAVERN_HEIGHT * WORLD_SCALE
+const CAVERN_Y = FLOOR_Y - WEB_LIT.CAVERN_FLOOR_ROW * WORLD_SCALE
+check(
+  'one shared scale puts each plate exactly one viewport wide',
+  Math.abs(ARENA_LOGICAL_W - WEB_LIT.LOGICAL_WIDTH) < 1e-9 &&
+    Math.abs(CAVERN_W - WEB_LIT.LOGICAL_WIDTH) < 1e-9,
+  `arena ${ARENA_LOGICAL_W}, cavern ${CAVERN_W}, viewport ${WEB_LIT.LOGICAL_WIDTH}`,
+)
+check(
+  'the cavern floor lands exactly on the shared ground plane',
+  Math.abs(CAVERN_Y + WEB_LIT.CAVERN_FLOOR_ROW * WORLD_SCALE - FLOOR_Y) < 1e-9,
+  `cavern floor ${CAVERN_Y + WEB_LIT.CAVERN_FLOOR_ROW * WORLD_SCALE} vs FLOOR_Y ${FLOOR_Y}`,
+)
+check(
+  'the cavern is shorter than the viewport, which is why the bands are filled',
+  CAVERN_H < WEB_LIT.LOGICAL_HEIGHT,
+  `cavern ${CAVERN_H.toFixed(2)} vs viewport ${WEB_LIT.LOGICAL_HEIGHT}`,
+)
+check(
+  'the cavern plate sits fully inside the viewport when floor-aligned',
+  CAVERN_Y >= 0 && CAVERN_Y + CAVERN_H <= WEB_LIT.LOGICAL_HEIGHT,
+  `top ${CAVERN_Y.toFixed(2)}, bottom ${(CAVERN_Y + CAVERN_H).toFixed(2)}`,
+)
+
+// The arena centre anchors the spawn and both dummies. It must be the prison's
+// centre: derived from the world it would land on the seam between the sections.
+check(
+  'the spawn and dummies are anchored to the prison, not to the world',
+  /ARENA_CENTER_X\s*=\s*(?:GameWorld\.)?BACKGROUND_LOGICAL_WIDTH\s*\/\s*2/.test(WEB_WORLD_SRC) &&
+    /ARENA_CENTER_X:\s*Float\s*=\s*BACKGROUND_LOGICAL_WIDTH\s*\/\s*2f/.test(KT_WORLD_SRC),
+  'both derive the centre from the prison plate',
+)
+
+// Both engines must draw the cavern from the same source file, and the cavern must
+// be drawn at the arena's scale rather than a scale of its own.
+check(
+  'both engines load the cavern from the same shared asset name',
+  /img_underground_cavern_hd/.test(KT_WORLD_SRC) && /bg\/cavern_bg\.png/.test(WEB_WORLD_SRC) &&
+    existsSync(join(ROOT, 'app/src/main/res/drawable/img_underground_cavern_hd.png')) &&
+    existsSync(join(ROOT, 'web/public/bg/cavern_bg.png')),
+  'res/drawable is the source, web/public is the synced copy',
+)
+check(
+  'the cavern is drawn at the arena scale, not a scale of its own',
+  /CAVERN_SCALE\s*=\s*(?:GameWorld\.)?BACKGROUND_SCALE/.test(WEB_WORLD_SRC) &&
+    /CAVERN_SCALE:\s*Float\s*=\s*BACKGROUND_SCALE/.test(KT_WORLD_SRC),
+  'one scale for both sections',
+)
+
+// Same bytes on both platforms, which is the whole point of routing the section
+// through the shared asset system rather than a second hand-copied file.
+{
+  const androidCavern = readFileSync(join(ROOT, 'app/src/main/res/drawable/img_underground_cavern_hd.png'))
+  const webCavern = readFileSync(join(ROOT, 'web/public/bg/cavern_bg.png'))
+  check(
+    'web and Android ship byte-identical cavern artwork',
+    androidCavern.equals(webCavern),
+    `${androidCavern.length} vs ${webCavern.length} bytes`,
+  )
+  check(
+    'the cavern is the exact artwork, not a regenerated or resized copy',
+    androidCavern.readUInt32BE(16) === WEB_LIT.CAVERN_WIDTH && androidCavern.readUInt32BE(20) === WEB_LIT.CAVERN_HEIGHT,
+    `${androidCavern.readUInt32BE(16)}x${androidCavern.readUInt32BE(20)}`,
+  )
+}
+
+console.log('\nSHEET GEOMETRY: the web and Android rules agree, over the real artwork')
 for (const s of SHEETS) {
   const c = { name: s.name, w: s.android.w, h: s.android.h, frameCount: s.web.frameCount, columns: s.web.columns, cellSize: s.web.cellSize }
   const w = webGeometry(c)

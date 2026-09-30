@@ -51,23 +51,48 @@ class GameWorld(val context: Context) {
         val BACKGROUND_LOGICAL_HEIGHT: Float = 864f * BACKGROUND_SCALE
 
         /**
-         * Width of the playable world, in logical pixels.
-         *
-         * The world is exactly the backdrop: the player can walk the full width
-         * of the painted arena, and the arena edge is the world edge. Because the
-         * backdrop is one frame, the camera has no room to scroll, and there is
-         * nothing beyond the edges that could be filled with a flipped or
-         * repeated copy.
+         * Native pixel size of the Underground Cavern backdrop
+         * (img_underground_cavern_hd.png), the world section that follows the prison.
          */
-        val WORLD_WIDTH: Float = BACKGROUND_LOGICAL_WIDTH
+        const val CAVERN_WIDTH = 1536f
+        const val CAVERN_HEIGHT = 512f
 
         /**
-         * Centre of the playable arena, in world units.
+         * The cavern is drawn at the *same* uniform scale as the arena, not at a
+         * scale chosen to fill the viewport.
          *
-         * Derived from the world, not from the screen, so the spawn scales with the
-         * arena rather than drifting with the viewport.
+         * The cavern art is 512px tall where the arena is 864, so scaling it to
+         * cover 360 logical pixels would need 360/512 rather than 5/12 -- about
+         * 1.69x larger. That would leave the knight, drawn at a fixed sprite size,
+         * standing at a very different size against the scenery the moment he
+         * crossed the boundary. Sharing one scale keeps the character-to-scenery
+         * relationship identical across the seam.
          */
-        val ARENA_CENTER_X: Float = WORLD_WIDTH / 2f
+        val CAVERN_SCALE: Float = BACKGROUND_SCALE
+
+        /** Logical size of the cavern once scaled: exactly 640 x 213 1/3. */
+        val CAVERN_LOGICAL_WIDTH: Float = CAVERN_WIDTH * CAVERN_SCALE
+        val CAVERN_LOGICAL_HEIGHT: Float = CAVERN_HEIGHT * CAVERN_SCALE
+
+        /**
+         * Width of the playable world, in logical pixels.
+         *
+         * The world is the Forgotten Prison followed by the Underground Cavern,
+         * each one finite environment laid end to end. The camera therefore has
+         * exactly one viewport of scroll to cross between them, and because the
+         * world is exactly the two plates there is no slack that would have to be
+         * covered by a tiled or mirrored copy.
+         */
+        val WORLD_WIDTH: Float = BACKGROUND_LOGICAL_WIDTH + CAVERN_LOGICAL_WIDTH
+
+        /**
+         * Centre of the Forgotten Prison, in world units.
+         *
+         * Anchored to the prison plate rather than to the world, because the world
+         * now spans two sections: half the world would put the spawn exactly on the
+         * seam between them and shift both training dummies into the cavern.
+         */
+        val ARENA_CENTER_X: Float = BACKGROUND_LOGICAL_WIDTH / 2f
 
         /**
          * Initial world X for the player: the arena centre, which leaves the full
@@ -115,6 +140,43 @@ class GameWorld(val context: Context) {
          */
         val FLOOR_Y: Float = BACKGROUND_FLOOR_ROW * (LOGICAL_HEIGHT / BACKGROUND_HEIGHT)
 
+        /**
+         * Row of the cavern's visible floor surface, measured from its artwork the
+         * same way as the arena's.
+         *
+         * Both backdrops share one structure: dark wall, then a lit floor band, then
+         * a dark foreground running off the bottom. In the cavern the transition is
+         * at row 391, where the lit fraction jumps 43.2% -> 63.3% and mean
+         * luminance rises 37.2 -> 46.1 -- the same shape of step as the arena's
+         * 532 -> 533, so both sections measure their floor the same way and land on
+         * one shared ground plane.
+         */
+        const val CAVERN_FLOOR_ROW = 391f
+
+        /**
+         * Logical Y at which the cavern plate is drawn.
+         *
+         * The cavern is shorter than the viewport once scaled and its floor sits
+         * lower within its own frame than the arena's (391/512 vs 533/864). Offsetting
+         * the plate so its measured floor row lands exactly on FLOOR_Y is what keeps
+         * the walkable surface continuous across the boundary: one collision plane,
+         * so there is no step, gap or floating knight.
+         */
+        val CAVERN_OFFSET_Y: Float = FLOOR_Y - CAVERN_FLOOR_ROW * CAVERN_SCALE
+
+        /**
+         * Flat fills for the two bands the cavern plate does not reach.
+         *
+         * At the shared scale the cavern covers only 213 of the 360 logical pixel
+         * rows, so plain colour fills what is left above and below it. Both are
+         * sampled from the cavern's own outermost rows (row 0 averages rgb(3,6,18),
+         * row 511 averages rgb(0,0,10)) so the bands continue the artwork's own
+         * near-black cave darkness. The plate is drawn once and never stretched,
+         * mirrored or repeated; these fills only cover what it does not reach.
+         */
+        val CAVERN_FILL_ABOVE = Color.rgb(3, 6, 18)
+        val CAVERN_FILL_BELOW = Color.rgb(0, 0, 10)
+
         /** Logical size a 128px sprite cell is drawn at (aspect preserved). */
         const val SPRITE_DISPLAY_SIZE = 100f
 
@@ -145,6 +207,10 @@ class GameWorld(val context: Context) {
     // Arena background bitmap
     private var bgBitmap: Bitmap? = null
 
+    // Underground Cavern bitmap: the second world section, kept separate from the
+    // arena because it is a different image at a different vertical offset.
+    private var cavernBitmap: Bitmap? = null
+
     // Nearest-neighbor rendering paint
     val pixelPaint = Paint().apply {
         isFilterBitmap = false // Strictly disable blurry bilinear interpolation!
@@ -167,6 +233,7 @@ class GameWorld(val context: Context) {
 
     init {
         loadArenaBackground()
+        loadCavernBackground()
         // Start with the player already centred, instead of easing in from the
         // left edge on the first frames of the match.
         cameraX = cameraXForPlayerX(player.x)
@@ -180,20 +247,38 @@ class GameWorld(val context: Context) {
         // Prefer the high-res backdrop; fall back to the legacy jpg if it is absent.
         val names = listOf("img_arena_bg_hd", "img_arena_bg")
         for (name in names) {
-            try {
-                val resId = context.resources.getIdentifier(name, "drawable", context.packageName)
-                if (resId != 0) {
-                    val opts = BitmapFactory.Options().apply { inScaled = false }
-                    val bitmap = BitmapFactory.decodeResource(context.resources, resId, opts)
-                    if (bitmap != null) {
-                        bgBitmap = bitmap
-                        Log.i("GameWorld", "Arena background: $name (${bitmap.width}x${bitmap.height})")
-                        return
-                    }
-                }
-            } catch (_: Exception) {}
+            val bitmap = decodeDrawable(name) ?: continue
+            bgBitmap = bitmap
+            Log.i("GameWorld", "Arena background: $name (${bitmap.width}x${bitmap.height})")
+            return
         }
         Log.w("GameWorld", "No arena background found; using the gradient fallback")
+    }
+
+    /**
+     * Loads the Underground Cavern plate -- the same file the web build syncs from
+     * here, so both engines render identical pixels for the second section.
+     */
+    private fun loadCavernBackground() {
+        val bitmap = decodeDrawable("img_underground_cavern_hd")
+        if (bitmap != null) {
+            cavernBitmap = bitmap
+            Log.i("GameWorld", "Cavern background (${bitmap.width}x${bitmap.height})")
+        } else {
+            Log.w("GameWorld", "No cavern background found; that section falls back to flat fill")
+        }
+    }
+
+    private fun decodeDrawable(name: String): Bitmap? = try {
+        val resId = context.resources.getIdentifier(name, "drawable", context.packageName)
+        if (resId == 0) {
+            null
+        } else {
+            val opts = BitmapFactory.Options().apply { inScaled = false }
+            BitmapFactory.decodeResource(context.resources, resId, opts)
+        }
+    } catch (_: Exception) {
+        null
     }
 
     fun update(dt: Float) {
@@ -286,10 +371,39 @@ class GameWorld(val context: Context) {
             return
         }
 
+        // Forgotten Prison: anchored at world (0, 0), drawn once.
         canvas.drawBitmap(
             bg,
             Rect(0, 0, bg.width, bg.height),
             RectF(0f, 0f, bg.width * BACKGROUND_SCALE, bg.height * BACKGROUND_SCALE),
+            pixelPaint
+        )
+
+        val cavern = cavernBitmap ?: return
+        val cavernX = BACKGROUND_LOGICAL_WIDTH
+
+        // Flat bands first, so the plate is drawn over them and no seam shows at its
+        // own top and bottom edges.
+        pixelPaint.color = CAVERN_FILL_BELOW
+        canvas.drawRect(cavernX, 0f, cavernX + CAVERN_LOGICAL_WIDTH, LOGICAL_HEIGHT, pixelPaint)
+        if (CAVERN_OFFSET_Y > 0f) {
+            pixelPaint.color = CAVERN_FILL_ABOVE
+            canvas.drawRect(cavernX, 0f, cavernX + CAVERN_LOGICAL_WIDTH, CAVERN_OFFSET_Y, pixelPaint)
+        }
+
+        // Underground Cavern: its own section, immediately right of the prison and in
+        // the same world space, so the single camera transform scrolls across the
+        // boundary and everything stays locked to the world. Drawn exactly once --
+        // never tiled, never mirrored, never flipped.
+        canvas.drawBitmap(
+            cavern,
+            Rect(0, 0, cavern.width, cavern.height),
+            RectF(
+                cavernX,
+                CAVERN_OFFSET_Y,
+                cavernX + cavern.width * CAVERN_SCALE,
+                CAVERN_OFFSET_Y + cavern.height * CAVERN_SCALE
+            ),
             pixelPaint
         )
     }

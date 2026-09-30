@@ -12,15 +12,25 @@ const webPublic = join(repoRoot, 'web', 'public')
 const ASSET_MANIFEST = join(repoRoot, 'web', 'src', 'generated', 'asset-manifest.json')
 
 /**
- * Single source of truth for the arena backdrop.
+ * Single source of truth for the world backdrops.
  *
- * Android loads it from res/drawable (see GameWorld.loadArenaBackground) and the
- * web build loads the synced copy, so both platforms render identical pixels.
+ * Android loads them from res/drawable (see GameWorld.loadArenaBackground) and the
+ * web build loads the synced copies, so both platforms render identical pixels from
+ * the same file. Each section is one finite environment, so each is a single file
+ * rather than a tileable texture.
  */
-const BACKGROUND = {
-  from: join(androidRes, 'res', 'drawable', 'img_arena_bg_hd.png'),
-  to: join(webPublic, 'bg', 'arena_bg.png'),
-}
+const BACKGROUNDS = [
+  {
+    label: 'arena',
+    from: join(androidRes, 'res', 'drawable', 'img_arena_bg_hd.png'),
+    to: join(webPublic, 'bg', 'arena_bg.png'),
+  },
+  {
+    label: 'cavern',
+    from: join(androidRes, 'res', 'drawable', 'img_underground_cavern_hd.png'),
+    to: join(webPublic, 'bg', 'cavern_bg.png'),
+  },
+]
 
 async function exists(path) {
   try {
@@ -80,13 +90,21 @@ async function main() {
     process.exit(1)
   }
 
-  // 2. Arena backdrop lives in res/drawable on Android.
-  if (await exists(BACKGROUND.from)) {
-    await mkdir(dirname(BACKGROUND.to), { recursive: true })
-    await cp(BACKGROUND.from, BACKGROUND.to)
-    console.log(`[sync-assets] ${relative(repoRoot, BACKGROUND.to)}`)
-  } else {
-    console.warn(`[sync-assets] arena background not found, web will render the gradient fallback`)
+  // 2. World backdrops live in res/drawable on Android.
+  //
+  // They are pushed into copiedPaths so they get fingerprinted below like every
+  // other public asset. Previously they were copied without a fingerprint, so
+  // replacing the bytes behind a backdrop left its URL unchanged and any cached
+  // copy would keep serving the old section.
+  for (const bg of BACKGROUNDS) {
+    if (await exists(bg.from)) {
+      await mkdir(dirname(bg.to), { recursive: true })
+      await cp(bg.from, bg.to)
+      copiedPaths.push(relative(webPublic, bg.to).split('\\').join('/'))
+      console.log(`[sync-assets] ${relative(repoRoot, bg.to)}`)
+    } else {
+      console.warn(`[sync-assets] ${bg.label} background not found, that section falls back to flat fill`)
+    }
   }
 
   // 3. Content fingerprints for every synced public asset.

@@ -262,9 +262,10 @@ console.log('player spawns at the arena centre')
 {
 const spawnWorld = new GameWorld(stubAnimations(), null)
 check(
-  'ARENA_CENTER_X is derived from WORLD_WIDTH, not the screen',
-  GameWorld.ARENA_CENTER_X === GameWorld.WORLD_WIDTH / 2,
-  `got ${GameWorld.ARENA_CENTER_X}`,
+  'ARENA_CENTER_X is the arena section centre, not the world centre',
+  GameWorld.ARENA_CENTER_X === GameWorld.BACKGROUND_LOGICAL_WIDTH / 2 &&
+    GameWorld.ARENA_CENTER_X !== GameWorld.WORLD_WIDTH / 2,
+  `got ${GameWorld.ARENA_CENTER_X}, world centre ${GameWorld.WORLD_WIDTH / 2}`,
 )
 check('spawn X is the arena centre', GameWorld.SPAWN_X === GameWorld.ARENA_CENTER_X, `got ${GameWorld.SPAWN_X}`)
 check('player starts at the spawn X', Math.abs(spawnWorld.player.x - GameWorld.SPAWN_X) < 1e-9, `got ${spawnWorld.player.x}`)
@@ -312,20 +313,30 @@ console.log('dummies are fixed in world space while the camera follows the playe
   seen.push({ screen: dummy.x - world.cameraX, camera: world.cameraX, player: world.player.x })
 
   check('dummy world X is constant through the whole walk', dummy.x === worldX, `${worldX} -> ${dummy.x}`)
+  // The camera used to be pinned at 0 because the world was exactly one backdrop
+  // wide. The world is now two sections, so it scrolls -- but only within the
+  // world, and only ever as a whole-pixel offset of one shared transform.
   check(
-    'the camera is pinned: the world is exactly one backdrop wide',
-    seen.every((r) => r.camera === 0),
+    'the camera stays inside the world on both legs',
+    seen.every((r) => r.camera >= -1e-9 && r.camera <= GameWorld.WORLD_WIDTH - GameWorld.LOGICAL_WIDTH + 1e-9),
     `cameraX ${seen[0].camera} / ${seen[1].camera}`,
+  )
+  check(
+    'the camera scrolled right on the way out and back on the return',
+    seen[0].camera > 1e-9 && seen[1].camera < seen[0].camera,
+    `cameraX ${seen[0].camera} then ${seen[1].camera}`,
   )
   check(
     'screen position = worldX - cameraX in both samples',
     Math.abs(seen[0].screen - (worldX - seen[0].camera)) < 1e-9 && Math.abs(seen[1].screen - (worldX - seen[1].camera)) < 1e-9,
     '',
   )
+  // A world fixture drifts across the screen as the camera tracks the player.
+  // That is correct: it is locked to the world, not to the viewport.
   check(
-    'the dummy holds its screen position while the player walks',
-    Math.abs(seen[0].screen - seen[1].screen) < 1e-9,
-    `${seen[0].screen} vs ${seen[1].screen}`,
+    'the dummy stays world-locked while the camera scrolls',
+    Math.abs(seen[0].screen - seen[1].screen - (seen[1].camera - seen[0].camera)) < 1e-9,
+    `screen ${seen[0].screen} vs ${seen[1].screen}, camera ${seen[0].camera} vs ${seen[1].camera}`,
   )
   check('the player actually moved', Math.abs(seen[0].player - GameWorld.SPAWN_X) > 50, `player reached ${seen[0].player.toFixed(1)}`)
 }
@@ -343,22 +354,44 @@ console.log('dummy hitbox and health bar are anchored to the dummy')
   check('hitbox top is the floor minus the dummy height', Math.abs(after.top - (GameWorld.FLOOR_Y - dummy.height)) < 1e-9, `got ${after.top}`)
 }
 
-console.log('backdrop is anchored in world space and repeats across the arena')
+console.log('WORLD SECTIONS: two finite plates laid end to end, each drawn once')
+// The arena used to be the whole world. It is now the first of two sections, so
+// these assert that the world is exactly the two plates -- no gap between them,
+// and no slack that something would have to be tiled or mirrored to cover.
 check(
-  'the world is exactly the backdrop, so the plate is drawn once and never repeated',
-  Math.abs(GameWorld.BACKGROUND_LOGICAL_WIDTH - GameWorld.WORLD_WIDTH) < 1e-9,
-  `plate ${GameWorld.BACKGROUND_LOGICAL_WIDTH} vs world ${GameWorld.WORLD_WIDTH}`,
+  'the world is exactly the arena plus the cavern',
+  Math.abs(GameWorld.WORLD_WIDTH - (GameWorld.BACKGROUND_LOGICAL_WIDTH + GameWorld.CAVERN_LOGICAL_WIDTH)) < 1e-9,
+  `arena ${GameWorld.BACKGROUND_LOGICAL_WIDTH} + cavern ${GameWorld.CAVERN_LOGICAL_WIDTH} vs world ${GameWorld.WORLD_WIDTH}`,
 )
 check(
-  'the plate covers the viewport at the uniform scale',
-  Math.abs(GameWorld.BACKGROUND_LOGICAL_WIDTH - GameWorld.LOGICAL_WIDTH) < 1e-9 &&
-    Math.abs(GameWorld.BACKGROUND_LOGICAL_HEIGHT - GameWorld.LOGICAL_HEIGHT) < 1e-9,
-  `plate ${GameWorld.BACKGROUND_LOGICAL_WIDTH}x${GameWorld.BACKGROUND_LOGICAL_HEIGHT}`,
+  'the two plates meet exactly, leaving no gap to fill',
+  Math.abs(GameWorld.BACKGROUND_LOGICAL_WIDTH - GameWorld.LOGICAL_WIDTH) < 1e-9,
+  `arena plate is ${GameWorld.BACKGROUND_LOGICAL_WIDTH}, cavern starts there`,
 )
 check(
-  'the camera has no scroll range, so there is nothing to mirror or repeat into',
-  GameWorld.WORLD_WIDTH - GameWorld.LOGICAL_WIDTH === 0,
+  'the cavern occupies the second section at the same one-viewport width',
+  Math.abs(GameWorld.CAVERN_LOGICAL_WIDTH - GameWorld.LOGICAL_WIDTH) < 1e-9,
+  `cavern plate ${GameWorld.CAVERN_LOGICAL_WIDTH}`,
+)
+check(
+  'the camera has exactly one viewport of scroll to cross the boundary',
+  Math.abs(GameWorld.WORLD_WIDTH - GameWorld.LOGICAL_WIDTH - GameWorld.LOGICAL_WIDTH) < 1e-9,
   `range ${GameWorld.WORLD_WIDTH - GameWorld.LOGICAL_WIDTH}`,
+)
+check(
+  'both sections are drawn at one shared scale, so the player never jumps size',
+  GameWorld.CAVERN_SCALE === GameWorld.BACKGROUND_SCALE,
+  `arena ${GameWorld.BACKGROUND_SCALE}, cavern ${GameWorld.CAVERN_SCALE}`,
+)
+check(
+  'the cavern floor lands exactly on the shared ground plane',
+  Math.abs(GameWorld.CAVERN_OFFSET_Y + GameWorld.CAVERN_FLOOR_ROW * GameWorld.CAVERN_SCALE - GameWorld.FLOOR_Y) < 1e-9,
+  `cavern floor ${GameWorld.CAVERN_OFFSET_Y + GameWorld.CAVERN_FLOOR_ROW * GameWorld.CAVERN_SCALE} vs FLOOR_Y ${GameWorld.FLOOR_Y}`,
+)
+check(
+  'the cavern is not tall enough to reach the viewport on its own, which is why the bands are filled',
+  GameWorld.CAVERN_LOGICAL_HEIGHT < GameWorld.LOGICAL_HEIGHT,
+  `cavern ${GameWorld.CAVERN_LOGICAL_HEIGHT} vs viewport ${GameWorld.LOGICAL_HEIGHT}`,
 )
 
 // ---------------------------------------------------------------------------
@@ -684,27 +717,72 @@ console.log('WALK: travels along the plane without floating or sinking')
     minX = Math.min(minX, player.x)
     maxX = Math.max(maxX, player.x)
   }
-  // The arena is exactly one backdrop wide, so a sustained walk drives the player
-  // into the right wall and stops there rather than running off into nothing.
-  const rightLimit = GameWorld.WORLD_WIDTH - player.width / 2
-  check(
-    'walk drives the player to the right world boundary and stops',
-    maxX > GameWorld.SPAWN_X + 200 && Math.abs(maxX - rightLimit) < 1e-6,
-    `travelled ${(maxX - minX).toFixed(1)}px, stopped at ${maxX.toFixed(2)}, limit ${rightLimit}`,
-  )
   check('walk keeps feet on the plane (3s)', worst < 1e-6, `worst deviation ${worst}`)
   check('walk state active', anim.currentAction === PlayerAction.WALK, `got ${anim.currentAction}`)
   check('grounded throughout the walk', player.isGrounded)
+}
 
-  // Walking the full arena must not accumulate vertical error anywhere.
-  let worstFull = 0
+console.log('SECTION BORDER: walking right crosses from prison into cavern')
+{
+  // Prison -> cavern. The world is two sections now, so a sustained walk must
+  // carry the player across the boundary and on to the far wall, and his feet
+  // must stay on the one ground plane the whole way -- the cavern is a separate
+  // image at a different vertical offset, so a mis-aligned floor would show up
+  // here as the player stepping up or down, or floating, at the seam.
   player.resetPlayer(GameWorld.SPAWN_X, GameWorld.FLOOR_Y)
+  world.cameraX = world.cameraXForPlayerX(player.x)
   player.setMovementInput(1)
-  for (let i = 0; i < 600; i++) {
+
+  const boundary = GameWorld.BACKGROUND_LOGICAL_WIDTH
+  const rightLimit = GameWorld.WORLD_WIDTH - player.width / 2
+  let worst = 0
+  let worstInCavern = 0
+  let maxX = player.x
+  let crossedAt = -1
+  let cameraAtCross = -1
+
+  for (let i = 0; i < 1200; i++) {
     world.update(1 / 60)
-    worstFull = Math.max(worstFull, Math.abs(player.groundY - GameWorld.FLOOR_Y))
+    worst = Math.max(worst, Math.abs(player.groundY - GameWorld.FLOOR_Y))
+    if (player.x > boundary) {
+      worstInCavern = Math.max(worstInCavern, Math.abs(player.groundY - GameWorld.FLOOR_Y))
+      if (crossedAt < 0) {
+        crossedAt = player.x
+        cameraAtCross = world.cameraX
+      }
+    }
+    maxX = Math.max(maxX, player.x)
   }
-  check('no vertical drift across the whole arena', worstFull < 1e-6, `worst deviation ${worstFull}`)
+  player.setMovementInput(0)
+
+  check('the walk reaches the far wall of the cavern section', Math.abs(maxX - rightLimit) < 1e-6, `stopped at ${maxX.toFixed(2)}, limit ${rightLimit}`)
+  check('the player actually crossed into the cavern', crossedAt > boundary, `first crossed at ${crossedAt.toFixed(2)}, boundary ${boundary}`)
+  check('the camera had already scrolled past the boundary when he crossed', cameraAtCross > 0, `cameraX ${cameraAtCross}`)
+  check('feet stay exactly on the plane across the whole world', worst < 1e-6, `worst deviation ${worst}`)
+  check('feet stay exactly on the plane inside the cavern', worstInCavern < 1e-6, `worst deviation ${worstInCavern}`)
+}
+
+console.log('SECTION BORDER: walking left returns from cavern to prison')
+{
+  player.resetPlayer(GameWorld.WORLD_WIDTH - 4, GameWorld.FLOOR_Y)
+  world.cameraX = world.cameraXForPlayerX(player.x)
+  player.setMovementInput(-1)
+
+  const leftLimit = player.width / 2
+  let worst = 0
+  let minX = player.x
+  let leftCameraMax = 0
+  for (let i = 0; i < 1200; i++) {
+    world.update(1 / 60)
+    worst = Math.max(worst, Math.abs(player.groundY - GameWorld.FLOOR_Y))
+    minX = Math.min(minX, player.x)
+    leftCameraMax = Math.max(leftCameraMax, world.cameraX)
+  }
+  player.setMovementInput(0)
+
+  check('the walk reaches the far wall of the prison section', Math.abs(minX - leftLimit) < 1e-6, `stopped at ${minX.toFixed(2)}, limit ${leftLimit}`)
+  check('the camera scrolled left across the boundary', leftCameraMax > 1, `max cameraX seen ${leftCameraMax}`)
+  check('feet stay exactly on the plane walking back', worst < 1e-6, `worst deviation ${worst}`)
 }
 
 console.log('JUMP: leaves from the plane and returns to it')

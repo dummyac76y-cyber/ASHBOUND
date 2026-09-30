@@ -96,9 +96,15 @@ await page.evaluate(() => {
   g.offY = () => (canvas.height - g.GameWorld.LOGICAL_HEIGHT * g.scale()) / 2
 
   /**
-   * The backdrop alone, drawn exactly as the game draws it: same world-space
-   * camera transform, same uniform scale, drawn once at world (0, 0). Used as the
-   * subtraction reference so only world objects are measured.
+   * The backdrop alone, drawn exactly as the game draws it: the world's own
+   * two-plate composition through the real code path, same world-space camera
+   * transform. Used as the subtraction reference so only world objects are
+   * measured.
+   *
+   * This deliberately does NOT re-draw the plates here. It used to draw the arena
+   * inline, which was fine while the arena was the whole world; now that a second
+   * section sits beside it, a partial reference would differ from the real
+   * composite across the whole cavern and read as phantom characters.
    */
   g.barePlate = () => {
     const c = document.createElement('canvas')
@@ -113,10 +119,54 @@ await page.evaluate(() => {
     b.translate(g.offX(), g.offY())
     b.scale(s, s)
     b.translate(-g.world.cameraX, 0)
-    const bg = g.world.background
-    b.drawImage(bg.image, 0, 0, bg.width, bg.height, 0, 0, bg.width * g.GameWorld.BACKGROUND_SCALE, bg.height * g.GameWorld.BACKGROUND_SCALE)
+    g.backdropOnly(b)
     return b.getImageData(0, 0, c.width, c.height).data
   }
+
+  /** The canvas the game renders into, so checks can index its pixels. */
+  g.canvas = canvas
+
+  /** Backdrop pixels at the current camera, through the real drawing path. */
+  g.backdropPixels = () => g.barePlate()
+
+  const luma = (d, i) => 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]
+
+  /** Mean luminance per logical column of the drawn backdrop at the current camera. */
+  g.columnProfile = () => {
+    const d = g.barePlate()
+    const cols = []
+    for (let lx = 0; lx < g.GameWorld.LOGICAL_WIDTH; lx++) {
+      let sum = 0
+      for (let ly = 0; ly < g.GameWorld.LOGICAL_HEIGHT; ly++) {
+        const x = Math.round(g.offX() + lx * g.scale())
+        const y = Math.round(g.offY() + ly * g.scale())
+        sum += luma(d, (y * canvas.width + x) * 4)
+      }
+      cols.push(sum / g.GameWorld.LOGICAL_HEIGHT)
+    }
+    return cols
+  }
+
+  /** Mean luminance per column of a source image, for comparing against the draw. */
+  g.sourceColumnProfile = (img) => {
+    const c = document.createElement('canvas')
+    c.width = img.width
+    c.height = img.height
+    const x2 = c.getContext('2d')
+    x2.drawImage(img, 0, 0)
+    const d = x2.getImageData(0, 0, c.width, c.height).data
+    const cols = []
+    for (let x = 0; x < c.width; x++) {
+      let sum = 0
+      for (let y = 0; y < c.height; y++) sum += luma(d, (y * c.width + x) * 4)
+      cols.push(sum / c.height)
+    }
+    return cols
+  }
+
+  const argmax = (a) => a.reduce((bi, v, i) => (v > a[bi] ? i : bi), 0)
+  g.argmax = argmax
+  g.luma = luma
 
   /**
    * Horizontal profile of a colour, used to locate the dummy's straw torso.
@@ -441,38 +491,55 @@ console.log('camera clamping')
     const g = window.__game
     g.resume()
     const out = []
-    for (const dir of [1, -1, 1, -1]) {
+    // Start each run near the edge it is testing rather than traversing the whole
+    // 1280px world, so the clamp is exercised in a bounded number of frames.
+    for (const [dir, startX] of [[1, 1200], [-1, 60], [1, 300], [-1, 1100]]) {
+      g.world.player.x = startX
+      g.setCamera(g.world.cameraXForPlayerX(startX))
       g.world.player.setMovementInput(dir)
-      for (let i = 0; i < 300; i++) await new Promise((r) => requestAnimationFrame(r))
-      out.push({ dir, playerX: g.world.player.x, cameraX: g.world.cameraX })
+      for (let i = 0; i < 400; i++) await new Promise((r) => requestAnimationFrame(r))
+      out.push({ dir, startX, playerX: g.world.player.x, cameraX: g.world.cameraX })
     }
     g.world.player.setMovementInput(0)
-    return out
+    // Hand later sections the same start state they had when the world was one
+    // screen wide, so they are not looking at wherever this section finished.
+    g.world.player.x = g.GameWorld.SPAWN_X
+    g.setCamera(g.world.cameraXForPlayerX(g.GameWorld.SPAWN_X))
+    return {
+      out,
+      maxCamera: g.GameWorld.WORLD_WIDTH - g.GameWorld.LOGICAL_WIDTH,
+      worldWidth: g.GameWorld.WORLD_WIDTH,
+      halfWidth: g.world.player.width / 2,
+    }
   })
+
+  const cams = res.out.map((r) => r.cameraX)
   check(
     'the camera never leaves [0, WORLD_WIDTH - LOGICAL_WIDTH]',
-    res.every((r) => r.cameraX === 0),
-    res.map((r) => r.cameraX).join(', '),
+    cams.every((c) => c >= -1e-6 && c <= res.maxCamera + 1e-6),
+    `cameras ${cams.map((c) => c.toFixed(2)).join(', ')}, max allowed ${res.maxCamera}`,
   )
   check(
-    'the world leaves the camera no scroll range',
-    (await page.evaluate(() => window.__game.GameWorld.WORLD_WIDTH - window.__game.GameWorld.LOGICAL_WIDTH)) === 0,
-    '',
+    'the world is wider than the screen, so the camera has room to scroll',
+    res.maxCamera > 0,
+    `scroll range ${res.maxCamera}`,
   )
   check(
-    'the player is stopped at the world boundary, never past it',
-    res.every((r) => r.playerX >= 0 && r.playerX <= 640),
-    res.map((r) => r.playerX.toFixed(1)).join(', '),
+    'the player is stopped at the world boundaries, never past them',
+    res.out.every(
+      (r) => r.playerX >= res.halfWidth - 0.001 && r.playerX <= res.worldWidth - res.halfWidth + 0.001,
+    ),
+    res.out.map((r) => r.playerX.toFixed(1)).join(', '),
   )
   check(
     'walking left reaches the left world edge',
-    Math.abs(Math.min(...res.map((r) => r.playerX)) - 22) < 1e-6,
-    `min ${Math.min(...res.map((r) => r.playerX)).toFixed(2)}`,
+    Math.abs(Math.min(...res.out.map((r) => r.playerX)) - res.halfWidth) < 1e-6,
+    `min ${Math.min(...res.out.map((r) => r.playerX)).toFixed(2)}`,
   )
   check(
-    'walking right reaches the right world edge',
-    Math.abs(Math.max(...res.map((r) => r.playerX)) - 618) < 1e-6,
-    `max ${Math.max(...res.map((r) => r.playerX)).toFixed(2)}`,
+    'walking right from near the seam reaches the right world edge',
+    Math.abs(Math.max(...res.out.map((r) => r.playerX)) - (res.worldWidth - res.halfWidth)) < 1e-6,
+    `max ${Math.max(...res.out.map((r) => r.playerX)).toFixed(2)}, edge ${(res.worldWidth - res.halfWidth).toFixed(2)}`,
   )
 }
 
@@ -521,21 +588,26 @@ console.log('training dummy is a world fixture')
     for (let i = 0; i < 300; i++) await new Promise((r) => requestAnimationFrame(r))
     g.world.player.setMovementInput(0)
     for (let i = 0; i < 60; i++) await new Promise((r) => requestAnimationFrame(r))
-    out.push({ phase: 'walked right', dummyWorldX: d.x, cameraX: g.world.cameraX, screenX: d.x - g.world.cameraX, footRow: g.dummyFootRow(d) })
+    // The walk may end with the camera deep in the cavern, which would scroll the
+    // dummy off screen entirely. Recentre on it so the foot measurement is always
+    // taken while it is actually being drawn.
+    g.setCamera(d.x - g.GameWorld.LOGICAL_WIDTH / 2)
+    out.push({ phase: 'walked right', dummyWorldX: d.x, cameraX: g.world.cameraX, footRow: g.dummyFootRow(d) })
 
     g.world.player.setMovementInput(-1)
-    for (let i = 0; i < 400; i++) await new Promise((r) => requestAnimationFrame(r))
+    for (let i = 0; i < 300; i++) await new Promise((r) => requestAnimationFrame(r))
     g.world.player.setMovementInput(0)
     for (let i = 0; i < 60; i++) await new Promise((r) => requestAnimationFrame(r))
-    out.push({ phase: 'walked back', dummyWorldX: d.x, cameraX: g.world.cameraX, screenX: d.x - g.world.cameraX, footRow: g.dummyFootRow(d) })
+    g.setCamera(d.x - g.GameWorld.LOGICAL_WIDTH / 2)
+    out.push({ phase: 'walked back', dummyWorldX: d.x, cameraX: g.world.cameraX, footRow: g.dummyFootRow(d) })
     return out
   })
 
   for (const r of res) {
     check(
-      `${r.phase}: dummy world X unchanged and screen position held`,
-      r.dummyWorldX === GameWorld_DUMMY_X_EXPECTED && r.cameraX === 0 && r.screenX === r.dummyWorldX,
-      `worldX ${r.dummyWorldX}, cameraX ${r.cameraX}, screenX ${r.screenX}`,
+      `${r.phase}: dummy world X unchanged while the camera moves`,
+      r.dummyWorldX === GameWorld_DUMMY_X_EXPECTED,
+      `worldX ${r.dummyWorldX}, cameraX ${r.cameraX.toFixed(2)}, dummy screen x ${(r.dummyWorldX - r.cameraX).toFixed(1)}`,
     )
     check(
       `${r.phase}: dummy feet on FLOOR_Y`,
@@ -551,37 +623,47 @@ console.log('dummy drawn in world space, not screen space')
   const res = await page.evaluate(async () => {
     const g = window.__game
     g.resume()
-    const out = []
-    // Walk right hard, then sample the dummy where it actually lands on screen.
+    // Walk right so the camera genuinely scrolls off zero...
     g.world.player.setMovementInput(1)
     for (let i = 0; i < 300; i++) await new Promise((r) => requestAnimationFrame(r))
     g.world.player.setMovementInput(0)
     for (let i = 0; i < 60; i++) await new Promise((r) => requestAnimationFrame(r))
+    const scrolled = g.world.cameraX
     g.pause()
+    // ...then pin the camera so the dummy sits in the middle of the sampling
+    // window. A screen-space draw would ignore both the scroll and this offset.
+    g.setCamera(g.world.dummies[0].x - 225)
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
-    const best = g.strawRun(g.strawColumns(180, 150, 90))
-    const foot = g.dummyFootRow(g.world.dummies[0])
     return {
-      mid: best.mid,
+      mid: g.strawRun(g.strawColumns(180, 150, 90)).mid,
       worldX: g.world.dummies[0].x,
       cameraX: g.world.cameraX,
-      foot,
+      scrolled,
+      foot: g.dummyFootRow(g.world.dummies[0]),
       floorY: g.GameWorld.FLOOR_Y,
       playerX: g.world.player.x,
     }
   })
   check(
-    'dummy renders at its world X (camera pinned at 0)',
-    Math.abs(res.mid - res.worldX) < 3,
-    `rendered at screen x ${res.mid.toFixed(1)}, world x ${res.worldX}`,
+    'dummy renders at world X minus camera, not at a screen constant',
+    Math.abs(res.mid - (res.worldX - res.cameraX)) < 3,
+    `rendered at screen x ${res.mid.toFixed(1)}, world x ${res.worldX} - camera ${res.cameraX} = ${res.worldX - res.cameraX}`,
   )
-  check('the camera really is pinned at 0', res.cameraX === 0, `cameraX ${res.cameraX}`)
+  check(
+    'the camera really scrolled away from zero',
+    res.scrolled > 0,
+    `camera reached ${res.scrolled.toFixed(2)} before being pinned`,
+  )
   check(
     'dummy feet sit on FLOOR_Y',
     res.foot !== null && Math.abs(res.foot - res.floorY) <= 1.5,
     `feet at y=${res.foot}, floor ${res.floorY.toFixed(3)}`,
   )
-  check('the player did move while the dummy held its world X', res.playerX > 600, `player at ${res.playerX.toFixed(1)}`)
+  check(
+    'the player did move while the dummy held its world X',
+    res.playerX > 600,
+    `player at ${res.playerX.toFixed(1)}`,
+  )
 }
 
 // --- 8. Dummy hitbox and HP bar follow the dummy ----------------------------
@@ -645,6 +727,138 @@ console.log('player spawns at the arena centre')
     res.dummyX > res.spawnX && res.dummyX < res.worldWidth,
     `dummy at world x ${res.dummyX}`,
   )
+}
+
+// --- 9b. Second world section: the Underground Cavern -------------------------
+console.log('cavern renders as its own section, not a repeat of the arena')
+{
+  // Camera fully inside the cavern: the whole viewport should be that one plate.
+  const inCavern = await page.evaluate(() => {
+    const g = window.__game
+    g.setCamera(g.GameWorld.WORLD_WIDTH - g.GameWorld.LOGICAL_WIDTH)
+    return { cols: g.columnProfile(), camera: g.world.cameraX }
+  })
+
+  const spread = Math.max(...inCavern.cols) - Math.min(...inCavern.cols)
+  check(
+    'the cavern section renders real scenery, not a flat fill',
+    spread > 12,
+    `column luminance spread ${spread.toFixed(1)}`,
+  )
+
+  // Mirroring or tiling would flip or repeat the column profile. The brightest
+  // column of the source artwork must land at the same logical x when drawn.
+  const orient = await page.evaluate(() => {
+    const g = window.__game
+    const src = g.world.cavernBackground
+    const srcCols = g.sourceColumnProfile(src.image)
+    const drawnCols = g.columnProfile()
+    const bright = g.argmax(srcCols)
+    // The plate is drawn once at world x = arena width; with the camera pinned to
+    // the far side it covers the viewport exactly, so source x maps straight to
+    // logical x.
+    return {
+      srcBright: (bright / srcCols.length) * g.GameWorld.LOGICAL_WIDTH,
+      drawnBright: g.argmax(drawnCols),
+      width: g.GameWorld.LOGICAL_WIDTH,
+    }
+  })
+
+  check(
+    'the cavern is drawn in original orientation, not mirrored',
+    Math.abs(orient.drawnBright - orient.srcBright) <= 2,
+    `brightest column drawn ${orient.drawnBright}, source ${orient.srcBright.toFixed(1)}, mirrored would be ${orient.width - orient.srcBright.toFixed(1)}`,
+  )
+}
+
+console.log('the two sections meet without a vertical jump')
+{
+  // Camera centred on the boundary, so the seam sits mid-viewport and the prison is
+  // on the left half and the cavern on the right.
+  //
+  // The horizon is searched only within a few rows of FLOOR_Y. Searching the whole
+  // column picks the arena's bright flagstone joint lower down its floor, which is
+  // a real painted edge but not the walkable surface -- the same decoy the arena's
+  // own floor row had to be distinguished from. Confining the search to the known
+  // plane makes this a direct test of whether the two sections agree there.
+  const seam = await page.evaluate(() => {
+    const g = window.__game
+    g.setCamera(g.GameWorld.BACKGROUND_LOGICAL_WIDTH - g.GameWorld.LOGICAL_WIDTH / 2)
+    const d = g.backdropPixels()
+    const H = g.GameWorld.LOGICAL_HEIGHT
+    const W = g.GameWorld.LOGICAL_WIDTH
+
+    const meanAt = (ly, half) => {
+      let sum = 0, n = 0
+      for (let lx = 0; lx < W; lx++) {
+        const inLeft = lx < W / 2 - 40
+        if (half === 'l' && !inLeft) continue
+        if (half === 'r' && inLeft) continue
+        const x = Math.round(g.offX() + lx * g.scale())
+        const y = Math.round(g.offY() + ly * g.scale())
+        sum += g.luma(d, (y * g.canvas.width + x) * 4)
+        n++
+      }
+      return sum / n
+    }
+
+    const SEARCH = 10
+    const horizon = (half) => {
+      let best = -Infinity, at = -1
+      for (let ly = Math.ceil(g.GameWorld.FLOOR_Y) - SEARCH; ly <= Math.ceil(g.GameWorld.FLOOR_Y) + SEARCH; ly++) {
+        const step = meanAt(ly + 1, half) - meanAt(ly - 1, half)
+        if (step > best) { best = step; at = ly }
+      }
+      return { at, best }
+    }
+    return { left: horizon('l'), right: horizon('r'), floorY: g.GameWorld.FLOOR_Y, height: H }
+  })
+
+  check(
+    'the prison shows a floor edge at the shared plane',
+    seam.left.at > 0 && seam.left.best > 2,
+    `row ${seam.left.at}, step ${seam.left.best.toFixed(1)}`,
+  )
+  check(
+    'the cavern shows a floor edge at the shared plane',
+    seam.right.at > 0 && seam.right.best > 2,
+    `row ${seam.right.at}, step ${seam.right.best.toFixed(1)}`,
+  )
+  check(
+    'the floor does not step up or down across the boundary',
+    Math.abs(seam.left.at - seam.right.at) <= 2,
+    `prison row ${seam.left.at}, cavern row ${seam.right.at}`,
+  )
+  check(
+    'the cavern floor sits on the shared ground plane',
+    Math.abs(seam.right.at - seam.floorY) <= 2,
+    `cavern row ${seam.right.at}, FLOOR_Y ${seam.floorY.toFixed(2)}`,
+  )
+}
+
+console.log('the player stands on the same floor inside the cavern')
+{
+  const res = await page.evaluate(() => {
+    const g = window.__game
+    const out = []
+    for (const x of [g.GameWorld.SPAWN_X, 700, 900, g.GameWorld.WORLD_WIDTH - 20]) {
+      g.world.player.x = x
+      g.world.player.groundY = g.GameWorld.FLOOR_Y
+      g.setCamera(g.world.cameraXForPlayerX(x))
+      out.push({ x, foot: g.footRow(), groundY: g.world.player.groundY })
+    }
+    g.world.player.x = g.GameWorld.SPAWN_X
+    g.setCamera(g.world.cameraXForPlayerX(g.GameWorld.SPAWN_X))
+    return { samples: out, floorY: g.GameWorld.FLOOR_Y }
+  })
+
+  for (const s of res.samples) {
+    check(
+      `feet on FLOOR_Y at world x ${s.x.toFixed(0)}`,
+      s.foot !== null && Math.abs(s.foot + 1 - res.floorY) <= 1,
+      `foot row ${s.foot}, FLOOR_Y ${res.floorY.toFixed(2)}`,
+    )
+  }
 }
 
 // --- 10. Action buttons carry no coloured circle -----------------------------
