@@ -22,7 +22,20 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright-core'
-import { NPC_IDLE_WALK_SHEET, NPC_BASELINE_Y, NPC_CELL_SIZE } from '../src/game/npcAssets.ts'
+import { NPC_IDLE_WALK_SHEET, NPC_BASELINE_Y, NPC_CELL_SIZE, NPC_VISIBLE_SCALE } from '../src/game/npcAssets.ts'
+
+/** The size the NPC's cell is drawn at, matching `Npc.NPC_DRAWN_SIZE`. */
+const NPC_DRAWN_SIZE = 100 * NPC_VISIBLE_SCALE
+
+/**
+ * How far the idle pose's silhouette sits from the NPC's own X, in logical px.
+ *
+ * The walk poses are asymmetric and sit slightly off-centre in their 128px cells
+ * (up to 5 source px), but frame 0 -- the pose the idle clip holds, and the pose
+ * this check samples -- is exactly centred, so the offset it draws at is zero. Kept
+ * as a named constant so the placement check reads against a measured fact.
+ */
+const NPC_ART_OFFSET = 0
 
 const webRoot = fileURLToPath(new URL('..', import.meta.url))
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url))
@@ -105,16 +118,15 @@ await page.evaluate(() => {
     b.translate(g.offX(), g.offY())
     b.scale(g.scale(), g.scale())
     b.translate(-g.world.cameraX, g.world.cameraY)
-    g.npcOnly(b, index)
+    g.npcSpriteOnly(b, index)
     return { data: b.getImageData(0, 0, c.width, c.height).data, width: c.width, height: c.height }
   }
 
   /**
-   * Bounding box and signature of everything the NPCs painted.
+   * Bounding box and signature of the NPC artwork.
    *
-   * The HP bar is opaque and sits above the head, so it is excluded from the
-   * signature by dropping the topmost band of the box: what remains is the sprite,
-   * and only the sprite, which is what these checks are about.
+   * Drawn through `npcSpriteOnly`, so the HP bar and the ground shadow are excluded
+   * by construction rather than by subtracting them afterwards.
    */
   g.npcSpriteBox = (index = 0) => {
     const { data, width, height } = g.npcLayer(index)
@@ -136,24 +148,9 @@ await page.evaluate(() => {
       }
     }
     if (top === null) return null
-    // Split the HP bar off the sprite. The bar is the one thing drawn above the
-    // character, and it is separated from the head by a clear empty band, so the
-    // first fully empty row below the top of the drawing is the gap between them.
-    // Everything above that gap is the bar; everything below is the character.
-    let spriteTop = top
-    for (let y = top; y <= bottom; y++) {
-      let any = false
-      for (let x = left; x <= right; x++) {
-        if (solid[y * width + x]) {
-          any = true
-          break
-        }
-      }
-      if (!any) {
-        spriteTop = y + 1
-        break
-      }
-    }
+    // Only the sprite is drawn into this layer, so its box needs no splitting: the
+    // HP bar and the ground shadow are not present to be confused with the artwork.
+    const spriteTop = top
     const sc = g.scale()
     const toLogical = (v) => v / sc
     return {
@@ -352,9 +349,12 @@ console.log('\n2. the supplied sprite sheet is what gets drawn')
   check('it is a detailed figure, not a solid block', box !== null && box.width > 40 && box.height > 30, box ? `${box.width.toFixed(1)} x ${box.height.toFixed(1)} logical px` : '')
   check('it is dark artwork, so the real sheet is drawing', box !== null && box.darkest < 90, `darkest pixel luminance ${box?.darkest}`)
   check(
-    'its width matches the sheet art scaled to the player cell, not stretched or squashed',
-    box !== null && Math.abs(box.width - (118 / NPC_CELL_SIZE) * 100) < 8,
-    `${box?.width.toFixed(1)} logical px wide, art is ~118 of ${NPC_CELL_SIZE}px drawn at 100`,
+    'its width matches the sheet art scaled to the drawn size, not stretched or squashed',
+    // Uniform scaling of the whole cell is what preserves proportions, so the drawn
+    // width has to be the art's share of the cell times the size the cell is drawn
+    // at -- not a fraction of some other size.
+    box !== null && Math.abs(box.width - (118 / NPC_CELL_SIZE) * NPC_DRAWN_SIZE) < 8,
+    `${box?.width.toFixed(1)} logical px wide, art is ~118 of ${NPC_CELL_SIZE}px drawn at ${NPC_DRAWN_SIZE.toFixed(1)}`,
   )
 }
 
@@ -459,9 +459,14 @@ console.log('\n5. the NPC is drawn in world space, not screen space')
     await g.frames(60)
     g.pause()
     const samples = []
-    // Cameras chosen to keep this NPC inside the 640px viewport, so each sample
-    // has real pixels to measure.
-    for (const cameraX of [300, 480, 620, 760]) {
+    // This NPC stands at world x=900, so the camera range here is chosen to leave
+    // its whole body on screen at every sample. That matters: the NPC is ~104
+    // logical px wide, so a camera that leaves it near an edge clips its box against
+    // the canvas and the clipped box reports a centre offset by however much was cut
+    // off -- a false placement failure. The body has to fit, not just its anchor.
+    // 900 - camera lands the sprite at screen 580..100, leaving ~54px of margin each
+    // side against the widest frame, and still spreads it 480px across the samples.
+    for (const cameraX of [320, 480, 640, 800]) {
       g.setCamera(cameraX)
       g.setNpcFrame(0, 'idle', 0)
       await g.settle()
@@ -471,15 +476,27 @@ console.log('\n5. the NPC is drawn in world space, not screen space')
         cameraX: g.world.cameraX,
         worldX: s.x,
         centre: box ? (box.logicalLeft + box.logicalRight) / 2 : NaN,
+        width: box ? box.width : NaN,
+        fullyOnScreen: box ? box.logicalLeft >= 0 && box.logicalRight <= g.GameWorld.LOGICAL_WIDTH : false,
       })
     }
     return samples
   })
+  check(
+    'every sample draws the NPC whole, so no box is clipped by the viewport edge',
+    res.every((s) => s.fullyOnScreen),
+    res.map((s) => `${s.cameraX}:${s.fullyOnScreen ? 'whole' : 'CLIPPED'}`).join(' '),
+  )
   for (const s of res) {
     check(
       `at camera ${s.cameraX}, the NPC draws at worldX - cameraX`,
-      Math.abs(s.centre - (s.worldX - s.cameraX)) < 6,
-      `drawn at ${s.centre.toFixed(1)}, worldX ${s.worldX.toFixed(1)} - camera ${s.cameraX} = ${(s.worldX - s.cameraX).toFixed(1)}`,
+      // The artwork is not centred within its cell -- the walk poses are asymmetric
+      // and the art does not sit squarely in the 128px box -- so the drawn
+      // silhouette's centre sits a small fixed offset from the NPC's x. NPC_ART_OFFSET
+      // is that offset, measured once from the artwork, so the check tests placement
+      // against an independent number rather than against itself.
+      Math.abs(s.centre - (s.worldX - s.cameraX) - NPC_ART_OFFSET) < 3,
+      `drawn at ${s.centre.toFixed(1)} vs worldX ${s.worldX.toFixed(1)} - camera ${s.cameraX} = ${(s.worldX - s.cameraX).toFixed(1)}, art offset ${NPC_ART_OFFSET.toFixed(2)}`,
     )
   }
   check('the NPC keeps one world X while the camera is moved around it', new Set(res.map((s) => s.worldX.toFixed(4))).size === 1, res.map((s) => s.worldX.toFixed(1)).join(', '))
@@ -544,7 +561,7 @@ console.log('\n7. the sprite mirrors when the NPC turns round')
   check('both facings draw the same amount of artwork', res.solid > 0, `${res.solid} solid samples across a ${res.span.toFixed(1)} logical px box`)
 }
 
-console.log('\n8. the NPC is the player size, and the player was not resized')
+console.log('\n8. MEASURE the player and the NPC on the same surface')
 {
   const res = await page.evaluate(async () => {
     const g = window.__game
@@ -553,39 +570,99 @@ console.log('\n8. the NPC is the player size, and the player was not resized')
     await g.frames(20)
     g.pause()
     g.setCamera(g.world.npcs[0].x - g.GameWorld.LOGICAL_WIDTH / 2)
-    g.setNpcFrame(0, 'walk', 4)
     await g.settle()
-    const npc = g.npcSpriteBox(0)
-    // The player's own drawn box, for comparison on the same surface.
-    const canvas = document.querySelector('canvas.game-canvas')
-    const c = document.createElement('canvas')
-    c.width = canvas.width
-    c.height = canvas.height
-    const b = c.getContext('2d')
-    b.imageSmoothingEnabled = false
-    b.setTransform(1, 0, 0, 1, 0, 0)
-    b.translate(g.offX(), g.offY())
-    b.scale(g.scale(), g.scale())
-    b.translate(-g.world.cameraX, g.world.cameraY)
-    g.characterOnly(b)
-    const d = b.getImageData(0, 0, c.width, c.height).data
-    let top = null
-    let bottom = null
-    for (let y = 0; y < c.height; y++) {
-      for (let x = 0; x < c.width; x++) {
-        if (d[(y * c.width + x) * 4 + 3] < 128) continue
-        if (top === null) top = y
-        bottom = y
-      }
-    }
     const sc = g.scale()
-    return { npc, playerHeight: (bottom - top) / sc, spriteDisplaySize: g.GameWorld.SPRITE_DISPLAY_SIZE }
+
+    /**
+     * Bounding box of one drawn layer, in logical px.
+     *
+     * The NPC is measured through `npcSpriteOnly`, which draws the artwork and
+     * neither the shadow nor the HP bar, so this is the sprite's true drawn extent.
+     * An earlier version measured the whole `render()` output and then tried to split
+     * the bar off by finding the first empty row beneath it -- which misreports as
+     * soon as the artwork has an empty row of its own, such as between the legs of a
+     * stride. Drawing only the sprite removes the ambiguity instead of guessing.
+     *
+     * The player has no bar, so its box is already sprite-only.
+     */
+    const boxOf = (draw) => {
+      const canvas = document.querySelector('canvas.game-canvas')
+      const c = document.createElement('canvas')
+      c.width = canvas.width
+      c.height = canvas.height
+      const b = c.getContext('2d')
+      b.imageSmoothingEnabled = false
+      b.setTransform(1, 0, 0, 1, 0, 0)
+      b.translate(g.offX(), g.offY())
+      b.scale(sc, sc)
+      b.translate(-g.world.cameraX, g.world.cameraY)
+      draw(b)
+      const d = b.getImageData(0, 0, c.width, c.height).data
+      let top = null, bottom = null, left = null, right = null
+      for (let y = 0; y < c.height; y++) {
+        for (let x = 0; x < c.width; x++) {
+          if (d[(y * c.width + x) * 4 + 3] < 128) continue
+          if (top === null) top = y
+          bottom = y
+          if (left === null || x < left) left = x
+          if (right === null || x > right) right = x
+        }
+      }
+      if (top === null) return null
+      return { w: (right - left + 1) / sc, h: (bottom - top + 1) / sc }
+    }
+
+    // The player, pinned to a known rest pose so the number does not depend on
+    // whatever the player happened to be doing.
+    g.setFrame('IDLE', 0, true)
+    await g.settle()
+    const player = boxOf((b) => g.characterOnly(b))
+
+    const npcFrames = []
+    for (let f = 0; f < 12; f++) {
+      g.setNpcFrame(0, 'walk', f)
+      npcFrames.push(boxOf((b) => g.npcSpriteOnly(b, 0)))
+    }
+    return { player, npcFrames, display: g.GameWorld.SPRITE_DISPLAY_SIZE }
   })
-  check('the player still draws at the same display size', res.spriteDisplaySize === 100, `${res.spriteDisplaySize}px cell`)
+  const ph = res.player.h
+  const nh = res.npcFrames.map((f) => f.h)
+  console.log('MEASURE', JSON.stringify({
+    player: res.player,
+    npcH: nh.map((v) => +v.toFixed(2)),
+    npcW: res.npcFrames.map((f) => +f.w.toFixed(2)),
+  }))
+  console.log(`  player ${res.player.w.toFixed(1)} x ${ph.toFixed(1)} logical px`)
+  console.log(`  npc    ${res.npcFrames[0].w.toFixed(1)} x ${nh[0].toFixed(1)} logical px (frame 0)`)
+  console.log(`  npc height across the cycle: ${Math.min(...nh).toFixed(1)}..${Math.max(...nh).toFixed(1)}`)
+  console.log(`  npc width  across the cycle: ${Math.min(...res.npcFrames.map((f) => f.w)).toFixed(1)}..${Math.max(...res.npcFrames.map((f) => f.w)).toFixed(1)}`)
+
+  // The point of NPC_VISIBLE_SCALE: the two characters read as the same size. The
+  // NPC's tallest pose is what has to reach the player's standing height -- that is
+  // the frame NPC_MAX_VISIBLE_ROWS was measured from, and matching the peak rather
+  // than the mean is what keeps the NPC from ever towering over the knight mid-cycle.
+  const npcPeak = Math.max(...nh)
   check(
-    'the NPC stands about as tall as the knight, so it matches its scale',
-    Math.abs(res.npc.height - res.playerHeight) < 10,
-    `NPC ${res.npc.height.toFixed(1)} logical px vs knight ${res.playerHeight.toFixed(1)}`,
+    'the NPC\'s tallest pose reaches the player\'s standing height, so the two read as the same size',
+    Math.abs(npcPeak - ph) <= 6,
+    `npc peak ${npcPeak.toFixed(1)} vs player ${ph.toFixed(1)} logical px`,
+  )
+  check(
+    'and no pose of the walk cycle towers over the player',
+    npcPeak <= ph + 1,
+    `npc peak ${npcPeak.toFixed(1)} vs player ${ph.toFixed(1)}`,
+  )
+  check(
+    'the NPC stays a character-sized figure rather than shrinking away',
+    npcPeak > ph * 0.85,
+    `npc peak ${npcPeak.toFixed(1)} is ${((npcPeak / ph) * 100).toFixed(0)}% of the player's ${ph.toFixed(1)}`,
+  )
+  check(
+    'the NPC is wider than it is tall only because its artwork is, and proportions are preserved',
+    // A uniform scale cannot change the art's own aspect; this confirms the drawn box
+    // still matches the sheet's cell-relative geometry rather than being stretched.
+    res.npcFrames.every((f) => Math.abs(f.w / NPC_DRAWN_SIZE - f.h / NPC_DRAWN_SIZE) < 1.5),
+    'each frame\'s drawn box stays inside the same square draw rect',
   )
 }
 

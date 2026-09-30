@@ -19,6 +19,37 @@ package com.example.game.engine
 const val NPC_CELL_SIZE = 128
 
 /**
+ * Source rows of visible artwork in the player's idle frame, and in the NPC's.
+ *
+ * The cells are the same size in both sheets, so a 128px cell drawn at one size
+ * fills the same amount of the screen for both characters -- but neither sheet fills
+ * its own cell. The player draws 97 of 128 rows and the NPC only 81..86, so drawing
+ * both cells at the same size makes the NPC visibly shorter than the knight even
+ * though the two are nominally identical.
+ *
+ * Measured from the alpha channel of the files themselves; mirrored from
+ * `npcAssets.ts`, and checked by `verify-npc-assets.mjs`.
+ */
+const val PLAYER_VISIBLE_ROWS = 97
+
+/** Tallest visible artwork in the NPC's walk cycle, in source rows. */
+const val NPC_MAX_VISIBLE_ROWS = 86
+
+/**
+ * How much larger the NPC's cell is drawn than the player's, so the two end up the
+ * same height on screen.
+ *
+ * Derived from the two measurements above. Matching height rather than width is
+ * deliberate: height is what reads as a character's size, and the NPC's artwork is
+ * genuinely wider than the player's, so matching width would leave the NPC looking
+ * much smaller than the knight.
+ *
+ * A single uniform factor, so proportions, nearest-neighbour sampling and the foot
+ * baseline are all preserved. The artwork on disk is never resampled.
+ */
+const val NPC_VISIBLE_SCALE = PLAYER_VISIBLE_ROWS.toFloat() / NPC_MAX_VISIBLE_ROWS.toFloat()
+
+/**
  * The row the NPC's feet rest on, measured from the top of its cell.
  *
  * All twelve frames of the walk sheet already share it, so no frame is shifted.

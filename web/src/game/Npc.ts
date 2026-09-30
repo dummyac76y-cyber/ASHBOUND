@@ -1,4 +1,13 @@
-import { NPC_CELL_SIZE, NPC_CLIPS, NPC_BASELINE_Y, NPC_NEAREST_NEIGHBOR, NPC_IDLE_FPS, NPC_WALK_FPS, type NpcClip } from './npcAssets'
+import {
+  NPC_CELL_SIZE,
+  NPC_CLIPS,
+  NPC_BASELINE_Y,
+  NPC_NEAREST_NEIGHBOR,
+  NPC_IDLE_FPS,
+  NPC_VISIBLE_SCALE,
+  NPC_WALK_FPS,
+  type NpcClip,
+} from './npcAssets'
 import { footOffsetForRow } from './spriteMetrics'
 import type { RectF } from './PlayerController'
 
@@ -172,6 +181,22 @@ export class Npc {
     return { name: 'idle', sheet: null, firstFrame: 0, frameCount: 0, loops: true, fps: NPC_IDLE_FPS }
   }
 
+  /**
+   * Draws only the sprite -- no ground shadow, no HP bar -- at the NPC's world
+   * position, so the artwork's drawn extent can be measured without having to tell
+   * it apart from the two decorations `render()` adds around it.
+   *
+   * Goes through the same draw path as `render()`, so what is measured is exactly
+   * what reaches the screen. Used by the verification harness to compare the NPC's
+   * size against the player's on one surface.
+   */
+  renderSpriteOnly(ctx: CanvasRenderingContext2D): void {
+    ctx.save()
+    ctx.translate(this.x, this.groundY)
+    this.renderSprite(ctx)
+    ctx.restore()
+  }
+
   /** Draws the NPC in world space. The context is already camera-translated. */
   render(ctx: CanvasRenderingContext2D): void {
     const wobble = this.wobbleTime > 0 ? Math.sin(this.wobbleTime * 30) * 4 : 0
@@ -210,7 +235,7 @@ export class Npc {
    * lower edge -- land on the floor.
    */
   private spriteTop(): number {
-    return -(NPC_SPRITE_DISPLAY_SIZE - footOffsetForRow(NPC_BASELINE_Y, NPC_SPRITE_DISPLAY_SIZE, NPC_CELL_SIZE))
+    return -(NPC_DRAWN_SIZE - footOffsetForRow(NPC_BASELINE_Y, NPC_DRAWN_SIZE, NPC_CELL_SIZE))
   }
 
   /** Draws the current frame of the sheet, if it has loaded. */
@@ -218,7 +243,7 @@ export class Npc {
     const sheet = this.sprite
     if (!sheet) return
 
-    const display = NPC_SPRITE_DISPLAY_SIZE
+    const display = NPC_DRAWN_SIZE
     const footOffset = footOffsetForRow(NPC_BASELINE_Y, display, NPC_CELL_SIZE)
     const bottom = footOffset
     const top = bottom - display
@@ -247,12 +272,24 @@ export class Npc {
 }
 
 /**
- * Logical size a 128px sprite cell is drawn at, matching the player.
+ * Logical size a 128px sprite cell is drawn at, the player's cell size.
  *
- * Declared here as a literal rather than imported from the world so the NPC's
- * rendering has no dependency on the world object that draws it. The world's
- * `SPRITE_DISPLAY_SIZE` resolves to this same constant, so the two characters stay
- * the same size without either reaching into the other. Mirrors
- * `Npc.NPC_SPRITE_DISPLAY_SIZE` in the Android engine.
+ * This is the shared *basis* both characters start from. The NPC then multiplies it
+ * by `NPC_VISIBLE_SCALE`, because its artwork fills a smaller fraction of its cell
+ * than the player's does and would otherwise draw shorter than the knight.
+ *
+ * It is deliberately not the player's own size: `GameWorld.SPRITE_DISPLAY_SIZE` is
+ * its own constant, so sizing the NPC can never silently resize the knight.
  */
 export const NPC_SPRITE_DISPLAY_SIZE = 100
+
+/**
+ * The size the NPC's cell is actually drawn at: the shared basis scaled up so its
+ * visible height matches the player's.
+ *
+ * Every part of the NPC that draws against a size uses this, so the sprite, the
+ * foot offset that grounds it and the HP bar above its head all stay consistent
+ * with one another. Because the factor is uniform, the artwork keeps its
+ * proportions and its baseline still lands the feet on the floor plane.
+ */
+export const NPC_DRAWN_SIZE = NPC_SPRITE_DISPLAY_SIZE * NPC_VISIBLE_SCALE

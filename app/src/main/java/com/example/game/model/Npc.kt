@@ -12,6 +12,7 @@ import com.example.game.engine.NPC_CLIPS
 import com.example.game.engine.NPC_IDLE_FPS
 import com.example.game.engine.NPC_IDLE_WALK_SHEET
 import com.example.game.engine.NPC_NEAREST_NEIGHBOR
+import com.example.game.engine.NPC_VISIBLE_SCALE
 import com.example.game.engine.NPC_WALK_FPS
 import com.example.game.engine.NpcClip
 import com.example.game.engine.emptyClip
@@ -166,7 +167,7 @@ class Npc(
     /** Draws the NPC in world space. The canvas is already camera-translated. */
     fun render(canvas: Canvas, paint: Paint) {
         val wobble = if (wobbleTime > 0f) sin(wobbleTime * 30f) * 4f else 0f
-        val display = NPC_SPRITE_DISPLAY_SIZE
+        val display = NPC_DRAWN_SIZE
 
         canvas.save()
         canvas.translate(x + wobble, groundY)
@@ -253,6 +254,16 @@ class Npc(
          * either reaching into the other.
          */
         const val NPC_SPRITE_DISPLAY_SIZE = 100f
+
+        /**
+         * The size the NPC's cell is actually drawn at: the shared basis scaled up so
+         * its visible height matches the player's.
+         *
+         * Every part of the NPC that draws against a size uses this, so the sprite,
+         * the foot offset that grounds it and the HP bar above its head stay
+         * consistent. Mirrors `NPC_DRAWN_SIZE` in the web engine.
+         */
+        const val NPC_DRAWN_SIZE = NPC_SPRITE_DISPLAY_SIZE * NPC_VISIBLE_SCALE
 
         /** File the walk sheet is loaded from, as declared in NpcAssets.kt. */
         const val SPRITE_FILE = NPC_IDLE_WALK_SHEET.file

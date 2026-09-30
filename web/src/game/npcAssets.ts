@@ -21,6 +21,41 @@
 export const NPC_CELL_SIZE = 128
 
 /**
+ * Source rows of visible artwork in the player's idle frame, and in the NPC's.
+ *
+ * The cells are the same size in both sheets, so a 128px cell drawn at one size
+ * fills the same amount of the screen for both characters -- but neither sheet
+ * fills its own cell. The player draws 97 of 128 rows and the NPC only 81..86,
+ * so drawing both cells at the same size makes the NPC visibly shorter than the
+ * knight even though the two are nominally identical.
+ *
+ * Measured from the alpha channel of the files themselves; see
+ * `scripts/verify-npc-assets.mjs`, which re-derives these and fails if the
+ * declared numbers ever stop matching the artwork.
+ */
+export const PLAYER_VISIBLE_ROWS = 97
+
+/** Tallest visible artwork in the NPC's walk cycle, in source rows. */
+export const NPC_MAX_VISIBLE_ROWS = 86
+
+/**
+ * How much larger the NPC's cell is drawn than the player's, so the two end up
+ * the same height on screen.
+ *
+ * Derived from the two measurements above: the NPC fills a smaller fraction of
+ * its cell, so drawing its cell proportionally larger is what makes its visible
+ * height match the player's. Matching height rather than width is deliberate --
+ * height is what reads as a character's size, and the NPC's artwork is genuinely
+ * wider than the player's, so matching width instead would leave the NPC looking
+ * much smaller than the knight.
+ *
+ * A single uniform factor: it scales the NPC's whole cell, so its proportions,
+ * its nearest-neighbour sampling and its baseline are all preserved. It is a
+ * display-size choice only -- the artwork on disk is never resampled or re-encoded.
+ */
+export const NPC_VISIBLE_SCALE = PLAYER_VISIBLE_ROWS / NPC_MAX_VISIBLE_ROWS
+
+/**
  * The row the NPC's feet rest on, measured from the top of its cell.
  *
  * All twelve frames of the walk sheet already share it, so no frame needs shifting

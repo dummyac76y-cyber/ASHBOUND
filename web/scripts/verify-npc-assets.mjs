@@ -30,8 +30,11 @@ import {
   NPC_CLIPS,
   NPC_IDLE_FPS,
   NPC_IDLE_WALK_SHEET,
+  NPC_MAX_VISIBLE_ROWS,
   NPC_NEAREST_NEIGHBOR,
+  NPC_VISIBLE_SCALE,
   NPC_WALK_FPS,
+  PLAYER_VISIBLE_ROWS,
   isClipAssigned,
   npcSheetHeight,
   npcSheetWidth,
@@ -183,6 +186,31 @@ if (walkImg) {
     `       each frame sits in a ${Math.min(...perFrame.map((m) => m.minX))}..${Math.max(...perFrame.map((m) => m.maxX))} x ` +
       `${Math.min(...perFrame.map((m) => m.minY))}..${Math.max(...perFrame.map((m) => m.maxY))} box inside its 128px cell, ` +
       `${perFrame.reduce((a, m) => a + m.clear, 0)} transparent pixels overall`,
+  )
+
+  // The declared visible-row counts drive NPC_VISIBLE_SCALE, which is what makes the
+  // NPC the same height as the player. Re-derived here from the artwork so the factor
+  // cannot silently drift away from the files it was measured from.
+  const npcMaxRows = Math.max(...perFrame.map((m) => m.maxY - m.minY + 1))
+  check(
+    'the NPC visible-row count matches the artwork, so the height-matching scale is derived, not guessed',
+    npcMaxRows === NPC_MAX_VISIBLE_ROWS,
+    `tallest frame is ${npcMaxRows} rows against the declared ${NPC_MAX_VISIBLE_ROWS}`,
+  )
+
+  const idleImg = readPng(join(repoRoot, 'app/src/main/assets/sprites/idle.png'))
+  const idleCell = idleImg.width / 6
+  const idleFrame = measureCell(idleImg, 0, 0, idleCell, NPC_CELL_SIZE)
+  const playerRows = idleFrame.maxY - idleFrame.minY + 1
+  check(
+    "the player's visible-row count matches the artwork too, since the factor is a ratio against it",
+    playerRows === PLAYER_VISIBLE_ROWS,
+    `idle frame 0 is ${playerRows} rows against the declared ${PLAYER_VISIBLE_ROWS}`,
+  )
+  check(
+    'and the scale factor is the ratio of the two, which is what equalises their heights',
+    Math.abs(NPC_VISIBLE_SCALE - PLAYER_VISIBLE_ROWS / npcMaxRows) < 1e-9 && NPC_VISIBLE_SCALE > 1,
+    `NPC_VISIBLE_SCALE ${NPC_VISIBLE_SCALE.toFixed(4)} = ${PLAYER_VISIBLE_ROWS}/${npcMaxRows}`,
   )
 }
 

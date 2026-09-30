@@ -43,8 +43,13 @@ class GameWorld(val context: Context) {
          * A property of the character alone. It is never scaled by a backdrop's size,
          * so the knight is exactly as large in the cavern as he is in the prison even
          * though the two artworks need very different scales to fill the screen.
+         *
+         * Its own constant, deliberately not the NPC's. The two characters share a
+         * cell size but not a drawn size -- the NPC's artwork fills less of its cell,
+         * so it is scaled up to match the knight's height. Deriving one from the other
+         * would mean sizing the NPC silently resized the player.
          */
-        const val SPRITE_DISPLAY_SIZE = Npc.NPC_SPRITE_DISPLAY_SIZE
+        const val SPRITE_DISPLAY_SIZE = 100f
 
         /**
          * Rest-pose foot offset, i.e. the padding below the opaque pixels of the idle

@@ -289,6 +289,20 @@ async function boot(): Promise<void> {
           if (npc) npc.render(ctx)
         },
         /**
+         * An NPC's sprite alone -- no ground shadow, no HP bar.
+         *
+         * Measuring a character's size through the full `render()` means guessing
+         * which drawn pixels belong to the artwork: the shadow is too faint to catch,
+         * but the HP bar is opaque and sits above the head, and any attempt to split
+         * it off by finding the empty band beneath it breaks the moment the artwork
+         * has an empty row of its own, such as between the legs of a stride. Drawing
+         * only the sprite makes the measurement unambiguous.
+         */
+        npcSpriteOnly: (ctx: CanvasRenderingContext2D, index?: number): void => {
+          const npc = index === undefined ? world.npcs[0] : world.npcs[index]
+          npc?.renderSpriteOnly(ctx)
+        },
+        /**
          * The player alone, through the real drawing path, for comparing a
          * character's on-screen size against the NPC's on the same surface.
          */

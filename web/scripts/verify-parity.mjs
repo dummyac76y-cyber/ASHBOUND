@@ -652,13 +652,29 @@ console.log('\nNPC asset set is declared identically in both engines')
     sizeOf(WEB_NPC_IMPL, 'NPC_SPRITE_DISPLAY_SIZE') === 100 && sizeOf(KT_NPC_IMPL, 'NPC_SPRITE_DISPLAY_SIZE') === 100,
     `web ${sizeOf(WEB_NPC_IMPL, 'NPC_SPRITE_DISPLAY_SIZE')} vs android ${sizeOf(KT_NPC_IMPL, 'NPC_SPRITE_DISPLAY_SIZE')}`,
   )
+  // The NPC's drawn size is its basis scaled up, so its visible height matches the
+  // knight's -- the two artworks do not fill their equally-sized cells to the same
+  // depth. The player keeps its own literal, which is the point: the player's size
+  // must not be derived from the NPC's, or sizing the NPC would resize the knight.
   check(
-    'and the player uses that same figure, so the NPC matches the knight scale without resizing the player',
-    /SPRITE_DISPLAY_SIZE\s*=\s*NPC_SPRITE_DISPLAY_SIZE/.test(WEB_NPC_SRC.replace(/\s+/g, ' ')) ||
-      /SPRITE_DISPLAY_SIZE\s*=\s*NPC_SPRITE_DISPLAY_SIZE/.test(readFileSync(join(ROOT, 'web/src/game/GameWorld.ts'), 'utf8')) ||
-      /SPRITE_DISPLAY_SIZE\s*=\s*Npc\.NPC_SPRITE_DISPLAY_SIZE/.test(KT_SCENE_SRC) ||
-      /SPRITE_DISPLAY_SIZE\s*=\s*Npc\.NPC_SPRITE_DISPLAY_SIZE/.test(readFileSync(join(ROOT, 'app/src/main/java/com/example/game/engine/GameWorld.kt'), 'utf8')),
-    'each engine points the player at the same constant the NPC uses',
+    'both engines scale the NPC up from that basis to match the player visible height',
+    /NPC_DRAWN_SIZE\s*=\s*NPC_SPRITE_DISPLAY_SIZE\s*\*\s*NPC_VISIBLE_SCALE/.test(WEB_NPC_IMPL.replace(/\s+/g, ' ')) &&
+      /NPC_DRAWN_SIZE\s*=\s*NPC_SPRITE_DISPLAY_SIZE\s*\*\s*NPC_VISIBLE_SCALE/.test(KT_NPC_IMPL.replace(/\s+/g, ' ')),
+    'web and android both derive the drawn size as basis * NPC_VISIBLE_SCALE',
+  )
+  check(
+    'and both engines derive the factor from the measured artwork, not a hand-picked number',
+    /NPC_VISIBLE_SCALE\s*=\s*PLAYER_VISIBLE_ROWS\s*\/\s*NPC_MAX_VISIBLE_ROWS/.test(WEB_NPC_SRC.replace(/\s+/g, ' ')) &&
+      /NPC_VISIBLE_SCALE\s*=\s*PLAYER_VISIBLE_ROWS\.toFloat\(\)\s*\/\s*NPC_MAX_VISIBLE_ROWS\.toFloat\(\)/.test(KT_NPC_SRC.replace(/\s+/g, ' ')),
+    'player visible rows / npc max visible rows',
+  )
+  check(
+    "the player's size is its own constant in both engines, so scaling the NPC cannot resize the knight",
+    sizeOf(readFileSync(join(ROOT, 'web/src/game/GameWorld.ts'), 'utf8'), 'SPRITE_DISPLAY_SIZE') === 100 &&
+      sizeOf(readFileSync(join(ROOT, 'app/src/main/java/com/example/game/engine/GameWorld.kt'), 'utf8'), 'SPRITE_DISPLAY_SIZE') === 100 &&
+      !/SPRITE_DISPLAY_SIZE\s*=\s*Npc\.?NPC_SPRITE_DISPLAY_SIZE/.test(readFileSync(join(ROOT, 'app/src/main/java/com/example/game/engine/GameWorld.kt'), 'utf8')) &&
+      !/SPRITE_DISPLAY_SIZE\s*=\s*NPC_SPRITE_DISPLAY_SIZE/.test(readFileSync(join(ROOT, 'web/src/game/GameWorld.ts'), 'utf8')),
+    'both worlds declare SPRITE_DISPLAY_SIZE = 100 directly',
   )
   check('both engines use the same 128px cell size',
     /NPC_CELL_SIZE\s*=\s*128/.test(WEB_NPC_SRC) && /NPC_CELL_SIZE\s*=\s*128/.test(KT_NPC_SRC), '128')
