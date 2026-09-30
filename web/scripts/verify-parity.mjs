@@ -681,6 +681,37 @@ console.log('\nNPC asset set is declared identically in both engines')
   check('both engines pin sprite filtering to nearest-neighbour, so neither engine blurs the pixel art',
     /NPC_NEAREST_NEIGHBOR\s*=\s*true/.test(WEB_NPC_SRC) && /NPC_NEAREST_NEIGHBOR\s*=\s*true/.test(KT_NPC_SRC), 'no smoothing')
 
+  check(
+    'both engines derive the sprite mirror from the artwork\'s native facing, not from an assumed one',
+    /NPC_ART_FACES_RIGHT/.test(WEB_NPC_SRC) && /NPC_ART_FACES_RIGHT/.test(KT_NPC_SRC) &&
+      /NPC_ART_FACES_RIGHT\s*=\s*false/.test(WEB_NPC_SRC) && /NPC_ART_FACES_RIGHT\s*=\s*false/.test(KT_NPC_SRC),
+    'both declare the sheet faces left',
+  )
+  check(
+    'and both flip on the opposite side to that, so neither engine can moonwalk',
+      /NPC_ART_FACES_RIGHT\s*\?\s*!this\.facingRight\s*:\s*this\.facingRight/.test(WEB_NPC_IMPL.replace(/\s+/g, ' ')) &&
+      /if\s*\(\s*NPC_ART_FACES_RIGHT\s*\)\s*!facingRight\s+else\s+facingRight/.test(KT_NPC_IMPL.replace(/\s+/g, ' ')),
+    'web and android both derive flipX from the native facing',
+  )
+  check(
+    'neither engine rotates or vertically flips the sprite',
+    /if\s*\(this\.flipX\)\s*ctx\.scale\(-1,\s*1\)/.test(WEB_NPC_IMPL.replace(/\s+/g, ' ')) &&
+      /if\s*\(flipX\)\s*canvas\.scale\(-1f,\s*1f,\s*0f,\s*0f\)/.test(KT_NPC_IMPL.replace(/\s+/g, ' ')),
+    'the only transform is a horizontal scale of -1',
+  )
+  check(
+    "both engines start the NPC facing the artwork's own direction, so it rests unflipped",
+    /facingRight\s*[:=]\s*NPC_ART_FACES_RIGHT/.test(WEB_NPC_IMPL.replace(/\s+/g, ' ')) &&
+      /facingRight\s*:\s*Boolean\s*=\s*NPC_ART_FACES_RIGHT/.test(KT_NPC_IMPL),
+    'default facing follows the artwork',
+  )
+  check(
+    'and both engines only ever change facing where they also force a stop, so a turn is never walked',
+    /turnAround/.test(WEB_NPC_IMPL) && /turnAround/.test(KT_NPC_IMPL) &&
+      /facingRight\s*=\s*!this\.facingRight/.test(WEB_NPC_IMPL) && /facingRight\s*=\s*!facingRight/.test(KT_NPC_IMPL),
+    'facing is written in exactly one place per engine, the turnaround',
+  )
+
   const byFile = new Map(kt.map((x) => [x.file, x]))
   for (const w of web) {
     const k = byFile.get(w.file)

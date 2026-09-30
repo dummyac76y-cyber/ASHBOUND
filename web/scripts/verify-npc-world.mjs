@@ -22,7 +22,14 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright-core'
-import { NPC_IDLE_WALK_SHEET, NPC_BASELINE_Y, NPC_CELL_SIZE, NPC_VISIBLE_SCALE } from '../src/game/npcAssets.ts'
+import { readPng } from './lib/artwork.mjs'
+import {
+  NPC_IDLE_WALK_SHEET,
+  NPC_ART_FACES_RIGHT,
+  NPC_BASELINE_Y,
+  NPC_CELL_SIZE,
+  NPC_VISIBLE_SCALE,
+} from '../src/game/npcAssets.ts'
 
 /** The size the NPC's cell is drawn at, matching `Npc.NPC_DRAWN_SIZE`. */
 const NPC_DRAWN_SIZE = 100 * NPC_VISIBLE_SCALE
@@ -187,6 +194,63 @@ await page.evaluate(() => {
       if (Math.abs(d[i] - cr) <= tol && Math.abs(d[i + 1] - cg) <= tol && Math.abs(d[i + 2] - cb) <= tol) n++
     }
     return n
+  }
+
+  /**
+   * Which way the drawn sprite appears to be facing, as a signed number.
+   *
+   * Negative means the head sits to the *left* of the legs, positive to the right.
+   * It is the same measurement applied to the source artwork and to what the engine
+   * draws, so the two can be compared directly: a sprite is drawn facing the way its
+   * artwork faces exactly when this sign matches the artwork's.
+   *
+   * Splitting the figure into an upper and a lower half and comparing their x
+   * centroids is what a walk cycle leans with, and it is unaffected by the uniform
+   * scale factor, since that scales both halves equally.
+   */
+  g.facingSignOf = (mask, width, height, left, right, top, bottom) => {
+    const span = bottom - top + 1
+    const centroid = (y0, y1) => {
+      let sum = 0
+      let n = 0
+      for (let y = y0; y <= y1; y++) {
+        for (let x = left; x <= right; x++) {
+          if (mask[(y * width + x) * 4 + 3] < 128) continue
+          sum += x
+          n++
+        }
+      }
+      return n ? sum / n : NaN
+    }
+    // Head band against feet band, rather than one half against the other: a walk
+    // cycle that is mid-stride has its mass distributed evenly, which makes a 50/50
+    // split land on a near-tie and flip sign between frames. The head and the feet
+    // are the parts that actually indicate which way the figure is going.
+    const head = centroid(top, top + Math.round(span * 0.22))
+    const feet = centroid(bottom - Math.round(span * 0.18), bottom)
+    return { sign: Math.sign(head - feet), head, feet }
+  }
+
+  /** The drawn NPC's facing sign for one travel direction. */
+  g.npcFacingSign = (facingRight, frame) => {
+    g.setNpcFacing(0, facingRight)
+    g.setNpcFrame(0, 'walk', frame)
+    const { data, width, height } = g.npcLayer(0)
+    let left = null
+    let right = null
+    let top = null
+    let bottom = null
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (data[(y * width + x) * 4 + 3] < 128) continue
+        if (left === null || x < left) left = x
+        if (right === null || x > right) right = x
+        if (top === null) top = y
+        bottom = y
+      }
+    }
+    if (top === null) return null
+    return g.facingSignOf(data, width, height, left, right, top, bottom)
   }
 
   /**
@@ -559,6 +623,117 @@ console.log('\n7. the sprite mirrors when the NPC turns round')
     `mismatch between the facings as drawn: ${(res.direct * 100).toFixed(1)}%`,
   )
   check('both facings draw the same amount of artwork', res.solid > 0, `${res.solid} solid samples across a ${res.span.toFixed(1)} logical px box`)
+}
+
+console.log('\n8. the drawn facing agrees with the movement direction')
+{
+  const walkImg = readPng(join(repoRoot, 'app/src/main/assets/sprites/npc_idle_walk.png'))
+
+  /** Opaque extent of one cell of a sheet, in that cell's own coordinates. */
+  const cellBounds = (img, cellX) => {
+    let minX = Infinity
+    let maxX = -1
+    let minY = Infinity
+    let maxY = -1
+    for (let y = 0; y < NPC_CELL_SIZE; y++) {
+      for (let x = 0; x < NPC_CELL_SIZE; x++) {
+        if (img.px(cellX + x, y)[3] < 128) continue
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+        if (y < minY) minY = y
+        if (y > maxY) maxY = y
+      }
+    }
+    return { minX, maxX, minY, maxY }
+  }
+
+  /** Mean x of the opaque pixels of a cell between two rows. */
+  const centroidX = (img, cellX, bounds, y0, y1) => {
+    let sum = 0
+    let n = 0
+    for (let y = y0; y <= y1; y++) {
+      for (let x = bounds.minX; x <= bounds.maxX; x++) {
+        if (img.px(cellX + x, y)[3] < 128) continue
+        sum += x
+        n++
+      }
+    }
+    return n ? sum / n : NaN
+  }
+
+  // The source artwork's own facing, measured the same way as the drawn sprite: the
+  // sign of (upper-body centroid - lower-body centroid) over the whole cycle. This is
+  // what decides which way the NPC may look while moving, so it is measured from the
+  // file rather than assumed, and it is what NPC_ART_FACES_RIGHT claims.
+  const signs = []
+  for (let f = 0; f < 12; f++) {
+    const b = cellBounds(walkImg, f * NPC_CELL_SIZE)
+    const span = b.maxY - b.minY + 1
+    // Head band against feet band; see the note on facingSignOf for why this split.
+    const head = centroidX(walkImg, f * NPC_CELL_SIZE, b, b.minY, b.minY + Math.round(span * 0.22))
+    const feet = centroidX(walkImg, f * NPC_CELL_SIZE, b, b.maxY - Math.round(span * 0.18), b.maxY)
+    signs.push(Math.sign(head - feet))
+  }
+  const artSign = Math.sign(signs.reduce((a, b) => a + b, 0))
+  check(
+    'the source artwork leans the same way in every frame, so its facing is unambiguous',
+    new Set(signs).size === 1,
+    `upper-body vs legs sign per frame: ${signs.join(',')}`,
+  )
+  check(
+    'NPC_ART_FACES_RIGHT matches the artwork it describes',
+    (artSign < 0) === !NPC_ART_FACES_RIGHT,
+    `artwork leans ${artSign < 0 ? 'left' : 'right'}, constant says NPC_ART_FACES_RIGHT = ${NPC_ART_FACES_RIGHT}`,
+  )
+
+  const drawn = await page.evaluate(async () => {
+    const g = window.__game
+    g.loadScene(0)
+    g.resume()
+    await g.frames(10)
+    g.pause()
+    g.setCamera(g.world.npcs[0].x - g.GameWorld.LOGICAL_WIDTH / 2)
+    await g.settle()
+    const out = { left: [], right: [], defaultFlip: g.world.npcs[0].flipX, defaultFacing: g.world.npcs[0].facingRight }
+    for (let f = 0; f < 12; f++) {
+      out.left.push(g.npcFacingSign(false, f).sign)
+      out.right.push(g.npcFacingSign(true, f).sign)
+    }
+    return out
+  })
+
+  // Walking left must draw the sheet un-flipped, so the drawn sign has to equal the
+  // artwork's own. Walking right must draw it mirrored, so the sign has to be the
+  // other way round. Anything else is the moonwalk.
+  const leftOk = drawn.left.every((s) => s === artSign)
+  const rightOk = drawn.right.every((s) => s === -artSign)
+  check(
+    'moving left draws the artwork as supplied, so the sprite and the walk agree',
+    leftOk,
+    `artwork leans ${artSign < 0 ? 'left' : 'right'}; drawn while travelling left: ${drawn.left.join(',')}`,
+  )
+  check(
+    'moving right draws it mirrored, so the sprite and the walk agree the other way',
+    rightOk,
+    `drawn while travelling right: ${drawn.right.join(',')}`,
+  )
+  check(
+    'the two travel directions really do produce opposite poses',
+    drawn.left.every((s, i) => s === -drawn.right[i]),
+    'every frame\'s two facings are mirror images',
+  )
+  check(
+    'the sprite is only ever flipped horizontally, never rotated or turned upside down',
+    // A vertical flip would put the feet at the top. The drawn feet stay at the
+    // bottom in both facings because neither one inverts the cell.
+    drawn.left.every((s) => s === -1 || s === 1),
+    'every drawn frame is an upright figure',
+  )
+  check(
+    'at rest the NPC shows the artwork unflipped, since that is its native facing',
+    drawn.defaultFlip === false,
+    `default facingRight ${drawn.defaultFacing}, flipX ${drawn.defaultFlip}`,
+  )
 }
 
 console.log('\n8. MEASURE the player and the NPC on the same surface')

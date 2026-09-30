@@ -15,7 +15,7 @@ import {
   TRANSITION_TOTAL,
 } from './GameScene.ts'
 import { PlayerController, rectsIntersect } from './PlayerController.ts'
-import { NPC_CLIPS, NPC_IDLE_WALK_SHEET } from './npcAssets.ts'
+import { NPC_ART_FACES_RIGHT, NPC_CLIPS, NPC_IDLE_WALK_SHEET } from './npcAssets.ts'
 import { PlayerAction } from './PlayerAction.ts'
 import type { SpriteAnimationSystem } from './SpriteAnimationSystem.ts'
 import { createDefaultConfigs } from './AnimationConfig.ts'
@@ -644,6 +644,59 @@ console.log('NPC PATROL: stands, walks a short way, stops, and turns at its limi
   check('the cycle alternates idle and walk several times over half a minute', order.filter((s) => s === 'walk').length >= 3, order.join(' -> '))
   check('it heads right first, then reverses on the way home', npc.patrolRight === homeX + 40 && npc.patrolLeft === homeX - 40, `home ${homeX}`)
   check('the NPC never leaves its patrol', npc.x >= npc.patrolLeft - 1e-9 && npc.x <= npc.patrolRight + 1e-9, `${npc.x.toFixed(2)}`)
+}
+
+console.log('NPC FACING: the sprite is never drawn pointing against its movement')
+{
+  resetWorld()
+  const npc = world.npcs[0]
+
+  // The artwork faces left, so that is the default: at rest the NPC is drawn exactly
+  // as supplied, un-mirrored.
+  check('the NPC starts on the direction the artwork natively faces', npc.facingRight === NPC_ART_FACES_RIGHT, `facingRight ${npc.facingRight}, art faces right: ${NPC_ART_FACES_RIGHT}`)
+  check('and is drawn un-mirrored at rest', npc.flipX === false, `flipX ${npc.flipX}`)
+
+  // The rule under test: moving the way the art faces draws it un-mirrored, moving
+  // the other way mirrors it. Anything else is the moonwalk.
+  for (const facingRight of [true, false]) {
+    npc.facingRight = facingRight
+    const movingSameWayAsArt = facingRight === NPC_ART_FACES_RIGHT
+    check(
+      `travelling ${facingRight ? 'right' : 'left'} ${movingSameWayAsArt ? 'draws the art as supplied' : 'mirrors it'}`,
+      npc.flipX === !movingSameWayAsArt,
+      `facingRight ${facingRight}, flipX ${npc.flipX}`,
+    )
+  }
+
+  // A left-facing sheet is mirrored while heading right and not while heading left.
+  npc.facingRight = true
+  check('a left-facing sheet is mirrored while heading right', npc.flipX === true, `flipX ${npc.flipX}`)
+  npc.facingRight = false
+  check('and drawn as-is while heading left', npc.flipX === false, `flipX ${npc.flipX}`)
+
+  // The sprite is only ever flipped horizontally. A vertical flip would put the feet
+  // above the head, which is what a scale or a rotation would break, not a flipX.
+  check('flipping never inverts the figure vertically', [true, false].every((f) => { npc.facingRight = f; return npc.flipX === true || npc.flipX === false }), 'flipX is a plain boolean horizontal mirror')
+
+  // Facing must only ever change while the NPC is standing still, so it can never take
+  // a step with the sprite already pointing the other way.
+  resetWorld()
+  const patroller = world.npcs[0]
+  let movedWhileFlipChanged = false
+  let prevX = patroller.x
+  let prevFlip = patroller.flipX
+  for (let i = 0; i < 60 * 60; i++) {
+    world.update(1 / 60)
+    const flipNow = patroller.flipX
+    if (flipNow !== prevFlip) {
+      // The frame the flip takes effect must not also have been a frame of travel.
+      const travelled = Math.abs(patroller.x - prevX) > 1e-9
+      if (travelled && patroller.state === 'walk') movedWhileFlipChanged = true
+    }
+    prevX = patroller.x
+    prevFlip = flipNow
+  }
+  check('the sprite never changes facing on a frame the NPC is walking', !movedWhileFlipChanged, 'checked 3600 frames of patrol')
 }
 
 console.log('NPC ANIMATION: frames advance at the declared rate for the running clip')

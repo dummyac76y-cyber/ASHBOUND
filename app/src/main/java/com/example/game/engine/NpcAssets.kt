@@ -19,6 +19,21 @@ package com.example.game.engine
 const val NPC_CELL_SIZE = 128
 
 /**
+ * Which way the supplied artwork natively faces.
+ *
+ * Measured from the sheet rather than assumed, because getting it wrong makes the
+ * NPC moonwalk: in all twelve frames the head and upper body sit to the *left* of the
+ * legs (the head's centroid is ~13px left of the feet's), the arm reaches forward to
+ * the left, and the figure's mass trails off to the right. The sheet is therefore
+ * drawn facing left, and an NPC travelling right has to be mirrored for its stride
+ * to agree with its movement.
+ *
+ * This describes the file, it is not a preference. New artwork may face the other
+ * way, and this is the one line that has to change when it does.
+ */
+const val NPC_ART_FACES_RIGHT = false
+
+/**
  * Source rows of visible artwork in the player's idle frame, and in the NPC's.
  *
  * The cells are the same size in both sheets, so a 128px cell drawn at one size

@@ -334,6 +334,7 @@ async function boot(): Promise<void> {
             state: npc.state,
             frame: npc.currentFrame,
             facingRight: npc.facingRight,
+            flipX: npc.flipX,
             isWalking: npc.isWalking,
             fps: npc.fps,
             hp: npc.hp,

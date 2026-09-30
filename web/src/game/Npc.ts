@@ -1,6 +1,7 @@
 import {
   NPC_CELL_SIZE,
   NPC_CLIPS,
+  NPC_ART_FACES_RIGHT,
   NPC_BASELINE_Y,
   NPC_NEAREST_NEIGHBOR,
   NPC_IDLE_FPS,
@@ -53,7 +54,29 @@ export class Npc {
 
   /** Current motion, and which direction the NPC is looking. */
   state: NpcState = 'idle'
-  facingRight = true
+
+  /**
+   * Which way the NPC is looking, and so which way it travels while walking.
+   *
+   * Starts on the direction the artwork natively faces, so the NPC is drawn
+   * un-flipped at rest. Anything else would show the idle pose mirrored against a
+   * sheet that was drawn the other way round.
+   */
+  facingRight = NPC_ART_FACES_RIGHT
+
+  /**
+   * Whether the sprite must be mirrored for the NPC to look the way it is moving.
+   *
+   * The artwork faces one fixed direction, so exactly one of the two travel
+   * directions draws it as supplied and the other has to be flipped horizontally.
+   * Deriving this from `NPC_ART_FACES_RIGHT` rather than assuming keeps the drawn
+   * pose and the movement vector in step: a sprite facing left travels left
+   * un-flipped and travels right mirrored, which is the opposite of a left-facing
+   * sheet drawn as though it faced right.
+   */
+  get flipX(): boolean {
+    return NPC_ART_FACES_RIGHT ? !this.facingRight : this.facingRight
+  }
 
   /** Index of the frame being drawn within its clip. */
   currentFrame = 0
@@ -116,9 +139,13 @@ export class Npc {
    * Advances the patrol and the animation.
    *
    * The loop is: stand, walk to the patrol limit, turn round, stand, walk back.
+   *
    * Turning happens on reaching a limit rather than on wrapping, so the NPC never
-   * reverses while out in the open, and the sprite only flips at a moment the
-   * player expects -- a turnaround.
+   * reverses while out in the open. `facingRight` is written in exactly one place,
+   * {@link turnAround}, and that also drops the NPC back to `idle` -- so a change of
+   * direction and a change of facing are the same event, and the NPC is always
+   * standing still while it turns. That is what stops it ever taking a step with the
+   * sprite pointing the other way, which is what reads as walking backwards.
    */
   update(dt: number): void {
     if (this.hitFlashTimer > 0) this.hitFlashTimer -= dt
@@ -150,7 +177,13 @@ export class Npc {
   /**
    * Reaches a patrol limit: stop, face the other way, and stand for a while.
    *
-   * Standing after a turn is what stops the sprite from snapping to a mirrored walk
+   * The order matters and is the whole point of the method: the NPC is switched to
+   * `idle` as it turns, and it spends the next {@link NPC_IDLE_SECONDS} standing
+   * still before `update` will let it walk again. The new direction is therefore
+   * both chosen and visibly adopted before the first step is taken in it, so the
+   * sprite never leads or trails the movement.
+   *
+   * Standing after a turn also stops the sprite from snapping to a mirrored walk
    * mid-stride, where a leg that was mid-swing would read as the wrong one leading.
    */
   private turnAround(): void {
@@ -255,8 +288,10 @@ export class Npc {
     // and this pins it for this draw too so the NPC cannot be softened by any
     // caller that has re-enabled it.
     if (NPC_NEAREST_NEIGHBOR) ctx.imageSmoothingEnabled = false
-    // Turning round mirrors the sheet about the NPC's own centre.
-    if (!this.facingRight) ctx.scale(-1, 1)
+    // Turning round mirrors the sheet about the NPC's own centre. Only ever a
+    // horizontal flip -- never a rotation, and never a vertical one, which would
+    // stand the figure on its head.
+    if (this.flipX) ctx.scale(-1, 1)
     ctx.drawImage(sheet.image, sx, 0, NPC_CELL_SIZE, NPC_CELL_SIZE, left, top, display, display)
 
     // A hit brightens the sprite for a moment. Drawn as a second pass over the same
