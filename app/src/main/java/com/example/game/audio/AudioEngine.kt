@@ -4,7 +4,10 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.media.SoundPool
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import kotlin.random.Random
 
 /**
  * The audio bank and player.
@@ -54,6 +57,15 @@ data class AudioClip(
      * without this they stack into a buzz louder than the music they sit under.
      */
     val minInterval: Float = 0f,
+    /**
+     * For a clip that plays intermittently rather than looping: the seconds range between
+     * repeats, picked at random each time. Null means the clip does not repeat itself.
+     *
+     * This is what separates the two ambience clips. The fire is a bed and loops; the menu
+     * ambience is a mood that arrives and leaves, and a bed under a title screen stops being
+     * noticed within about half a minute, which is the opposite of what it is for.
+     */
+    val every: Pair<Float, Float>? = null,
 )
 
 /**
@@ -71,7 +83,8 @@ private fun clip(
     loop: Boolean = false,
     volume: Float = 1f,
     minInterval: Float = 0f,
-) = AudioClip(id, category, "$AUDIO_ROOT/$file", loop, volume, minInterval)
+    every: Pair<Float, Float>? = null,
+) = AudioClip(id, category, "$AUDIO_ROOT/$file", loop, volume, minInterval, every)
 
 /**
  * Every clip the game knows about.
@@ -83,7 +96,13 @@ private fun clip(
  */
 val AUDIO_CLIPS: List<AudioClip> = listOf(
     clip("main_menu_music", AudioCategory.MUSIC, "music/main_menu_music.ogg", loop = true, volume = 0.5f),
-    clip("main_menu_ambience", AudioCategory.AMBIENCE, "ambience/main_menu_ambience.ogg", loop = true, volume = 0.45f),
+    // Not a bed. `loop = false` with an `every` range means this plays as occasional one-shots
+    // at random moments rather than running under the menu forever.
+    clip(
+        "main_menu_ambience", AudioCategory.AMBIENCE, "ambience/main_menu_ambience.ogg",
+        volume = 0.45f, every = 9f to 26f,
+    ),
+    // The fire is the opposite: a continuous bed, because a fire does not stop and start.
     clip("campfire", AudioCategory.AMBIENCE, "ambience/campfire.ogg", loop = true, volume = 0.4f),
     clip("sword_attack", AudioCategory.SFX, "sfx/sword_attack.ogg", minInterval = 0.08f),
     clip("heavy_attack", AudioCategory.SFX, "sfx/heavy_attack.ogg", minInterval = 0.15f),
@@ -135,6 +154,15 @@ data class AudioInventory(
 class AudioEngine(private val context: Context) {
     private val byId = AUDIO_CLIPS.associateBy { it.id }
 
+    /** Where the repeating clips' delays are scheduled. Created lazily, see [handler]. */
+    private var handlerOrNull: Handler? = null
+
+    /**
+     * Injected rather than calling [Random] inline so a test can hand in a fixed sequence and
+     * assert the exact schedule. Defaulting to the real thing keeps production unchanged.
+     */
+    var random: () -> Float = { Random.nextFloat() }
+
     /** Sound ids for the clips that decoded, keyed by clip id. */
     private val loadedSfx = mutableMapOf<String, Int>()
 
@@ -144,6 +172,34 @@ class AudioEngine(private val context: Context) {
     private val missing = mutableSetOf<String>()
     private val played = mutableSetOf<String>()
     private val lastPlayed = mutableMapOf<String, Long>()
+
+    /**
+     * Timers for the clips that repeat themselves, one runnable per clip.
+     *
+     * A [Handler] on the main looper rather than a background thread: the delay is tens of
+     * seconds, so there is nothing to gain from waking a worker, and a one-shot `MediaPlayer`
+     * has to be driven from the thread the engine was built on anyway.
+     */
+    private val repeating = mutableMapOf<String, Runnable>()
+
+    /**
+     * The main-looper handler, created on first use.
+     *
+     * Lazy because a `Handler` needs a looper that is prepared, and constructing the engine
+     * during composition must never fail. Returning null rather than throwing is what lets
+     * that promise hold.
+     */
+    private fun handler(): Handler? {
+        handlerOrNull?.let { return it }
+        if (Looper.myLooper() == null) return null
+        return Handler(Looper.getMainLooper()).also { handlerOrNull = it }
+    }
+
+    /**
+     * Clips something has asked for that are not running yet -- their file had not decoded,
+     * or they are parked behind a mute. Survives a mute so unmuting can bring them back.
+     */
+    private val wanted = mutableSetOf<String>()
 
     private var musicEnabled = true
     private var sfxEnabled = true
@@ -215,8 +271,12 @@ class AudioEngine(private val context: Context) {
      */
     fun play(id: String): Boolean {
         val entry = byId[id] ?: return false
-        if (entry.loop || entry.category != AudioCategory.SFX) return false
-        if (!sfxEnabled || suspended) return false
+        if (entry.loop || entry.category == AudioCategory.MUSIC) return false
+        val isRepeating = entry.every != null && entry.category == AudioCategory.AMBIENCE
+        if (!isRepeating && entry.category != AudioCategory.SFX) return false
+        if (!sfxEnabled && entry.category == AudioCategory.SFX) return false
+        if (!musicEnabled && entry.category == AudioCategory.AMBIENCE) return false
+        if (suspended) return false
         val soundId = loadedSfx[id] ?: return false
 
         val now = System.currentTimeMillis()
@@ -236,9 +296,18 @@ class AudioEngine(private val context: Context) {
      * Restarting a loop in progress is not idempotent -- two copies a fraction of a second
      * apart beat against each other -- so this is a no-op when the id is already sounding.
      */
+    /**
+     * Starts a music or ambience clip, looping or not.
+     *
+     * A looping clip opens a player and holds it. A clip with an `every` range is scheduled
+     * instead: it fires once as a one-shot and rearms itself, which is what makes the menu
+     * ambience arrive and leave rather than sitting under the title forever.
+     */
     fun start(id: String): Boolean {
         val entry = byId[id] ?: return false
-        if (!entry.loop || entry.category == AudioCategory.SFX) return false
+        if (entry.category == AudioCategory.SFX) return false
+        if (entry.every != null && !entry.loop) return scheduleRepeating(id)
+        if (!entry.loop) return false
         if (entry.category == AudioCategory.MUSIC && !musicEnabled) return false
         if (suspended) return false
         if (loops.containsKey(id)) return true
@@ -277,8 +346,71 @@ class AudioEngine(private val context: Context) {
         }
     }
 
-    /** Stops one looping clip, or every looping clip when called with no id. */
+    /**
+     * Arms a repeating clip, and rearms it after each firing.
+     *
+     * The gap is drawn from the clip's range rather than fixed, because a fixed gap is audible
+     * as a pulse: the player settles into the rhythm and stops hearing the sound as an event.
+     * The first play is immediate rather than delayed, so opening the menu has its ambience
+     * with it instead of starting in silence.
+     */
+    private fun scheduleRepeating(id: String): Boolean {
+        val entry = byId[id] ?: return false
+        if (entry.every == null) return false
+        if (suspended || !musicEnabled) return false
+        if (repeating.containsKey(id)) return true
+        val h = handler() ?: return false
+        // Immediate first firing, then the random gaps. Posting rather than playing inline so
+        // the runnable is already in the map when it runs -- otherwise a stop() between the
+        // two would leave a clip that could never be cancelled.
+        val fire = Runnable { fire(id, entry) }
+        repeating[id] = fire
+        h.post(fire)
+        return true
+    }
+
+    /**
+     * Fires a repeating clip once and rearms it.
+     *
+     * The runnable is dropped before playing so a `stop()` inside the play path -- or a clip
+     * that has since been stopped -- cannot be undone by the rearm that follows.
+     */
+    private fun fire(id: String, entry: AudioClip) {
+        repeating.remove(id)
+        play(id)
+        if (wanted.contains(id)) arm(id, entry)
+    }
+
+    /** Schedules the next firing of a repeating clip that is still wanted. */
+    private fun arm(id: String, entry: AudioClip) {
+        val h = handler() ?: return
+        val (lo, hi) = entry.every ?: return
+        val wait = lo + random() * maxOf(0f, hi - lo)
+        val next = Runnable { fire(id, entry) }
+        repeating[id] = next
+        h.postDelayed(next, (wait * 1000f).toLong())
+    }
+
+    /** Repeating clips currently scheduled. Exposed so the harness can assert on them. */
+    fun repeatingIds(): List<String> = repeating.keys.toList()
+
+    /**
+     * Stops one clip, or everything.
+     *
+     * Cancels repeating clips' timers as well as their players, and forgets the intent either
+     * way. Forgetting it matters most for a repeating clip: a menu ambience left wanted after
+     * the menu is torn down would keep firing one-shots at a screen nobody is on.
+     */
     fun stop(id: String? = null) {
+        val h = handler()
+        for ((key, runnable) in repeating.toList()) {
+            if (id != null && key != id) continue
+            h?.removeCallbacks(runnable)
+            repeating.remove(key)
+            if (id != null) wanted.remove(key) else wanted.clear()
+        }
+        if (id != null) wanted.remove(id)
+
         val targets = if (id != null) listOf(id) else loops.keys.toList()
         for (target in targets) {
             val player = loops.remove(target) ?: continue
@@ -294,10 +426,38 @@ class AudioEngine(private val context: Context) {
     /** Ids currently looping. Used by the verifier to assert a cue stops when it should. */
     fun playing(): List<String> = loops.keys.toList()
 
+    /**
+     * Turns the music and ambience mixers on or off.
+     *
+     * The volume alone is enough for the looping clips, and doing it that way rather than
+     * stopping the players is the whole point: `stop()` takes every loop with it, the fire
+     * included, so muting music used to silence the campfire as well and leave both silent for
+     * good. Taking the volume to zero mutes what is already playing and unmuting brings the
+     * very same players back, still in phase.
+     *
+     * A repeating clip has to be handled separately, because each firing is a fresh one-shot
+     * off the sound pool and the mixer volume does not gate it. Those are parked behind the
+     * mute and restarted on the way back, so turning music off and on does not shorten the
+     * loop or lose the ambience for good.
+     */
     fun setMusicEnabled(on: Boolean) {
         musicEnabled = on
-        if (!on) stop()
         applyVolumes()
+        val h = handler()
+        if (!on) {
+            for ((key, runnable) in repeating.toList()) {
+                h?.removeCallbacks(runnable)
+                repeating.remove(key)
+                // Remembered rather than dropped: `wanted` is the only thing that survives
+                // the mute, so losing it here would mean unmuting could not bring it back.
+                wanted.add(key)
+            }
+        } else if (!suspended) {
+            for (key in wanted) {
+                val entry = byId[key]
+                if (entry?.every != null && !repeating.containsKey(key)) arm(key, entry)
+            }
+        }
     }
 
     fun setSfxEnabled(on: Boolean) {

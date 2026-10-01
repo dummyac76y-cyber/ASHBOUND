@@ -32,6 +32,15 @@ export interface AudioClip {
   readonly loop: boolean
   readonly volume: number
   readonly minInterval: number
+  /**
+   * For a clip that plays intermittently rather than looping: the seconds range between
+   * repeats, picked at random each time. Null means the clip does not repeat itself.
+   *
+   * This is what separates the two ambience clips. The fire is a bed and loops; the menu
+   * ambience is a mood that arrives and leaves, and a bed under a title screen stops being
+   * noticed within about half a minute, which is the opposite of what it is for.
+   */
+  readonly every: readonly [number, number] | null
 }
 
 export const AUDIO_ROOT = 'audio'
@@ -40,7 +49,7 @@ const clip = (
   id: string,
   category: AudioCategory,
   file: string,
-  options: { loop?: boolean; volume?: number; minInterval?: number } = {},
+  options: { loop?: boolean; volume?: number; minInterval?: number; every?: readonly [number, number] } = {},
 ): AudioClip => ({
   id,
   category,
@@ -48,12 +57,20 @@ const clip = (
   loop: options.loop ?? false,
   volume: options.volume ?? 1,
   minInterval: options.minInterval ?? 0,
+  every: options.every ?? null,
 })
 
 export const AUDIO_CLIPS: readonly AudioClip[] = [
   clip('main_menu_music', 'music', 'music/main_menu_music.ogg', { loop: true, volume: 0.5 }),
 
-  clip('main_menu_ambience', 'ambience', 'ambience/main_menu_ambience.ogg', { loop: true, volume: 0.45 }),
+  // Not a bed. `loop: false` with an `every` range means this plays as occasional one-shots
+  // at random moments rather than running under the menu forever -- see the `every` field below.
+  clip('main_menu_ambience', 'ambience', 'ambience/main_menu_ambience.ogg', {
+    loop: false,
+    volume: 0.45,
+    every: [9, 26],
+  }),
+  // The fire is the opposite: a continuous bed, because a fire does not stop and start.
   clip('campfire', 'ambience', 'ambience/campfire.ogg', { loop: true, volume: 0.4 }),
 
   clip('sword_attack', 'sfx', 'sfx/sword_attack.ogg', { minInterval: 0.08 }),
@@ -105,7 +122,25 @@ export class AudioSystem {
   private suspended = false
   private readonly lastPlayed = new Map<string, number>()
 
-  constructor(private readonly now: () => number = () => performance.now() / 1000) {
+  /**
+   * Timers for the clips that repeat themselves: one per clip, each rearmed after it fires.
+   *
+   * Kept as a map of ids rather than of clips so `stop()` can cancel by id, and so `dispose`
+   * can prove it left nothing running. A clip asked for more than once reuses its timer.
+   */
+  private readonly repeating = new Map<string, ReturnType<typeof setTimeout>>()
+
+  /**
+   * Where the random gap comes from.
+   *
+   * Injected rather than calling `Math.random()` inline so a test can hand in a fixed
+   * sequence and assert the exact schedule. Defaulting to the real thing keeps the production
+   * path unchanged.
+   */
+  constructor(
+    private readonly now: () => number = () => performance.now() / 1000,
+    private readonly random: () => number = Math.random,
+  ) {
     for (const c of AUDIO_CLIPS) this.byId.set(c.id, c)
   }
 
@@ -180,10 +215,21 @@ export class AudioSystem {
     return this.buffers.has(id)
   }
 
+  /**
+   * Plays a clip once.
+   *
+   * Effects are the usual caller. The ambience clips that carry an `every` range can be played
+   * this way too, which is how their own timer fires them -- they are one-shots with a
+   * schedule attached, not loops.
+   */
   play(id: string): boolean {
     const entry = this.byId.get(id)
-    if (!entry || entry.loop || entry.category === 'music' || entry.category === 'ambience') return false
-    if (!this.sfxEnabled || this.suspended) return false
+    if (!entry || entry.loop || entry.category === 'music') return false
+    const isRepeating = entry.every !== null && entry.category === 'ambience'
+    if (!isRepeating && entry.category !== 'sfx') return false
+    if (!this.sfxEnabled && entry.category === 'sfx') return false
+    if (!this.musicEnabled && entry.category === 'ambience') return false
+    if (this.suspended) return false
     const buffer = this.buffers.get(id)
     const context = this.context
     if (!buffer || !context || context.state !== 'running') return false
@@ -198,15 +244,70 @@ export class AudioSystem {
     const trim = context.createGain()
     trim.gain.value = entry.volume
     source.connect(trim)
-    trim.connect(this.gains?.sfx ?? context.destination)
+    trim.connect(this.gains?.[entry.category] ?? context.destination)
     source.start()
     this.played.add(id)
     return true
   }
 
+  /**
+   * Arms a repeating clip, and rearms it after each firing.
+   *
+   * The gap is drawn from the clip's range rather than fixed, because a fixed gap is audible
+   * as a pulse: the player settles into the rhythm and stops hearing the sound as an event.
+   * The first play is immediate rather than delayed, so opening the menu has its ambience
+   * with it instead of starting in silence.
+   */
+  private scheduleRepeating(id: string): boolean {
+    const entry = this.byId.get(id)
+    if (!entry?.every) return false
+    if (this.suspended || !this.musicEnabled) return false
+    if (this.repeating.has(id)) return true
+
+    // Immediate first firing, then the random gaps. `setTimeout(…, 0)` rather than calling
+    // play() inline so the first play happens on a fresh task, after this method returns and
+    // with the timer already in the map -- otherwise a stop() between the two would leave a
+    // clip that could never be cancelled.
+    this.repeating.set(id, setTimeout(() => this.fire(id, entry), 0))
+    return true
+  }
+
+  /**
+   * Fires a repeating clip once and rearms it.
+   *
+   * The timer is dropped before playing so a `stop()` inside the play path -- or a clip that
+   * has since been stopped -- cannot be undone by the rearm that follows.
+   */
+  private fire(id: string, entry: AudioClip): void {
+    this.repeating.delete(id)
+    this.play(id)
+    if (this.wanted.has(id) || this.repeating.has(id)) this.arm(id, entry)
+  }
+
+  /** Schedules the next firing of a repeating clip that is still wanted. */
+  private arm(id: string, entry: AudioClip): void {
+    const [lo, hi] = entry.every ?? [0, 0]
+    const wait = lo + this.random() * Math.max(0, hi - lo)
+    this.repeating.set(id, setTimeout(() => this.fire(id, entry), Math.round(wait * 1000)))
+  }
+
+  /** Repeating clips currently scheduled. Exposed so the harness can assert on them. */
+  get repeatingIds(): readonly string[] {
+    return [...this.repeating.keys()]
+  }
+
+  /**
+   * Starts a music or ambience clip, looping or not.
+   *
+   * A looping clip opens a source and holds it. A clip with an `every` range is scheduled
+   * instead: it fires once as a one-shot and rearms itself, which is what makes the menu
+   * ambience arrive and leave rather than sitting under the title forever.
+   */
   start(id: string): boolean {
     const entry = this.byId.get(id)
-    if (!entry || !entry.loop || entry.category === 'sfx') return false
+    if (!entry || entry.category === 'sfx') return false
+    if (entry.every && !entry.loop) return this.scheduleRepeating(id)
+    if (!entry.loop) return false
     if (entry.category === 'music' && !this.musicEnabled) return false
     if (this.suspended || this.loops.has(id)) return this.loops.has(id)
 
@@ -236,11 +337,23 @@ export class AudioSystem {
     return true
   }
 
+  /**
+   * Stops one clip, or everything.
+   *
+   * Cancels repeating clips' timers as well as their sources, and forgets the intent either
+   * way. Forgetting it matters most for a repeating clip: a menu ambience left wanted after
+   * the menu is torn down would keep firing one-shots at a screen nobody is on.
+   */
   stop(id?: string): void {
-    // Forget the intent too, or a cue that was asked for early and then stopped would
-    // resurrect itself the next time the table finished loading.
     if (id) this.wanted.delete(id)
     else this.wanted.clear()
+
+    for (const [key, timer] of [...this.repeating]) {
+      if (id && key !== id) continue
+      clearTimeout(timer)
+      this.repeating.delete(key)
+    }
+
     const targets = id ? [id] : [...this.loops.keys()]
     for (const target of targets) {
       const source = this.loops.get(target)
@@ -270,6 +383,25 @@ export class AudioSystem {
   setMusicEnabled(on: boolean): void {
     this.musicEnabled = on
     this.applyGains()
+    // A repeating clip is not affected by the mixer, because each firing is a fresh one-shot
+    // and the mixer only scales what is already connected -- so with the gate on `play` alone
+    // the ambience would keep firing silently forever. Park the timers instead, and restart
+    // them on the way back so turning music off and on does not shorten the loop.
+    if (!on) {
+      for (const [key, timer] of [...this.repeating]) {
+        clearTimeout(timer)
+        this.repeating.delete(key)
+        // Remembered rather than dropped: `wanted` is what the game asked for, and it is the
+        // only place that survives the mute. Losing it here would mean unmuting could not
+        // bring the ambience back.
+        this.wanted.add(key)
+      }
+    } else {
+      for (const key of this.wanted) {
+        const entry = this.byId.get(key)
+        if (entry?.every && !this.repeating.has(key)) this.arm(key, entry)
+      }
+    }
   }
 
   setSfxEnabled(on: boolean): void {
@@ -317,6 +449,7 @@ export class AudioSystem {
     this.stop()
     this.buffers.clear()
     this.loops.clear()
+    this.repeating.clear()
     const context = this.context
     this.context = null
     if (context) void context.close().catch(() => {})
