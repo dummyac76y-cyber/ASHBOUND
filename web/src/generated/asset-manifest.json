@@ -5,6 +5,8 @@
   "./bg/main_menu_campfire.png": "d1c6c50d",
   "./bg/main_menu_overlay.png": "cf03b987",
   "./bg/menu_buttons/campfire_flame.png": "e4528510",
+  "./bg/menu_buttons/character_idle_a.png": "4aab50fa",
+  "./bg/menu_buttons/character_idle_b.png": "11bbd169",
   "./bg/menu_buttons/credits.png": "e1df7a56",
   "./bg/menu_buttons/load_game.png": "62f4d9f0",
   "./bg/menu_buttons/quit.png": "b477f3f0",

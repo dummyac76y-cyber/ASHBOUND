@@ -835,20 +835,23 @@ button.menu-setting:hover {
   pointer-events: none;
 }
 
-/* The backdrop's own box, reproduced.
+/* The backdrop's own box, reproduced, and sized from script.
    The static art gets this for free: it is an <img> with `object-fit: contain`, which
-   letterboxes itself. A div has no such thing, so percentages against the full root would
-   be percentages of the letterbox bands rather than of the artwork -- which puts the fire
-   thousands of pixels from the background on a portrait phone. This is that same box, so
-   every percentage below is a percentage of the 1280x720 canvas. */
-.main-menu-fire-canvas {
+   letterboxes itself. A div has no such thing, so percentages against the full root are
+   percentages of the letterbox bands rather than of the artwork, and anything positioned
+   that way drifts off the art by however far the viewport departs from 16:9. That is how
+   the hit areas came to sit 100+ canvas pixels from their own plates on an ordinary
+   browser window, so only fullscreen -- which is 16:9 -- ever looked right.
+
+   CSS cannot express this box on its own. `width: 100%` with `aspect-ratio` and
+   `max-height: 100%` looks right, but max-height clamps the height while leaving the
+   width definite, so the box silently loses its ratio and comes out as wide as the
+   viewport. That works only when the viewport is taller than 16:9 and is wrong in the
+   other direction. `syncCanvasBoxes` measures the real contain rect instead and writes
+   these boxes in pixels, which is exact on both axes. */
+.main-menu-fire-canvas,
+.menu-art-buttons {
   position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: 100%;
-  max-height: 100%;
-  aspect-ratio: 1280 / 720;
   pointer-events: none;
 }
 
@@ -928,12 +931,6 @@ button.menu-setting:hover {
    `hidden` is what takes the plates off a sub-screen. `display` is set explicitly rather
    than left to the attribute, because these are absolutely positioned elements and
    `.menu-art-buttons[hidden] { display: none }` below is what actually hides them. */
-
-.menu-art-buttons {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
 
 .menu-art-buttons[hidden] {
   display: none;

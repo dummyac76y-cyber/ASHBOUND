@@ -890,9 +890,22 @@ console.log('\n5. the composition scales as one piece, at ordinary viewports')
       const backdrop = document.querySelector('.main-menu-backdrop')
       const br = backdrop.getBoundingClientRect()
       const out = { art: [], fit: [] }
+      // The plates no longer share the backdrop's *element* box: they sit in the contain
+      // box that syncCanvasBoxes measures, which is a different rectangle at any viewport
+      // that letterboxes. What has to hold is that the plate's artwork lands on the
+      // backdrop's artwork, so that is what is compared -- the contain rect of the root.
+      const scale = Math.min(br.width / 1280, br.height / 720)
+      const artLeft = br.left + (br.width - 1280 * scale) / 2
+      const artTop = br.top + (br.height - 720 * scale) / 2
       for (const img of document.querySelectorAll('.menu-art-button')) {
         const b = img.getBoundingClientRect()
-        out.art.push({ sameBox: Math.abs(b.width - br.width) < 0.5 && Math.abs(b.height - br.height) < 0.5 })
+        out.art.push({
+          sameBox:
+            Math.abs(b.width - 1280 * scale) < 0.5 &&
+            Math.abs(b.height - 720 * scale) < 0.5 &&
+            Math.abs(b.left - artLeft) < 0.5 &&
+            Math.abs(b.top - artTop) < 0.5,
+        })
         const hit = document.querySelector(`[data-testid="${img.dataset.testid.replace('_art_', '_')}"]`)
         const hr = hit ? hit.getBoundingClientRect() : null
         if (hr) out.fit.push(hr.left >= -0.5 && hr.top >= -0.5 && hr.right <= window.innerWidth + 0.5 && hr.bottom <= window.innerHeight + 0.5)
@@ -949,7 +962,7 @@ console.log('\n5. the composition scales as one piece, at ordinary viewports')
       return out
     })
     check(
-      `at ${w}x${h} every plate shares the backdrop's box`,
+      `at ${w}x${h} every plate lands on the backdrop's artwork`,
       r.art.length === 5 && r.art.every((a) => a.sameBox),
       `${r.art.filter((a) => a.sameBox).length}/${r.art.length} plates`,
     )
@@ -973,7 +986,82 @@ console.log('\n5. the composition scales as one piece, at ordinary viewports')
 }
 
 // ---------------------------------------------------------------------------------
-console.log('\n6. the simulation is held until START GAME, and runs after it')
+console.log('\n6. every hit area sits on its own plate, at any viewport shape')
+// ---------------------------------------------------------------------------------
+// This is the check that was missing when the credits control was reported broken.
+//
+// The plates are <img> with `object-fit: contain`, so they letterbox themselves. The hit
+// areas are absolutely positioned divs, which have no such behaviour: sized as a
+// percentage of the full root they are percentages of the letterbox bands instead of the
+// artwork, so they drift off their plates by however far the viewport departs from 16:9.
+// At exactly 16:9 the two coincide, which is why only fullscreen ever looked right --
+// and why the plate-shape checks above all passed while every control was unclickable in
+// an ordinary browser window.
+//
+// Deliberately includes viewports wider than 16:9 (an ordinary window) as well as taller
+// ones, because a contain box written in CSS is correct in only one of those directions.
+{
+  const OUTSET = 4 // the deliberate outset each hit area is given over its plate
+  for (const [w, h] of [
+    [1280, 720],  // exactly 16:9
+    [1280, 600],  // wider than 16:9
+    [1366, 620],  // wider, an ordinary laptop window
+    [844, 390],   // much wider
+    [1024, 768],  // taller than 16:9
+    [390, 844],   // much taller, a phone in portrait
+  ]) {
+    const page = await browser.newPage({ viewport: { width: w, height: h } })
+    await page.goto(`${base}/`, { waitUntil: 'networkidle' })
+    await page.waitForSelector('.main-menu-ready')
+    const res = await page.evaluate(
+      ([art, outset]) => {
+        const plate = document.querySelector('.menu-art-button')
+        const pb = plate.getBoundingClientRect()
+        const scale = Math.min(pb.width / 1280, pb.height / 720)
+        const artLeft = pb.left + (pb.width - 1280 * scale) / 2
+        const artTop = pb.top + (pb.height - 720 * scale) / 2
+        return art.map((a) => {
+          const n = document.querySelector(`[data-testid="main_menu_${a.id}"]`)
+          const r = n.getBoundingClientRect()
+          const cx = (r.left - artLeft) / scale
+          const cy = (r.top - artTop) / scale
+          const cw = r.width / scale
+          const ch = r.height / scale
+          const wantL = a.box.x - outset
+          const wantT = a.box.y - outset
+          const wantR = a.box.x + a.box.w + outset
+          const wantB = a.box.y + a.box.h + outset
+          return {
+            id: a.id,
+            // The hit area must cover the plate outright. It is allowed to be bigger --
+            // that is the point of the minimum touch target -- but it may never be
+            // smaller or shifted off the plate.
+            covers:
+              cx <= wantL + 1.5 &&
+              cy <= wantT + 1.5 &&
+              cx + cw >= wantR - 1.5 &&
+              cy + ch >= wantB - 1.5,
+            slackL: +(wantL - cx).toFixed(0),
+            slackR: +(cx + cw - wantR).toFixed(0),
+          }
+        })
+      },
+      [MENU_BUTTON_ART, OUTSET],
+    )
+    const off = res.filter((x) => !x.covers)
+    check(
+      `at ${w}x${h} (${(w / h).toFixed(2)}:1) every hit area covers its own plate`,
+      off.length === 0,
+      off.length
+        ? off.map((x) => `${x.id} does not reach its plate`).join('; ')
+        : `all 5 cover their plate, ${res.map((x) => `${x.id} +${x.slackL}/${x.slackR}px`).join(', ')}`,
+    )
+    await page.close()
+  }
+}
+
+// ---------------------------------------------------------------------------------
+console.log('\n7. the simulation is held until START GAME, and runs after it')
 // ---------------------------------------------------------------------------------
 {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
@@ -989,7 +1077,7 @@ console.log('\n6. the simulation is held until START GAME, and runs after it')
 }
 
 // ---------------------------------------------------------------------------------
-console.log('\n7. the campfire is animated, and stays on the same spot every frame')
+console.log('\n8. the campfire is animated, and stays on the same spot every frame')
 // ---------------------------------------------------------------------------------
 {
   // Measured from the supplied file, not taken on trust: the numbers the placement is
@@ -1105,6 +1193,7 @@ console.log('\n7. the campfire is animated, and stays on the same spot every fra
   for (const [w, h] of [
     [1280, 720],
     [1920, 1080],
+    [1280, 600],
     [390, 844],
   ]) {
     await page.setViewportSize({ width: w, height: h })
@@ -1147,7 +1236,7 @@ console.log('\n7. the campfire is animated, and stays on the same spot every fra
   await page.close()
 }
 
-console.log('\n8. Android mirrors the same menu')
+console.log('\n9. Android mirrors the same menu')
 // ---------------------------------------------------------------------------------
 {
   const ktMenu = readFileSync(KT_MENU, 'utf8')

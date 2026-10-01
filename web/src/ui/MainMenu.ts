@@ -73,7 +73,7 @@ export const CAMPFIRE_FLAME_CELL = 128
  * thirds of a second, which reads as a fire breathing. Faster would shimmer, and a
  * shimmer over pixel art that is otherwise held perfectly still looks like a fault.
  */
-export const CAMPFIRE_FLAME_FPS = 12
+export const CAMPFIRE_FLAME_FPS = 8
 
 /** Where the cell's top-left goes on the 1280x720 canvas. See the note above. */
 export const CAMPFIRE_FLAME_CELL_X = 686
@@ -200,6 +200,10 @@ export class MainMenu {
   private readonly ui: HTMLDivElement
   /** The pending fire-animation frame, so `dispose` can cancel it. */
   private fireFrame = 0
+  /** Boxes sized to the backdrop's own contain rect. See `syncCanvasBoxes`. */
+  private readonly canvasBoxes: HTMLElement[] = []
+  /** Watches the menu for resizes, so those boxes follow it. */
+  private resizeObserver: ResizeObserver | null = null
 
   private readonly screens = new Map<MenuScreen, HTMLElement>()
   /** The supplied plates and their hit areas. Shown on the title screen only. */
@@ -270,6 +274,10 @@ export class MainMenu {
     this.buildQuitScreen(handlers)
     this.buildCreditsScreen()
     this.artButtons = this.buildArtButtons(handlers)
+    // Both of these are positioned by percentage, and a percentage of the root is a
+    // percentage of the letterbox bands rather than of the artwork. They get the real
+    // contain rect instead.
+    this.canvasBoxes.push(fireCanvas, this.artButtons)
 
     // Every screen is mounted up front and switched with `hidden`, rather than built on
     // demand. Each screen is a fixed piece of markup, so there is nothing to save by
@@ -290,6 +298,13 @@ export class MainMenu {
     this.show('main')
     this.syncFullscreenLabel()
     this.startFireAnimation()
+    this.syncCanvasBoxes()
+    // A letterboxed menu is only registered while its box is right, so a resize has to
+    // re-measure rather than leave the artwork where it was.
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(() => this.syncCanvasBoxes())
+      this.resizeObserver.observe(this.root)
+    }
 
     // Leaving the menu by other means (Esc, the browser's own fullscreen gesture)
     // still has to leave the label truthful.
@@ -559,6 +574,31 @@ export class MainMenu {
   }
 
   /**
+   * Puts every canvas box on the backdrop's own rectangle.
+   *
+   * The backdrop is `contain` inside the menu, so the artwork occupies a letterboxed
+   * rectangle within it rather than filling it. This measures that rectangle the same way
+   * `object-fit: contain` would and writes it out in pixels, which keeps the fire and the
+   * button hit areas registered to the background on any viewport, in either direction
+   * from 16:9.
+   */
+  private syncCanvasBoxes(): void {
+    const rect = this.root.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return
+    const scale = Math.min(rect.width / CANVAS_WIDTH, rect.height / CANVAS_HEIGHT)
+    const width = CANVAS_WIDTH * scale
+    const height = CANVAS_HEIGHT * scale
+    const left = (rect.width - width) / 2
+    const top = (rect.height - height) / 2
+    for (const box of this.canvasBoxes) {
+      box.style.left = `${left}px`
+      box.style.top = `${top}px`
+      box.style.width = `${width}px`
+      box.style.height = `${height}px`
+    }
+  }
+
+  /**
    * Plays the flame and flickers the light.
    *
    * One rAF drives both from a single clock, so the light and the flame stay in step
@@ -584,6 +624,7 @@ export class MainMenu {
   /** Detaches the menu. The caller is about to hand the screen to something else. */
   dispose(): void {
     cancelAnimationFrame(this.fireFrame)
+    this.resizeObserver?.disconnect()
     this.root.remove()
   }
 }
