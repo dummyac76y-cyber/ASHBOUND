@@ -837,3 +837,85 @@ button.menu-setting:hover {
   -webkit-user-drag: none;
   pointer-events: none;
 }
+
+/* ---------- Supplied button artwork ----------
+   Each entry is a 1280x720 canvas holding one pre-composed plate, already positioned
+   against the background -- the same arrangement as the character and the campfire. The
+   image is therefore drawn across the whole canvas, and the plate's position comes from
+   the canvas itself rather than from any layout here.
+
+   The clickable area is a transparent element placed over the plate using the plate's
+   measured bounds, as a percentage of the canvas. Percentages rather than pixels because
+   the artwork is scaled to fit: a pixel offset would land in the right place at exactly
+   one viewport size and drift everywhere else. The percentage of a 1280x720 canvas in a
+   box scaled by `contain` is the same fraction of that box at any size.
+
+   `hidden` is what takes the plates off a sub-screen. `display` is set explicitly rather
+   than left to the attribute, because these are absolutely positioned elements and
+   `.menu-art-buttons[hidden] { display: none }` below is what actually hides them. */
+
+.menu-art-buttons {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.menu-art-buttons[hidden] {
+  display: none;
+}
+
+.menu-art-button {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+
+/* Transparent hit area over a plate. The visible button is the artwork beneath it. */
+.menu-art-hit {
+  position: absolute;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  pointer-events: auto;
+  /* The focus ring has to be visible against artwork that may be any colour, so it is
+     drawn as an outline offset outside the hit area rather than inset into it. */
+  outline: 3px solid rgba(255, 224, 160, 0.9);
+  outline-offset: 2px;
+}
+
+.menu-art-hit:focus-visible {
+  outline-color: #ffe0a0;
+}
+
+.menu-art-hit:hover {
+  /* A light wash, enough to register as a hover without recolouring supplied art into
+     something it was not drawn as. */
+  background: rgba(255, 236, 190, 0.1);
+}
+
+/* The title, aligned to the plates' own left edge and sitting above the first plate,
+   which starts at y=130. No panel behind it: the supplied art already provides the
+   backdrop, and a panel would be a second background on top of the first. */
+.menu-title-block {
+  position: absolute;
+  left: 6.4844%;
+  top: 4.8611%;
+  width: 25.9375%;
+  text-align: left;
+}
+
+.menu-title-block .menu-title {
+  font-size: clamp(22px, 3.4vw, 44px);
+  letter-spacing: 0.1em;
+  text-shadow: 0 3px 0 #2a1d12, 0 0 18px rgba(255, 198, 116, 0.3);
+}
+
+.menu-title-block .menu-subtitle {
+  font-size: 12px;
+}

@@ -38,6 +38,21 @@ const MENU_OVERLAY = 'main_menu_overlay.png'
 /** The campfire overlay. */
 const MENU_CAMPFIRE = 'main_menu_campfire.png'
 
+/**
+ * The supplied button plates, with each plate's visible bounds measured from its own
+ * alpha channel. These are what the artwork claims about itself; the check below
+ * re-measures them from the served file, so a wrong number here fails rather than hides.
+ */
+const MENU_BUTTON_ART = [
+  { id: 'start_game', label: 'START GAME', file: 'start_game.png', box: { x: 83, y: 130, w: 332, h: 113 } },
+  { id: 'load_game', label: 'LOAD GAME', file: 'load_game.png', box: { x: 80, y: 266, w: 335, h: 114 } },
+  { id: 'settings', label: 'SETTINGS', file: 'settings.png', box: { x: 80, y: 403, w: 335, h: 107 } },
+  { id: 'quit', label: 'QUIT', file: 'quit.png', box: { x: 83, y: 540, w: 332, h: 107 } },
+  { id: 'credits', label: 'CREDITS', file: 'credits.png', box: { x: 1196, y: 33, w: 52, h: 58 } },
+]
+
+const ANDROID_BUTTONS = join(repoRoot, 'app/src/main/assets/bg/menu_buttons')
+
 const ANDROID_ASSET = join(repoRoot, 'app/src/main/assets/bg', MENU_BG)
 const WEB_ASSET = join(webRoot, 'public/bg', MENU_BG)
 const ANDROID_OVERLAY = join(repoRoot, 'app/src/main/assets/bg', MENU_OVERLAY)
@@ -476,9 +491,11 @@ console.log('\n3. the four menu entries, and what each one does')
     return {
       menu: Boolean(root),
       screen: root?.dataset.screen ?? null,
-      labels: [...document.querySelectorAll('.main-menu-ui .menu-button')]
+      // The label is baked into the supplied plate, so the entry's name comes from its
+      // accessible label rather than from text content.
+      labels: [...document.querySelectorAll('.menu-art-hit')]
         .filter((n) => n.offsetParent !== null)
-        .map((n) => n.textContent.trim().toUpperCase()),
+        .map((n) => (n.getAttribute('aria-label') ?? '').toUpperCase()),
       visiblePanel: visible?.dataset.testid ?? null,
       hudHidden: document.querySelector('.hud')?.hidden ?? null,
       controlsHidden: document.querySelector('.controls')?.hidden ?? null,
@@ -489,20 +506,31 @@ console.log('\n3. the four menu entries, and what each one does')
           return n ? `${s}:${getComputedStyle(n).position}` : `${s}:MISSING`
         }).join(' ')
       })(),
-      allButtons: [...document.querySelectorAll('.main-menu-ui button')].map((n) => n.textContent.trim().toUpperCase()),
+      platesPresent: document.querySelectorAll('.menu-art-button').length,
+      allButtons: [...document.querySelectorAll('.main-menu-ui button')].map(
+        (n) => (n.getAttribute('aria-label') ?? n.textContent).trim().toUpperCase(),
+      ),
     }
   })
 
   check('the title screen is showing on load', labels.menu && labels.screen === 'main', `screen ${labels.screen}`)
   check(
-    'it carries exactly the four entries, in order',
-    JSON.stringify(labels.labels) === JSON.stringify(['START GAME', 'LOAD GAME', 'SETTINGS', 'QUIT']),
+    'it carries the four entries in order, followed by the supplied credits control',
+    JSON.stringify(labels.labels) === JSON.stringify(['START GAME', 'LOAD GAME', 'SETTINGS', 'QUIT', 'CREDITS']),
     labels.labels.join(' | '),
   )
-  const forbidden = ['DUEL ONLINE', 'PRACTICE', 'CHARACTERS', 'CREDITS'].filter((f) => labels.allButtons.some((b) => b.includes(f)))
-  check('and none of the entries that were ruled out are present', forbidden.length === 0, forbidden.length ? forbidden.join(', ') : 'none of DUEL ONLINE / PRACTICE / CHARACTERS / CREDITS')
+  // CREDITS was on this list and came off it: the supplied artwork includes a credits
+  // control and the user identified it as such, reversing the earlier instruction.
+  const forbidden = ['DUEL ONLINE', 'PRACTICE', 'CHARACTERS'].filter((f) => labels.allButtons.some((b) => b.includes(f)))
+  check('and none of the entries that were ruled out are present', forbidden.length === 0, forbidden.length ? forbidden.join(', ') : 'none of DUEL ONLINE / PRACTICE / CHARACTERS')
+  check(
+    'the supplied credits control is wired up rather than left as decoration',
+    labels.allButtons.includes('CREDITS'),
+    `CREDITS ${labels.allButtons.includes('CREDITS') ? 'present' : 'missing'}`,
+  )
   check('the in-game HUD is hidden behind the menu', labels.hudHidden === true, `hud.hidden ${labels.hudHidden}`)
   check('and so are the touch controls', labels.controlsHidden === true, `controls.hidden ${labels.controlsHidden}`)
+  check('every supplied plate is on the menu', labels.platesPresent === 5, `${labels.platesPresent} plates`)
   check(
     'the backdrop, the character, the campfire and the UI are four separate layers',
     labels.layerChain ===
@@ -510,8 +538,108 @@ console.log('\n3. the four menu entries, and what each one does')
     labels.layerChain,
   )
 
+  // --- The supplied plates line up with their clickable areas -------------------
+  //
+  // The plate is a full-canvas image, so the clickable element over it is positioned as
+  // a percentage of that canvas. Nothing in the layout would catch a wrong percentage --
+  // the button would still be clickable, it would just be in the wrong place, and the
+  // pressable area could easily miss the visible plate. So each plate's ink is re-read
+  // from the served file and compared against where its hit area actually is.
+  const plateState = await page.evaluate(async (arts) => {
+    const backdrop = document.querySelector('.main-menu-backdrop')
+    const bb = backdrop.getBoundingClientRect()
+    const out = []
+    for (const art of arts) {
+      const img = document.querySelector(`[data-testid="main_menu_art_${art.id}"]`)
+      const hit = document.querySelector(`[data-testid="main_menu_${art.id}"]`)
+      if (!img || !hit) {
+        out.push({ id: art.id, missing: true })
+        continue
+      }
+      await img.decode()
+      const c = document.createElement('canvas')
+      c.width = img.naturalWidth
+      c.height = img.naturalHeight
+      const g = c.getContext('2d')
+      g.drawImage(img, 0, 0)
+      const d = g.getImageData(0, 0, c.width, c.height).data
+      let minX = Infinity
+      let minY = Infinity
+      let maxX = -1
+      let maxY = -1
+      let visible = 0
+      for (let y = 0; y < c.height; y++) {
+        for (let x = 0; x < c.width; x++) {
+          if (d[(y * c.width + x) * 4 + 3] > 8) {
+            visible++
+            if (x < minX) minX = x
+            if (y < minY) minY = y
+            if (x > maxX) maxX = x
+            if (y > maxY) maxY = y
+          }
+        }
+      }
+      const ir = img.getBoundingClientRect()
+      const hr = hit.getBoundingClientRect()
+      const sx = ir.width / c.width
+      const sy = ir.height / c.height
+      out.push({
+        id: art.id,
+        natural: { w: c.width, h: c.height },
+        visibleRatio: visible / (c.width * c.height),
+        ink: { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 },
+        artBox: { left: ir.left, top: ir.top, width: ir.width, height: ir.height },
+        backdrop: { left: bb.left, top: bb.top, width: bb.width, height: bb.height },
+        hit: { left: hr.left, top: hr.top, width: hr.width, height: hr.height },
+        // Where the ink sits on screen, from the image's own placement.
+        inkOnScreen: {
+          left: ir.left + minX * sx,
+          top: ir.top + minY * sy,
+          right: ir.left + (maxX + 1) * sx,
+          bottom: ir.top + (maxY + 1) * sy,
+        },
+      })
+    }
+    return out
+  }, MENU_BUTTON_ART)
+
+  for (const [i, art] of MENU_BUTTON_ART.entries()) {
+    const st = plateState[i]
+    check(`the ${art.label} plate is present as artwork and as a control`, !st.missing, `[data-testid="main_menu_art_${art.id}"]`)
+    if (st.missing) continue
+    check(
+      `the ${art.label} plate is a full-canvas image like the other supplied artwork`,
+      st.natural.w === 1280 && st.natural.h === 720,
+      `${st.natural.w}x${st.natural.h}`,
+    )
+    check(
+      `and is drawn in the backdrop's box, so it registers against the background`,
+      Math.abs(st.artBox.left - st.backdrop.left) < 0.5 &&
+        Math.abs(st.artBox.top - st.backdrop.top) < 0.5 &&
+        Math.abs(st.artBox.width - st.backdrop.width) < 0.5 &&
+        Math.abs(st.artBox.height - st.backdrop.height) < 0.5,
+      `${st.artBox.left.toFixed(1)},${st.artBox.top.toFixed(1)} ${st.artBox.width.toFixed(1)}x${st.artBox.height.toFixed(1)}`,
+    )
+    // The measured ink must match what the artwork is documented to contain, otherwise
+    // the numbers used to position the hit area are describing the wrong thing.
+    const b = art.box
+    check(
+      `the ${art.label} plate sits where the artwork declares`,
+      Math.abs(st.ink.x - b.x) <= 1 && Math.abs(st.ink.y - b.y) <= 1 && Math.abs(st.ink.w - b.w) <= 1 && Math.abs(st.ink.h - b.h) <= 1,
+      `ink x ${st.ink.x}..${st.ink.x + st.ink.w - 1}, y ${st.ink.y}..${st.ink.y + st.ink.h - 1}, declared x ${b.x}..${b.x + b.w - 1}, y ${b.y}..${b.y + b.h - 1}`,
+    )
+    check(
+      `and the ${art.label} control covers its plate`,
+      st.hit.left <= st.inkOnScreen.left + 0.5 &&
+        st.hit.top <= st.inkOnScreen.top + 0.5 &&
+        st.hit.left + st.hit.width >= st.inkOnScreen.right - 0.5 &&
+        st.hit.top + st.hit.height >= st.inkOnScreen.bottom - 0.5,
+      `hit ${st.hit.left.toFixed(1)},${st.hit.top.toFixed(1)} ${st.hit.width.toFixed(1)}x${st.hit.height.toFixed(1)} vs plate ${st.inkOnScreen.left.toFixed(1)},${st.inkOnScreen.top.toFixed(1)} ${(st.inkOnScreen.right - st.inkOnScreen.left).toFixed(1)}x${(st.inkOnScreen.bottom - st.inkOnScreen.top).toFixed(1)}`,
+    )
+  }
+
   // LOAD GAME
-  await page.click('[data-testid="main_menu_load"]')
+  await page.click('[data-testid="main_menu_load_game"]')
   const load = await page.evaluate(() => {
     const p = document.querySelector('[data-testid="main_menu_screen_load"]')
     if (!p || p.hidden) return null
@@ -577,7 +705,7 @@ console.log('\n3. the four menu entries, and what each one does')
   await page.click('.menu-panel:not([hidden]) [data-testid="main_menu_back"]')
 
   // START GAME
-  await page.click('[data-testid="main_menu_main"]')
+  await page.click('[data-testid="main_menu_start_game"]')
   await page.waitForTimeout(120)
   const started = await page.evaluate(() => ({
     menuGone: !document.querySelector('.main-menu'),
@@ -645,7 +773,29 @@ console.log('\n5. Android mirrors the same menu')
   const labels = ['START GAME', 'LOAD GAME', 'SETTINGS', 'QUIT']
   const found = labels.filter((l) => ktMenu.includes(`"${l}"`))
   check('Android offers the same four entries', found.length === 4, found.join(', '))
-  const forbidden = ['DUEL ONLINE', 'PRACTICE', 'CHARACTERS', 'CREDITS'].filter((f) => ktMenu.includes(f))
+
+  // The supplied plates, on both engines.
+  for (const art of MENU_BUTTON_ART) {
+    check(`Android loads the ${art.label} plate from the assets tree`, existsSync(join(ANDROID_BUTTONS, art.file)), `bg/menu_buttons/${art.file}`)
+  }
+  check(
+    'Android declares the same plate bounds, so its hit areas land on the same pixels',
+    // Bounds live under `box` here, so reading a.x directly would compare "undefined".
+    MENU_BUTTON_ART.every((a) =>
+      ktMenu.includes(
+        `"${a.id}", "${a.label}", "${a.file}", ${a.box.x}, ${a.box.y}, ${a.box.w}, ${a.box.h}`,
+      ),
+    ),
+    'id, label, file, x, y, w, h per plate',
+  )
+  check('Android reads the plates from the same folder the web build does', ktMenu.includes('"bg/menu_buttons/$file"'), 'assets/bg/menu_buttons/<file>')
+  check('and draws each across the whole canvas rather than sizing it to the plate', /Image\(image, null, Modifier\.fillMaxSize\(\), contentScale = ContentScale\.Fit\)/.test(ktMenu), 'each plate is fillMaxSize + Fit')
+  check('Android scales the canvas box itself, since Compose has no object-fit', /min\(w \/ CANVAS_WIDTH\.toFloat\(\), h \/ CANVAS_HEIGHT\.toFloat\(\)\)/.test(ktMenu), 'canvasBox() computes the letterbox')
+  check('and gives every control an accessible name, the baked-in label being invisible to one', /contentDescription = art\.label/.test(ktMenu), 'semantics on each hit area')
+  check('Android wires the supplied credits control rather than leaving it decorative', ktMenu.includes('"credits"') && ktMenu.includes('MenuScreen.CREDITS'), 'credits -> CREDITS screen')
+  check('and Android has that credits screen', /MenuScreen\.CREDITS -> MenuPanel\("CREDITS"/.test(ktMenu), 'credits panel')
+
+  const forbidden = ['DUEL ONLINE', 'PRACTICE', 'CHARACTERS'].filter((f) => ktMenu.includes(f))
   check('and none of the ruled-out entries appear there either', forbidden.length === 0, forbidden.length ? forbidden.join(', ') : 'none present')
 
   check('Android has a load screen with an honest empty state', /LOAD GAME/.test(ktMenu) && /No saved games/.test(ktMenu), 'empty state present')
@@ -653,7 +803,11 @@ console.log('\n5. Android mirrors the same menu')
   check('and a settings screen', /SETTINGS/.test(ktMenu))
   check('Android disables controls that have nothing behind them', /menu-setting-disabled/.test(ktMenu), 'disabled rows')
 
-  check('QUIT really exits the app on Android, unlike the web which returns to the title', /finish\(\)/.test(ktScreen) && /exitProcess\(0\)/.test(ktScreen), 'finish() with exitProcess as the backstop')
+  check(
+    'QUIT really exits the app on Android, unlike the web which returns to the title',
+    /finish\(\)/.test(ktMenu + ktScreen) && /exitProcess\(0\)/.test(ktMenu + ktScreen),
+    'finish() with exitProcess as the backstop',
+  )
   check('and Android wires it to the menu', /MainMenuAction\.Quit/.test(ktScreen))
   check('while the web returns to the title instead of trying to close the tab', !codeOnly(menuTs).includes('window.close') && !codeOnly(mainTs).includes('window.close'), 'no window.close call anywhere in the web build')
 

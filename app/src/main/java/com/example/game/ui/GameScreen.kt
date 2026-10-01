@@ -19,12 +19,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
-import androidx.activity.ComponentActivity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import com.example.game.engine.GameWorld
 import kotlin.math.min
-import kotlin.system.exitProcess
 
 /**
  * Main game screen composable.
@@ -175,26 +173,4 @@ fun GameScreen(modifier: Modifier = Modifier) {
             )
         }
     }
-}
-
-/**
- * Leaves the app for real.
- *
- * `finish()` is the correct call: it unwinds the activity properly, so Android can
- * reclaim its window and any Compose state is disposed as usual. `exitProcess` is only
- * a backstop for the case where there is no activity to finish -- which should not
- * happen in normal use, but a QUIT button that does nothing is worse than a blunt one.
- */
-private fun android.content.Context.quitApp() {
-    var finished = false
-    var current: android.content.Context? = this
-    while (current != null) {
-        if (current is ComponentActivity) {
-            current.finish()
-            finished = true
-            break
-        }
-        current = current.baseContext?.takeIf { it !== current }
-    }
-    if (!finished) exitProcess(0)
 }
