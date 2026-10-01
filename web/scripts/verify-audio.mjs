@@ -13,6 +13,7 @@
  * missing files are verified to be missing.
  */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -382,6 +383,36 @@ section('Missing assets are survivable')
 check('the web loader reports rather than throws', /missing:\s*readonly string\[\]/.test(WEB_SYSTEM))
 check('the web play returns a boolean', /play\(id: string\): boolean/.test(WEB_SYSTEM))
 check('the web unlock is gesture-gated', /unlock\(\)/.test(WEB_MAIN))
+// The menu asks for its cues before the player has touched anything, and no browser will let
+// an AudioContext make noise until it has. So the cues are asked for, refused, and
+// remembered -- and the only thing that can turn that memory into sound is the resume caused
+// by the first gesture. With that replay missing the game opens silent and stays silent
+// however many times it is clicked, and nothing in a code read reveals it: every individual
+// call is correct, and the intent is visibly sitting in `wanted` the whole time.
+check(
+  'unlocking the context replays what was asked for while it was locked',
+  /resume\(\)[\s\S]{0,240}?replayWanted\(\)/.test(WEB_SYSTEM),
+  'resume() is async, so the replay waits on it rather than firing into a context that is still locked',
+)
+check(
+  'a context that was already running still replays, not only one that was just resumed',
+  /this\.replayWanted\(\)\s*\n\s*\}/.test(WEB_SYSTEM),
+)
+check(
+  'a repeating clip is not scheduled into a locked context',
+  /scheduleRepeating[\s\S]{0,900}?context\?\.state !== 'running'[\s\S]{0,240}?this\.wanted\.add\(id\)/.test(WEB_SYSTEM),
+  'otherwise its first firing is refused, it re-arms forever, and it is not in wanted so the replay never learns about it',
+)
+check(
+  'coming back from a hidden tab replays too',
+  /resume\(\): void \{\s*this\.suspended = false\s*this\.unlock\(\)/.test(WEB_SYSTEM),
+  'so cues are not stranded by the suspend that hiding the tab caused',
+)
+check(
+  'pending does not report an armed repeating clip as still waiting',
+  /get pending\(\)[\s\S]{0,240}?!this\.repeating\.has\(id\)/.test(WEB_SYSTEM),
+  'it lives in wanted to keep re-arming, so listing it raw would be a false negative',
+)
 check('the web page loads without audio', /void audio\.loadAll\(\)/.test(WEB_MAIN))
 check('the Android loader reports rather than throws', /val missing: List<String>/.test(KT_ENGINE))
 check('the Android play returns a boolean', /fun play\(id: String\): Boolean/.test(KT_ENGINE))
@@ -420,6 +451,122 @@ for (const clip of installed) {
   const path = join(ROOT, 'app/src/main/assets', 'audio', clip.file)
   check(`${clip.file} is present and not a stub`, statSync(path).size > 1024)
   check(`${clip.file} is mirrored into web/public by sync-assets`, existsSync(join(ROOT, 'web/public', 'audio', clip.file)))
+}
+
+// --- The menu is audible on the first gesture, in a real browser -----------------
+section('Autoplay, as the player meets it')
+/**
+ * The static checks above can only prove the replay call exists. This drives the real page
+ * under the autoplay policy that causes the bug in the first place and reads the bank back,
+ * because the failure is a relationship between three events -- a cue asked for, a gesture,
+ * and a resume -- and no single line of source shows all three. It is also the only check
+ * that would have caught the bug: the intent was sitting in `wanted`, plainly visible, while
+ * nothing ever acted on it.
+ *
+ * Launched with `--autoplay-policy=document-user-activation-required`, the default in Chrome
+ * and Safari, which is why the game is silent until the player touches something.
+ */
+if (existsSync(join(ROOT, 'web/dist/index.html'))) {
+  const { createServer } = await import('node:http')
+  const { extname: ext } = await import('node:path')
+  const { chromium } = await import('playwright-core')
+  const MIME = {
+    '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
+    '.png': 'image/png', '.ogg': 'audio/ogg', '.woff2': 'font/woff2', '.json': 'application/json',
+  }
+  const srv = createServer(async (req, res) => {
+    const url = (req.url ?? '/').split('?')[0]
+    const rel = url === '/' ? '/index.html' : url
+    try {
+      // Read before writing any header: a 404 path has to be able to send its own.
+      const body = await readFile(join(ROOT, 'web/dist', rel))
+      res.writeHead(200, { 'content-type': MIME[ext(rel)] ?? 'application/octet-stream' })
+      res.end(body)
+    } catch {
+      res.writeHead(404).end('not found')
+    }
+  })
+  const port = await new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv.address().port)))
+  const browser = await chromium.launch({
+    args: ['--autoplay-policy=document-user-activation-required'],
+  })
+  try {
+    const page = await (await browser.newContext()).newPage()
+    // `menu=1` alongside `debug` shows the title screen while keeping the test hooks, which
+    // is the state a player is looking at when they first open the game.
+    await page.goto(`http://127.0.0.1:${port}/?debug=1&menu=1`, { waitUntil: 'load' })
+    await page.waitForFunction(() => window.__game !== undefined, null, { timeout: 30000 })
+    await page.waitForTimeout(1500)
+    const read = () =>
+      page.evaluate(() => {
+        const a = window.__game.audio
+        return {
+          isReady: a.isReady,
+          playing: a.playing(),
+          pending: a.pending,
+          repeating: a.repeatingIds,
+          // `unplayed` is the honest measure. `playing` says a loop is open; `unplayed` is
+          // emptied only by a clip that genuinely reached the speakers.
+          unplayed: a.inventory().unplayed,
+        }
+      })
+
+    const before = await read()
+    check(
+      'the menu asks for its cues before any gesture, and they are remembered',
+      !before.isReady &&
+        before.pending.includes('main_menu_music') &&
+        before.pending.includes('campfire'),
+      JSON.stringify(before),
+    )
+    check(
+      'and nothing is playing yet, because the browser forbids it',
+      before.playing.length === 0,
+      JSON.stringify(before.playing),
+    )
+
+    // A gesture with no effect on the menu: a player moving the mouse or pressing a key.
+    await page.keyboard.press('Shift')
+    await page.waitForTimeout(1200)
+
+    const after = await read()
+    check('the context is running once the player has interacted', after.isReady === true, JSON.stringify(after))
+    check(
+      'the menu music and the campfire are now sounding, not merely wanted',
+      after.playing.includes('main_menu_music') && after.playing.includes('campfire'),
+      `playing ${JSON.stringify(after.playing)}`,
+    )
+    check(
+      'the intermittent ambience is scheduled rather than looping',
+      after.repeating.includes('main_menu_ambience') && !after.playing.includes('main_menu_ambience'),
+      `repeating ${JSON.stringify(after.repeating)}, playing ${JSON.stringify(after.playing)}`,
+    )
+    check('nothing is left stranded as pending', after.pending.length === 0, JSON.stringify(after.pending))
+    check(
+      'every loaded clip has actually been heard, which is what "the audio plays" means',
+      after.unplayed.length === 0,
+      `still silent: ${JSON.stringify(after.unplayed)}`,
+    )
+
+    // And the fix must not leave the title track running under the first walk of the game.
+    await page.click('[data-testid="main_menu_start_game"]', { timeout: 15000 })
+    await page.waitForTimeout(900)
+    const inGame = await read()
+    check(
+      'starting the game stops the menu cues',
+      inGame.playing.length === 0 && inGame.repeating.length === 0,
+      `playing ${JSON.stringify(inGame.playing)}, repeating ${JSON.stringify(inGame.repeating)}`,
+    )
+    await page.context().close()
+  } catch (err) {
+    check('the autoplay check ran to completion', false, String(err).split('\n')[0])
+  } finally {
+    await browser.close()
+    srv.close()
+  }
+} else {
+  section('Autoplay, as the player meets it')
+  check('dist/ is built, so the autoplay check could run', false, 'run `npm run build` first')
 }
 
 console.log(`\n${failures === 0 ? 'All checks passed' : `${failures} of ${checks} checks FAILED`}`)

@@ -111,7 +111,12 @@ export class AudioSystem {
 
   /**
    * Loops something has asked for that are not running yet, because their file had not
-   * finished decoding. Replayed by `loadAll`; cleared by `stop`.
+   * finished decoding, or because the context could not play yet, or because they are parked
+   * behind a mute. Replayed by `loadAll` once the table has decoded and by `unlock` once the
+   * context can play; cleared by `stop`.
+   *
+   * It is also what keeps a repeating clip alive between firings, so an id here is not by
+   * itself a claim that the clip is silent -- see `pending`, which filters that case out.
    */
   private readonly wanted = new Set<string>()
 
@@ -162,7 +167,32 @@ export class AudioSystem {
       for (const gain of Object.values(this.gains)) gain.connect(this.context.destination)
       this.applyGains()
     }
-    if (this.context.state === 'suspended') void this.context.resume().catch(() => {})
+    if (this.context.state === 'suspended') {
+      // resume() is async, and this is the one moment the bank is able to start something
+      // that was refused earlier. The cues asked for before the first gesture are sitting in
+      // `wanted` right now: the menu asks for its music and its fire before the player has
+      // touched anything, `start()` records the intent and declines, and only this resume can
+      // turn that memory into sound. Without the replay the intent is remembered and never
+      // acted on, so the game opens silent and stays silent however many times it is clicked.
+      void this.context
+        .resume()
+        .then(() => this.replayWanted())
+        .catch(() => {})
+      return
+    }
+    this.replayWanted()
+  }
+
+  /**
+   * Starts everything the game asked for while the context was not yet able to play.
+   *
+   * Best effort by design: a clip whose file never arrived is skipped, and `start` is
+   * idempotent for a clip that is already running, so this is safe to call on every gesture
+   * and whenever the page comes back from being hidden.
+   */
+  private replayWanted(): void {
+    if (this.context?.state !== 'running') return
+    for (const id of [...this.wanted]) this.start(id)
   }
 
   get isReady(): boolean {
@@ -274,6 +304,16 @@ export class AudioSystem {
     // Recorded for the same reason as a muted loop: FX off, then on, must bring the ambience
     // back rather than losing it for the rest of the visit.
     if (!this.sfxEnabled) {
+      this.wanted.add(id)
+      return false
+    }
+    // And for the same reason a locked context is. Scheduling here would arm a timer whose
+    // first firing is refused because the context cannot play, which then rearms itself and
+    // goes round again -- a silent loop that looks like it is working, and which the replay
+    // in unlock() would never learn about because it is not in `wanted`. Deferring the whole
+    // schedule until the context can play is what makes the ambience arrive with the gesture
+    // that unlocked audio, rather than being quietly swallowed by it.
+    if (this.context?.state !== 'running') {
       this.wanted.add(id)
       return false
     }
@@ -458,9 +498,16 @@ export class AudioSystem {
     this.unlock()
   }
 
-  /** Loops something has asked for that are not running yet. Exposed so the harness can see them. */
+  /**
+   * Loops something has asked for that are not running yet. Exposed so the harness can see them.
+   *
+   * A repeating clip is excluded once it is armed. It lives in `wanted` for a different
+   * reason -- `fire` checks that to decide whether to re-arm itself, since a repeating clip
+   * is never in `loops` -- so listing it here would report an ambience that is playing
+   * perfectly as something still waiting to play.
+   */
   get pending(): readonly string[] {
-    return [...this.wanted]
+    return [...this.wanted].filter((id) => !this.repeating.has(id))
   }
 
   /**
