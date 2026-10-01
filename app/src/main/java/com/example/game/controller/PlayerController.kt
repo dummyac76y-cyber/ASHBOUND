@@ -106,6 +106,13 @@ class PlayerController(
 
     fun onAttack(): Boolean {
         if (dashTimer > 0 || !isGrounded) return false
+        // Already mid-swing: let the current one finish. The guard has to come before the
+        // hit-window reset and the playAction call, because both of those are what a second
+        // press used to do to a swing already under way. playAction is asked with
+        // restartIfSame, which by design rewinds to frame 0 -- correct for starting a swing,
+        // wrong for re-entering one, and the reason a spammed attack kept rewinding past the
+        // frames its blade is actually live on and so could never land.
+        if (isAttacking()) return false
         hitWindowConsumed.remove(PlayerAction.ATTACK)
         val switched = animationSystem.playAction(PlayerAction.ATTACK, restartIfSame = true)
         if (switched) vx = (if (isFacingRight) 40f else -40f) // slight forward lunge
@@ -114,6 +121,10 @@ class PlayerController(
 
     fun onHeavyAttack(): Boolean {
         if (dashTimer > 0 || !isGrounded || stamina < 20f) return false
+        // Same guard as onAttack, and for the same reason. It matters more here: the heavy
+        // windup is frames 0..13 and the blade only reaches full extension on 14, so a rewind
+        // costs more of the animation and the stamina is only spent when the swing starts.
+        if (isAttacking()) return false
         stamina -= 20f
         hitWindowConsumed.remove(PlayerAction.HEAVY_ATTACK)
         val switched = animationSystem.playAction(PlayerAction.HEAVY_ATTACK, restartIfSame = true)

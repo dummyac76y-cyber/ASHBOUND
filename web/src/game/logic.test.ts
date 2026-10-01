@@ -18,7 +18,7 @@ import { PlayerController, rectsIntersect } from './PlayerController.ts'
 import { NPC_ART_FACES_RIGHT, NPC_CLIPS, NPC_IDLE_WALK_SHEET } from './npcAssets.ts'
 import { PlayerAction } from './PlayerAction.ts'
 import type { SpriteAnimationSystem } from './SpriteAnimationSystem.ts'
-import { createDefaultConfigs } from './AnimationConfig.ts'
+import { createDefaultConfigs, type AnimationConfig } from './AnimationConfig.ts'
 import { SpriteSheet } from './SpriteSheet.ts'
 import { DEFAULT_FOOT_ROW, FOOT_ROWS_BY_SHEET, footOffsetForRow } from './spriteMetrics.ts'
 
@@ -34,7 +34,23 @@ function check(name: string, condition: boolean, detail = ''): void {
 
 /** Minimal stand-in exposing only what PlayerController/GameWorld consume. */
 function stubAnimations() {
-  const system = {
+  // currentAction is typed as the enum, not left to inference. Inference takes the literal
+  // type of the initialiser, so a test that assigns another action would narrow the field for
+  // the rest of the file and every later `currentAction === X` comparison after it would stop
+  // typechecking. The field genuinely holds any PlayerAction, so it is declared as one.
+  const system: {
+    currentAction: PlayerAction
+    currentFrameIndex: number
+    isFinished: boolean
+    elapsedTimeSeconds: number
+    playAction(action: PlayerAction, restartIfSame?: boolean): boolean
+    update(): void
+    getSheet(): undefined
+    getConfig(action: PlayerAction): AnimationConfig | undefined
+    getAllActions(): PlayerAction[]
+    finish(): void
+    returnToIdle(): void
+  } = {
     currentAction: PlayerAction.IDLE,
     currentFrameIndex: 0,
     isFinished: false,
@@ -42,6 +58,10 @@ function stubAnimations() {
     playAction(action: PlayerAction, restartIfSame = false) {
       if (system.currentAction === action && !restartIfSame) return false
       system.currentAction = action
+      // The real system rewinds the clock, not just the frame, and that is the whole of the
+      // rewind bug: the frame is derived from elapsed time, so a stub that only cleared the
+      // frame would let a rewound swing appear to progress anyway.
+      system.elapsedTimeSeconds = 0
       system.currentFrameIndex = 0
       system.isFinished = false
       return true
@@ -57,6 +77,17 @@ function stubAnimations() {
     },
     getAllActions() {
       return Object.values(PlayerAction)
+    },
+    // Stands in for the real system reaching the end of a non-looping action. It lives here
+    // rather than as two assignments in the test body because assigning anim.currentAction
+    // directly narrows the field to that one enum member for the rest of the file, which
+    // silently breaks every later `currentAction === X` comparison in the typecheck.
+    finish() {
+      system.isFinished = true
+    },
+    returnToIdle() {
+      system.currentAction = PlayerAction.IDLE
+      system.isFinished = false
     },
   }
   return system as unknown as SpriteAnimationSystem & typeof system
@@ -246,6 +277,84 @@ const heavyBefore = npc.hp
 anim.currentFrameIndex = heavyWindow[0]
 world.update(1 / 60)
 check('the NPC took heavy damage', npc.hp === heavyBefore - 45, `got ${npc.hp} from ${heavyBefore}`)
+
+console.log('spamming attack does not rewind the swing')
+// A held or mashed Attack button used to rewind the animation to frame 0 on every press,
+// so the swing could never sit on the frames its blade is live on and the attack appeared
+// to do nothing. The swing now owns its duration, and the press is simply ignored while it
+// runs. What matters is that it reaches the window and lands, not how many times it was hit.
+player.resetPlayer(npc.x - 30, FLOOR_Y)
+player.isFacingRight = true
+// The tests above have already hit this NPC, so its health is a running total and an
+// exact damage figure is not comparable. The point of the test is that the swing lands at
+// all, not how much, so the target is topped up to a known value first.
+npc.hp = 100
+check('the first press starts a swing', player.onAttack())
+anim.currentFrameIndex = 0
+const spamHp = npc.hp
+// The rewind that caused the bug is playAction resetting elapsedTimeSeconds to 0: the frame
+// index is derived from that clock, so a press every frame held it at frame 0 forever. The
+// clock is asserted directly rather than the frame, because the shared stub above does not
+// advance it and a frame index set by hand would hide the very thing being tested.
+for (let f = 0; f <= attackWindow[0]; f++) {
+  anim.elapsedTimeSeconds = f / 8
+  check(`a press on frame ${f} is ignored`, !player.onAttack())
+  check(`a press on frame ${f} leaves the clock alone`, anim.elapsedTimeSeconds === f / 8)
+  anim.currentFrameIndex = f
+  world.update(1 / 60)
+}
+check('the swing reached its damage window instead of being rewound past it', npc.hp === spamHp - 18, `got ${npc.hp} from ${spamHp}`)
+
+// Once it is finished the next press starts a fresh swing, which is what makes this a guard
+// on the animation state rather than a cooldown.
+anim.finish()
+anim.returnToIdle()
+check('a press after the swing finished starts the next one', player.onAttack())
+check('and that swing is a real one', anim.currentAction === PlayerAction.ATTACK)
+check('starting again after finishing is not the same swing', player.shouldCheckAttackHit() === false)
+
+console.log('pressing during the hit frames does not rewind either')
+player.resetPlayer(npc.x - 30, FLOOR_Y)
+player.isFacingRight = true
+player.onAttack()
+anim.currentFrameIndex = attackWindow[0]
+const midHp = npc.hp
+world.update(1 / 60)
+check('the swing lands on its first live frame', npc.hp === midHp - 18, `got ${npc.hp} from ${midHp}`)
+check('a press during the live frames is still ignored', !player.onAttack())
+check('and the landed swing is not re-armed', !player.shouldCheckAttackHit())
+
+console.log('heavy attack cannot be rewound by spam either')
+player.resetPlayer(npc.x - 30, FLOOR_Y)
+player.isFacingRight = true
+check('the first heavy press starts a swing', player.onHeavyAttack())
+npc.hp = 100
+const heavySpamHp = npc.hp
+// Stamina regenerates inside update(), so it cannot be compared across the loop. What the
+// guard actually prevents is a second *spend*, so that is what is measured: a rejected press
+// has to leave the meter alone, and the whole swing has to cost one heavy's worth.
+const staminaAfterStart = player.stamina
+for (let f = 0; f <= heavyWindow[0]; f++) {
+  const before = player.stamina
+  const accepted = player.onHeavyAttack()
+  check(`a heavy press on frame ${f} is ignored`, !accepted)
+  check(`a heavy press on frame ${f} costs no stamina`, player.stamina === before)
+  anim.currentFrameIndex = f
+  world.update(1 / 60)
+}
+check('the heavy swing was paid for exactly once', staminaAfterStart === player.maxStamina - 20, `got ${staminaAfterStart}`)
+check('and reached its damage window', npc.hp === heavySpamHp - 45, `got ${npc.hp} from ${heavySpamHp}`)
+
+// A light press during a heavy swing is a different action, but it is still a press during a
+// swing, and letting it through would cut the heavy's windup short the same way.
+player.resetPlayer(npc.x - 30, FLOOR_Y)
+player.isFacingRight = true
+player.onHeavyAttack()
+check('a light press cannot cut in on a heavy swing', !player.onAttack())
+check('the heavy swing is still the one playing', anim.currentAction === PlayerAction.HEAVY_ATTACK)
+anim.finish()
+anim.returnToIdle()
+check('and once it is done the light attack is available', player.onAttack())
 
 console.log('attack out of range')
 player.resetPlayer(npc.x - 300, FLOOR_Y)

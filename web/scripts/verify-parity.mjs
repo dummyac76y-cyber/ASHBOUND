@@ -822,5 +822,116 @@ console.log('\nNPC asset set is declared identically in both engines')
   }
 }
 
+// --- The attack guard exists in both engines ---------------------------------
+/**
+ * The two controllers are transcribed rather than shared, so a guard added to one and not
+ * the other is invisible in review: both files look equally complete and the game simply
+ * behaves differently per platform. A mash-to-attack guard is exactly the kind of rule that
+ * has to be written twice, so it is checked twice.
+ *
+ * The ordering is the whole point of the check. `isAttacking()` has to come *before* the
+ * hit-window reset and the playAction call, because those two lines are the bug: they are
+ * what a second press did to a swing already under way.
+ */
+const WEB_CTRL = readFileSync(join(ROOT, 'web/src/game/PlayerController.ts'), 'utf8')
+const KT_CTRL = readFileSync(
+  join(ROOT, 'app/src/main/java/com/example/game/controller/PlayerController.kt'),
+  'utf8',
+)
+
+for (const [label, src, guard, reset, start] of [
+  [
+    'web', WEB_CTRL,
+    /if \(this\.isAttacking\(\)\) return false/,
+    /this\.hitWindowConsumed\.delete\(PlayerAction\.ATTACK\)/,
+    /this\.animationSystem\.playAction\(PlayerAction\.ATTACK, true\)/,
+  ],
+  [
+    'Android', KT_CTRL,
+    /if \(isAttacking\(\)\) return false/,
+    /hitWindowConsumed\.remove\(PlayerAction\.ATTACK\)/,
+    /animationSystem\.playAction\(PlayerAction\.ATTACK, restartIfSame = true\)/,
+  ],
+]) {
+  const fn = label === 'web' ? 'onAttack' : 'onAttack'
+  const body = src.match(
+    label === 'web'
+      ? /\n  onAttack\(\): boolean \{([\s\S]*?)\n  \}/
+      : /\n    fun onAttack\(\): Boolean \{([\s\S]*?)\n    \}/,
+  )
+  check(`${label}: ${fn} exists`, body !== null)
+  if (!body) continue
+  const text = body[1]
+  check(`${label}: ${fn} refuses to re-enter a swing`, guard.test(text))
+  const guardAt = text.search(guard)
+  const resetAt = text.search(reset)
+  const startAt = text.search(start)
+  check(
+    `${label}: ${fn} guards before it clears the hit window, so a press cannot re-arm a landed swing`,
+    guardAt >= 0 && resetAt > guardAt,
+    `guard at ${guardAt}, reset at ${resetAt}`,
+  )
+  check(
+    `${label}: ${fn} guards before it restarts the animation, which is the rewind itself`,
+    startAt > guardAt,
+    `guard at ${guardAt}, playAction at ${startAt}`,
+  )
+}
+
+// The heavy attack carries a longer wind-up, so it is the one that really does starve when
+// spammed, and it costs stamina as well -- a guard added to only one of the two would let a
+// mash drain the meter for swings that never land.
+for (const [label, src, guard, reset, start] of [
+  [
+    'web', WEB_CTRL,
+    /if \(this\.isAttacking\(\)\) return false/,
+    /this\.hitWindowConsumed\.delete\(PlayerAction\.HEAVY_ATTACK\)/,
+    /this\.animationSystem\.playAction\(PlayerAction\.HEAVY_ATTACK, true\)/,
+  ],
+  [
+    'Android', KT_CTRL,
+    /if \(isAttacking\(\)\) return false/,
+    /hitWindowConsumed\.remove\(PlayerAction\.HEAVY_ATTACK\)/,
+    /animationSystem\.playAction\(PlayerAction\.HEAVY_ATTACK, restartIfSame = true\)/,
+  ],
+]) {
+  const body = src.match(
+    label === 'web'
+      ? /\n  onHeavyAttack\(\): boolean \{([\s\S]*?)\n  \}/
+      : /\n    fun onHeavyAttack\(\): Boolean \{([\s\S]*?)\n    \}/,
+  )
+  check(`${label}: onHeavyAttack exists`, body !== null)
+  if (!body) continue
+  const text = body[1]
+  const guardAt = text.search(guard)
+  check(`${label}: onHeavyAttack refuses to re-enter a swing`, guardAt >= 0)
+  check(
+    `${label}: onHeavyAttack guards before it spends the stamina`,
+    guardAt >= 0 && text.search(/stamina -= 20/) > guardAt,
+    `guard at ${guardAt}`,
+  )
+  check(
+    `${label}: onHeavyAttack guards before it restarts the animation`,
+    guardAt >= 0 && text.search(start) > guardAt,
+  )
+}
+
+// And the guard is the animation's own state, not a clock: a cooldown would keep the button
+// dead for a fixed stretch after any swing, including a cancelled one, which is a different
+// behaviour from "the swing is still playing".
+for (const [label, src] of [
+  ['web', WEB_CTRL],
+  ['Android', KT_CTRL],
+]) {
+  const bodies = [src.match(/onAttack\(\): boolean \{([\s\S]*?)\n  \}/), src.match(/fun onAttack\(\): Boolean \{([\s\S]*?)\n    \}/)]
+  for (const m of bodies) {
+    if (!m) continue
+    check(
+      `${label}: the guard is animation state, not a timer`,
+      !/cooldown|setTimeout|Date\.now|performance\.now|System\.currentTimeMillis/.test(m[1]),
+    )
+  }
+}
+
 console.log(failures === 0 ? '\nAll parity checks passed.' : `\n${failures} check(s) FAILED.`)
 process.exit(failures === 0 ? 0 : 1)
