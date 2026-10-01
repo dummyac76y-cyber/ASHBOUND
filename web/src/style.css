@@ -603,26 +603,40 @@ body {
   pointer-events: none;
 }
 
-/* Layer 2 -- the character / campfire overlay.
-   Geometry deliberately mirrors .main-menu-backdrop exactly. */
-.main-menu-overlay {
+/* Layer 3 -- the animated character.
+   The two supplied sheets are 1536x96, sixteen 96x96 frames each, and they are played the
+   same way the fire is: a one-cell window with the whole strip sliding behind it. The
+   sheets are drawn scaled, by the one factor derived from the two ink measurements, so
+   the seated figure matches the static character it replaces instead of arriving at half
+   size. The scale is uniform and nearest-neighbour, so the pixel art keeps its
+   proportions and its hard edges. */
+.main-menu-character {
   position: absolute;
-  inset: 0;
   pointer-events: none;
 }
 
-.main-menu-overlay-art {
+.main-menu-character-window {
   position: absolute;
-  inset: 0;
-  width: 100%;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.main-menu-character-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* Sixteen frames to the window's width. The translate is a percentage of the strip's own
+     width, so one step is exactly one cell at any scale. */
+  width: 1600%;
   height: 100%;
-  object-fit: contain;
-  user-select: none;
-  -webkit-user-drag: none;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+  transform: translateX(calc(-1 * var(--character-frame, 0) * 6.25%));
   pointer-events: none;
 }
 
-/* Layer 3 -- everything readable or clickable.
+/* Layer 4 -- everything readable or clickable.
    Pinned to the left rather than centred. The overlay's visible art occupies roughly
    x 826..1000 of the 1280-wide canvas -- right of centre and below it -- so a centred
    panel of any useful width would sit on top of the character and hide part of it.

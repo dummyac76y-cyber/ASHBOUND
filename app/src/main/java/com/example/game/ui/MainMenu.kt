@@ -63,7 +63,7 @@ import kotlin.math.sin
  *
  *   1. `main_menu`         the supplied background artwork, untouched
  *   2. `main_menu_fire`     the animated campfire and its warm light
- *   3. `main_menu_overlay`  the character, on its own transparent canvas
+ *   3. `main_menu_character`  the animated character
  *   4. `main_menu_ui`       the title, the supplied button plates, and the sub-screens
  *
  * Every piece of supplied artwork is a full 1280x720 canvas already composed against the
@@ -84,6 +84,49 @@ const val MAIN_MENU_BACKGROUND_FILE = "main_menu.jpg"
  * `MAIN_MENU_OVERLAY_FILE` in the web build.
  */
 const val MAIN_MENU_OVERLAY_FILE = "main_menu_overlay.png"
+
+/**
+ * The animated character: two supplied idle sheets, played one after the other.
+ *
+ * Each sheet is 1536x96, sixteen 96x96 frames. Both are anchored the way a seated figure
+ * should be -- every frame's ink bottoms out on the same row (y=82) while only the upper
+ * body moves -- so the character cannot slide and nothing here has to correct for drift
+ * the artwork does not have. Sheet A holds seven distinct poses, the last for nine frames;
+ * sheet B is a smooth fifteen-frame cycle.
+ *
+ * They are drawn scaled. The sheets carry roughly a 78x72 figure against the static
+ * character's 174x161, so drawing them one-to-one would make the character about half the
+ * size it is in the composition and it would no longer sit with the background. The factor
+ * is derived from those two measurements rather than picked, and it is uniform, so the
+ * pixel art keeps its proportions and its hard nearest-neighbour edges.
+ *
+ * Must match the web engine's numbers exactly, or the two will draw the character in
+ * different places: 161 / 71 lines the drawn figure up with the 161px-tall static one.
+ */
+private const val CHARACTER_STATIC_X = 826
+private const val CHARACTER_STATIC_Y = 386
+private const val CHARACTER_STATIC_H = 161
+private const val CHARACTER_SHEET_INK_X0 = 8
+private const val CHARACTER_SHEET_INK_Y0 = 11
+private const val CHARACTER_SHEET_INK_Y1 = 82
+private const val CHARACTER_FRAMES = 16
+private const val CHARACTER_CELL = 96
+
+private const val CHARACTER_SCALE =
+    CHARACTER_STATIC_H.toFloat() / (CHARACTER_SHEET_INK_Y1 - CHARACTER_SHEET_INK_Y0).toFloat()
+private const val CHARACTER_CELL_X =
+    CHARACTER_STATIC_X - CHARACTER_SHEET_INK_X0 * CHARACTER_SCALE
+private const val CHARACTER_CELL_Y =
+    CHARACTER_STATIC_Y - CHARACTER_SHEET_INK_Y0 * CHARACTER_SCALE
+
+/**
+ * Frames per second, matching the web. The two sheets are 32 frames, so at eight the loop
+ * takes four seconds: a settled breathing rather than a fidget.
+ */
+private const val CHARACTER_FPS = 8
+
+/** The sheets, in the order they play. */
+val MAIN_MENU_CHARACTER_FILES = listOf("character_idle_a.png", "character_idle_b.png")
 
 /**
  * The animated campfire.
@@ -304,6 +347,79 @@ fun MenuFire(surface: Modifier, flame: ImageBitmap?) {
     }
 }
 
+/**
+ * The animated character: a one-cell window with each sheet sliding behind it.
+ *
+ * Both sheets are composed even though only one plays at a time, so switching between them
+ * never shows a window with nothing in it.
+ */
+@Composable
+fun MenuCharacter(surface: Modifier, sheets: List<ImageBitmap?>) {
+    var frame by remember { mutableIntStateOf(0) }
+    var sheetIndex by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        val started = withFrameNanos { it }
+        while (true) {
+            withFrameNanos { now ->
+                val seconds = (now - started) / 1_000_000_000f
+                val cursor = (seconds * CHARACTER_FPS).toInt() % (CHARACTER_FRAMES * sheets.size)
+                sheetIndex = cursor / CHARACTER_FRAMES
+                frame = cursor - sheetIndex * CHARACTER_FRAMES
+            }
+        }
+    }
+
+    val cellDp = (CHARACTER_CELL * CHARACTER_SCALE).dp
+    Box(surface.testTag("main_menu_character")) {
+        sheets.forEachIndexed { index, sheet ->
+            if (sheet != null) {
+                Box(
+                    Modifier
+                        .offset(
+                            x = CHARACTER_CELL_X.dp,
+                            y = CHARACTER_CELL_Y.dp,
+                        )
+                        .size(cellDp)
+                        .clipToBounds()
+                        .testTag("main_menu_character_$index"),
+                ) {
+                    Image(
+                        sheet,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(
+                                width = (CHARACTER_CELL * CHARACTER_FRAMES * CHARACTER_SCALE).dp,
+                                height = cellDp,
+                            )
+                            .offset(x = (-frame * CHARACTER_CELL * CHARACTER_SCALE).dp),
+                        contentScale = ContentScale.FillBounds,
+                        filterQuality = FilterQuality.None,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * One character idle sheet, loaded from the same folder as the supplied plates.
+ *
+ * Decoded whole: it is one 1536x96 image, and a single decode keeps every frame on exactly
+ * the pixels the artist drew, with no chance of a frame being resampled on its way in.
+ */
+@Composable
+fun rememberMenuCharacterSheet(file: String): ImageBitmap? {
+    val context = LocalContext.current
+    return remember(file) {
+        runCatching {
+            context.assets.open("bg/menu_buttons/$file").use { stream ->
+                BitmapFactory.decodeStream(stream)?.asImageBitmap()
+            }
+        }.getOrNull()
+    }
+}
+
 /** One supplied button plate. */
 @Composable
 fun rememberMenuButtonArt(file: String): ImageBitmap? {
@@ -376,11 +492,19 @@ fun MainMenu(modifier: Modifier = Modifier, onAction: (MainMenuAction) -> Unit) 
             }
         }
 
-        // --- Layer 3: the character ------------------------------------------
-        // Same box and same ContentScale.Fit as the backdrop, so it registers.
-        Box(Modifier.fillMaxSize().testTag("main_menu_overlay")) {
-            rememberMenuOverlay()?.let { image ->
-                Image(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+        // --- Layer 3: the animated character ---------------------------------
+        // Drawn in the shared canvas box so it scales by one factor with the backdrop, the
+        // same argument as the fire. It replaces the static overlay canvas, which stays in
+        // the asset tree unaltered and is simply no longer drawn.
+        Box(Modifier.fillMaxSize()) {
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val characterCanvas = canvasBox()
+                MenuCharacter(
+                    Modifier
+                        .offset(x = characterCanvas.offsetX, y = characterCanvas.offsetY)
+                        .size(characterCanvas.width, characterCanvas.height),
+                    MAIN_MENU_CHARACTER_FILES.map { rememberMenuCharacterSheet(it) },
+                )
             }
         }
 

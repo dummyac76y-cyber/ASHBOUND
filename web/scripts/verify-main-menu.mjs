@@ -60,6 +60,22 @@ const MENU_BUTTON_ART = [
 
 const ANDROID_BUTTONS = join(repoRoot, 'app/src/main/assets/bg/menu_buttons')
 
+/**
+ * Strips comments from a source file before a pattern is searched in it.
+ *
+ * Both comment styles, because the sources here are heavy on prose: a JSDoc that explains
+ * why `window.close` is ignored must not be able to satisfy a check that a call happens.
+ */
+const codeOnly = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+
+/** The two supplied character idle sheets, in the order they play. */
+const MENU_CHARACTER_FILES = ['character_idle_a.png', 'character_idle_b.png']
+/** Frames per sheet, and the cell size, both measured from the files. */
+const CHARACTER_FRAMES = 16
+/** The sheets' ink box, and the static character's, so the scale is re-derived here. */
+const CHARACTER_SHEET_INK = { x0: 8, y0: 11, y1: 82 }
+const CHARACTER_STATIC_INK = { x: 826, y: 386, w: 174, h: 161 }
+
 const ANDROID_ASSET = join(repoRoot, 'app/src/main/assets/bg', MENU_BG)
 const WEB_ASSET = join(webRoot, 'public/bg', MENU_BG)
 const ANDROID_OVERLAY = join(repoRoot, 'app/src/main/assets/bg', MENU_OVERLAY)
@@ -72,6 +88,10 @@ const MENU_CSS = join(webRoot, 'src/style.css')
 const MAIN_TS = join(webRoot, 'src/main.ts')
 const KT_MENU = join(repoRoot, 'app/src/main/java/com/example/game/ui/MainMenu.kt')
 const KT_SCREEN = join(repoRoot, 'app/src/main/java/com/example/game/ui/GameScreen.kt')
+
+/** The two sources the character and fire sections assert against. */
+const ktMenu = readFileSync(KT_MENU, 'utf8')
+const menuTs = readFileSync(MENU_TS, 'utf8')
 
 if (!existsSync(join(distDir, 'index.html'))) {
   console.error('dist/ not built. Run `npm run build` first.')
@@ -277,9 +297,9 @@ console.log('\n2. the menu is what the page shows, and the artwork decodes untou
   // canvas the same size as the backdrop, already positioned within it, drawn in the
   // backdrop's own box with the backdrop's own scaling. If that holds for one it holds
   // for the other, and it is what makes each land where it was composed.
-  const ART_LAYERS = [
-    { name: 'character overlay', sel: '.main-menu-overlay-art', supplied: existsSync(ANDROID_OVERLAY) },
-  ]
+  // The static character canvas is no longer drawn: the animation replaces it. The
+  // character's registration is measured instead, alongside the fire's, further down.
+  const ART_LAYERS = []
 
   for (const layer of ART_LAYERS) {
     const info = await page.evaluate((sel) => {
@@ -338,7 +358,7 @@ console.log('\n2. the menu is what the page shows, and the artwork decodes untou
     // switched on, the stack is read, and it is switched straight back.
     const order = await page.evaluate(() => {
       const b = document.querySelector('.main-menu-backdrop')
-      const o = document.querySelector('.main-menu-overlay-art')
+      const o = document.querySelector('.main-menu-character')
       const c = document.querySelector('.main-menu-fire')
       const u = document.querySelector('.main-menu-ui')
       if (!b || !o || !c || !u) return null
@@ -500,7 +520,7 @@ console.log('\n3. the four menu entries, and what each one does')
       hudHidden: document.querySelector('.hud')?.hidden ?? null,
       controlsHidden: document.querySelector('.controls')?.hidden ?? null,
       layerChain: (() => {
-        const sel = ['.main-menu-backdrop', '.main-menu-fire', '.main-menu-overlay', '.main-menu-ui']
+        const sel = ['.main-menu-backdrop', '.main-menu-fire', '.main-menu-character', '.main-menu-ui']
         return sel.map((s) => {
           const n = document.querySelector(s)
           return n ? `${s}:${getComputedStyle(n).position}` : `${s}:MISSING`
@@ -532,9 +552,9 @@ console.log('\n3. the four menu entries, and what each one does')
   check('and so are the touch controls', labels.controlsHidden === true, `controls.hidden ${labels.controlsHidden}`)
   check('every supplied plate is on the menu', labels.platesPresent === 5, `${labels.platesPresent} plates`)
   check(
-    'the backdrop, the fire, the character and the UI are four separate layers',
+    'the backdrop, the fire, the animated character and the UI are four separate layers',
     labels.layerChain ===
-      '.main-menu-backdrop:absolute .main-menu-fire:absolute .main-menu-overlay:absolute .main-menu-ui:relative',
+      '.main-menu-backdrop:absolute .main-menu-fire:absolute .main-menu-character:absolute .main-menu-ui:relative',
     labels.layerChain,
   )
 
@@ -1236,19 +1256,151 @@ console.log('\n8. the campfire is animated, and stays on the same spot every fra
   await page.close()
 }
 
-console.log('\n9. Android mirrors the same menu')
+console.log('\n9. the character is animated, and sits where the static one was')
 // ---------------------------------------------------------------------------------
 {
-  const ktMenu = readFileSync(KT_MENU, 'utf8')
+  // Measured from the supplied sheets, so the derived scale and placement are re-derived
+  // here rather than taken on trust.
+  const sheets = MENU_CHARACTER_FILES.map((f) => readPng(join(ANDROID_BUTTONS, f)))
+  for (const [i, png] of sheets.entries()) {
+    check(
+      `character sheet ${i === 0 ? 'A' : 'B'} is 1536x96, as supplied`,
+      png.width === 1536 && png.height === 96,
+      `${png.width}x${png.height}`,
+    )
+    check(
+      `which divides into sixteen 96px frames`,
+      png.width / 96 === CHARACTER_FRAMES,
+      `${png.width / 96} frames`,
+    )
+  }
+
+  const inkOf = (png, cell) => {
+    let x0 = 96, x1 = -1, y0 = 96, y1 = -1
+    for (let y = 0; y < 96; y++) {
+      for (let x = 0; x < 96; x++) {
+        if (png.px(cell * 96 + x, y)[3] > 8) {
+          if (x < x0) x0 = x
+          if (x > x1) x1 = x
+          if (y < y0) y0 = y
+          if (y > y1) y1 = y
+        }
+      }
+    }
+    return { x0, x1, y0, y1 }
+  }
+  const union = { x0: 96, x1: -1, y0: 96, y1: -1 }
+  for (const png of sheets) {
+    for (let c = 0; c < CHARACTER_FRAMES; c++) {
+      const b = inkOf(png, c)
+      union.x0 = Math.min(union.x0, b.x0)
+      union.x1 = Math.max(union.x1, b.x1)
+      union.y0 = Math.min(union.y0, b.y0)
+      union.y1 = Math.max(union.y1, b.y1)
+    }
+  }
+  check(
+    'the sheets measure the way the derived placement assumes',
+    union.x0 === CHARACTER_SHEET_INK.x0 && union.y0 === CHARACTER_SHEET_INK.y0 &&
+      union.y1 === CHARACTER_SHEET_INK.y1,
+    `ink x0 ${union.x0}, y ${union.y0}..${union.y1}`,
+  )
+
+  // The seated figure must not slide. Every frame's base row has to be the same.
+  for (const [i, png] of sheets.entries()) {
+    const bottoms = [...new Set(Array.from({ length: CHARACTER_FRAMES }, (_, c) => inkOf(png, c).y1))]
+    check(
+      `sheet ${i === 0 ? 'A' : 'B'} is anchored at one base row across all sixteen frames`,
+      bottoms.length === 1,
+      `base rows ${bottoms.join(', ')}`,
+    )
+  }
+
+  // The scale is derived from height; check it also reproduces the width, which is what
+  // proves it was not simply fitted to one dimension.
+  const h = union.y1 - union.y0
+  const w = union.x1 - union.x0
+  const scale = CHARACTER_STATIC_INK.h / h
+  check(
+    'the derived scale matches the static figure in height and width together',
+    Math.abs(w * scale - CHARACTER_STATIC_INK.w) < 2,
+    `${w} x ${h} at ${scale.toFixed(4)} -> ${(w * scale).toFixed(1)} wide against ${CHARACTER_STATIC_INK.w}`,
+  )
+  check(
+    'and it is a uniform scale, so the pixel art keeps its proportions',
+    Math.abs(scale - 161 / 71) < 0.001,
+    `x${scale.toFixed(4)}`,
+  )
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
+  await page.goto(`${base}/`, { waitUntil: 'networkidle' })
+  await page.waitForSelector('.main-menu-ready')
+
+  const aSeen = new Set()
+  const bSeen = new Set()
+  for (let i = 0; i < 260; i++) {
+    const f = await page.evaluate(() => {
+      const a = document.querySelector('[data-testid="main_menu_character_strip_0"]')
+      const b = document.querySelector('[data-testid="main_menu_character_strip_1"]')
+      return {
+        aVis: a?.style.visibility, aF: a?.style.getPropertyValue('--character-frame') ?? '',
+        bVis: b?.style.visibility, bF: b?.style.getPropertyValue('--character-frame') ?? '',
+      }
+    })
+    if (f.aVis === 'visible') aSeen.add(f.aF)
+    if (f.bVis === 'visible') bSeen.add(f.bF)
+    await page.waitForTimeout(25)
+  }
+  const count = (set) => [...set].filter(Boolean).length
+  check('sheet A plays all sixteen frames', count(aSeen) === CHARACTER_FRAMES, `${count(aSeen)} of ${CHARACTER_FRAMES}`)
+  check('and sheet B plays all sixteen after it', count(bSeen) === CHARACTER_FRAMES, `${count(bSeen)} of ${CHARACTER_FRAMES}`)
+
+  // Registration, including a viewport wider than 16:9 -- the direction a CSS-only
+  // contain box gets wrong.
+  for (const [w2, h2] of [
+    [1280, 720],
+    [1280, 600],
+    [390, 844],
+  ]) {
+    await page.setViewportSize({ width: w2, height: h2 })
+    await page.waitForTimeout(150)
+    const geo = await page.evaluate(() => {
+      const win = document.querySelector('.main-menu-character-window')
+      const back = document.querySelector('.main-menu-backdrop')
+      const b = back.getBoundingClientRect()
+      const r = win.getBoundingClientRect()
+      const sc = Math.min(b.width / 1280, b.height / 720)
+      const L = b.left + (b.width - 1280 * sc) / 2
+      const T = b.top + (b.height - 720 * sc) / 2
+      return { x: (r.left - L) / sc, y: (r.top - T) / sc, w: r.width / sc, h: r.height / sc }
+    })
+    const wantX = CHARACTER_STATIC_INK.x - union.x0 * scale
+    const wantY = CHARACTER_STATIC_INK.y - union.y0 * scale
+    const wantS = 96 * scale
+    check(
+      `at ${w2}x${h2} the character cell lands on the static character's place`,
+      Math.abs(geo.x - wantX) < 1.5 && Math.abs(geo.y - wantY) < 1.5 &&
+        Math.abs(geo.w - wantS) < 1.5 && Math.abs(geo.h - wantS) < 1.5,
+      `canvas ${geo.x.toFixed(1)},${geo.y.toFixed(1)} ${geo.w.toFixed(1)}x${geo.h.toFixed(1)} (want ${wantX.toFixed(1)},${wantY.toFixed(1)} ${wantS.toFixed(1)})`,
+    )
+  }
+  await page.close()
+
+  const ktFire = codeOnly(ktMenu)
+  check('Android plays both sheets, sixteen frames each, at the same rate', /CHARACTER_FRAMES = 16/.test(ktFire) && /CHARACTER_FPS = 8/.test(ktFire), '16 frames at 8 fps')
+  check('Android derives the same scale from the same two measurements', /CHARACTER_STATIC_H\.toFloat\(\) \/ \(CHARACTER_SHEET_INK_Y1 - CHARACTER_SHEET_INK_Y0\)\.toFloat\(\)/.test(ktFire), '161 / 71')
+  check('Android plays the sheets one after the other, not one alone', /cursor \/ CHARACTER_FRAMES/.test(ktFire), 'cursor / CHARACTER_FRAMES')
+  check('Android clips to one cell and slides the sheet behind it', /clipToBounds\(\)/.test(ktFire) && /offset\(x = \(-frame \* CHARACTER_CELL \* CHARACTER_SCALE\)\.dp\)/.test(ktFire), 'clipToBounds + per-frame offset')
+  check('Android keeps the character pixel art unsmoothed', /FilterQuality\.None/.test(ktFire), 'FilterQuality.None')
+  check('Android loads the sheets from the same folder as the plates', /"bg\/menu_buttons\/\$file"/.test(ktFire), 'assets/bg/menu_buttons/<file>')
+}
+
+console.log('\n10. Android mirrors the same menu')
+// ---------------------------------------------------------------------------------
+{
   const ktScreen = readFileSync(KT_SCREEN, 'utf8')
-  const menuTs = readFileSync(MENU_TS, 'utf8')
   const css = readFileSync(MENU_CSS, 'utf8')
   const mainTs = readFileSync(MAIN_TS, 'utf8')
-  // Strip // comments so prose about a pattern cannot satisfy or break a search.
-  // Strip both comment styles. The JSDoc above buildQuitScreen explains that
-  // `window.close` is ignored by the browser, and prose about a call is not a call.
-  const codeOnly = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
-
   const overlaySupplied = existsSync(ANDROID_OVERLAY) && existsSync(ANDROID_CAMPFIRE)
 
   check('both engines load the background by the same synced filename', menuTs.includes('main_menu.jpg') && ktMenu.includes('"main_menu.jpg"'), `bg/main_menu.jpg`)
@@ -1270,25 +1422,30 @@ console.log('\n9. Android mirrors the same menu')
   check('Android does not tint the artwork', !/ColorFilter|colorFilter/.test(ktMenu), 'no colour filter on the image')
 
   if (overlaySupplied) {
-    check('Android loads the character overlay by the same filename the web build asks for', ktMenu.includes('"main_menu_overlay.png"') && menuTs.includes('main_menu_overlay.png'), 'assets/bg/main_menu_overlay.png')
+    check(
+      'both engines name the same two character sheets, in the same order',
+      ktMenu.includes('character_idle_a.png') && ktMenu.includes('character_idle_b.png') &&
+        menuTs.includes('character_idle_a.png') && menuTs.includes('character_idle_b.png'),
+      'character_idle_a.png then character_idle_b.png',
+    )
     check(
       'and both engines load the flame strip by the same filename',
       ktMenu.includes('"campfire_flame.png"') && menuTs.includes('campfire_flame.png'),
       'assets/bg/menu_buttons/campfire_flame.png',
     )
     check('the character overlay is read from the assets root by the same loader', ktMenu.includes('"bg/$assetFile"'), 'assets/bg/<file>')
-    // One per static art layer: backdrop and character. The flame is a sprite strip, drawn
-    // a cell at a time rather than fitted to the canvas.
+    // The backdrop is the only full-canvas layer left: the fire and the character are
+    // sprite strips drawn a cell at a time rather than fitted to the canvas.
     const fits = (ktMenu.match(/ContentScale\.Fit/g) || []).length
-    check('every static art layer is drawn with the same ContentScale.Fit as the backdrop, so they both register', fits >= 2, `${fits} uses of ContentScale.Fit`)
+    check('the backdrop is still fitted to the canvas', fits >= 1, `${fits} uses of ContentScale.Fit`)
   } else {
     pending('Android art layer parity is not checked yet', 'the art canvases have not been supplied')
   }
 
   check(
     'Android keeps the backdrop, the fire, the character and the UI as four layers',
-    /main_menu"/.test(ktMenu) && /main_menu_fire/.test(ktMenu) && /main_menu_overlay/.test(ktMenu) && /main_menu_ui/.test(ktMenu),
-    'main_menu / main_menu_fire / main_menu_overlay / main_menu_ui',
+    /main_menu"/.test(ktMenu) && /main_menu_fire/.test(ktMenu) && /main_menu_character/.test(ktMenu) && /main_menu_ui/.test(ktMenu),
+    'main_menu / main_menu_fire / main_menu_character / main_menu_ui',
   )
   // The Android side of the fire. It cannot be compiled in this environment, so the claims
   // that matter are asserted against the source: the same cell, the same placement, the

@@ -25,18 +25,52 @@ export const MAIN_MENU_BACKGROUND_FILE = 'main_menu.jpg'
 export const MAIN_MENU_BACKGROUND_URL = assetUrl(`bg/${MAIN_MENU_BACKGROUND_FILE}`)
 
 /**
- * The character/campfire overlay: a transparent 1280x720 canvas the same size as the
- * backdrop, with the art already positioned inside it.
- *
- * Because it is the same canvas size, drawing it in the same box with the same
- * scaling as the backdrop is what makes it register: the two are scaled by one factor
- * between them, so the character lands exactly where it was composed against the
- * background. Any other arrangement -- a different scale, a percentage offset, a
- * `background-size` on a differently-sized box -- would drift.
+ * The character's visible bounds in the static composition, measured from the supplied
+ * overlay's alpha channel. This is the target the animation has to reproduce: the seated
+ * figure is 174x161 and sits at x 826..999, y 386..546.
  */
-export const MAIN_MENU_OVERLAY_FILE = 'main_menu_overlay.png'
+const CHARACTER_STATIC_INK = { x: 826, y: 386, w: 174, h: 161 }
 
-export const MAIN_MENU_OVERLAY_URL = assetUrl(`bg/${MAIN_MENU_OVERLAY_FILE}`)
+/**
+ * The two supplied idle sheets, 1536x96 each: sixteen 96x96 frames a sheet.
+ *
+ * Both are anchored the way a seated figure should be -- every frame's ink bottoms out on
+ * the same row (y=82) while only the upper body moves -- so the character cannot slide, and
+ * nothing here has to correct for drift that the artwork does not have. Sheet A holds seven
+ * distinct poses, the last of them for nine frames; sheet B is a smooth fifteen-frame cycle.
+ * They play one after the other and then repeat.
+ *
+ * They are drawn scaled. The sheets carry roughly a 78x72 figure against the static
+ * character's 174x161, so drawing them one-to-one would make the character about half the
+ * size it is in the background composition and it would no longer sit with it. The factor
+ * below is derived from the two measurements rather than picked, and it is uniform, so the
+ * pixel art keeps its proportions and its hard nearest-neighbour edges.
+ */
+export const MAIN_MENU_CHARACTER_FILES = ['character_idle_a.png', 'character_idle_b.png'] as const
+
+/** Frames per sheet, and the cell size, measured from the files. */
+export const CHARACTER_FRAMES = 16
+export const CHARACTER_CELL = 96
+
+/** The sheets' ink box, so the scale and the placement are derived, not guessed. */
+const CHARACTER_SHEET_INK = { x0: 8, y0: 11, x1: 85, y1: 82 }
+
+/**
+ * Matches the animation to the static figure. Height and width agree to within a pixel:
+ * 72 * 2.236 = 161 tall, and 78 * 2.236 = 174 wide, against 174x161 in the composition.
+ */
+export const CHARACTER_SCALE =
+  CHARACTER_STATIC_INK.h / (CHARACTER_SHEET_INK.y1 - CHARACTER_SHEET_INK.y0)
+
+/** Where the cell goes so the drawn figure lands exactly on the static one. */
+export const CHARACTER_CELL_X = CHARACTER_STATIC_INK.x - CHARACTER_SHEET_INK.x0 * CHARACTER_SCALE
+export const CHARACTER_CELL_Y = CHARACTER_STATIC_INK.y - CHARACTER_SHEET_INK.y0 * CHARACTER_SCALE
+
+/**
+ * Frames per second. Slow on purpose: the two sheets are 32 frames, so at eight the loop
+ * takes four seconds, which is a settled breathing rather than a fidget.
+ */
+export const CHARACTER_FPS = 8
 
 /**
  * The animated campfire.
@@ -186,10 +220,10 @@ export class MainMenu {
 
   /** Layer 1. The supplied artwork. */
   private readonly backdrop: HTMLImageElement
-  /** Layer 2's element, kept separate from the image so the layer can exist alone. */
-  private readonly overlay: HTMLElement
-  /** Layer 2. The character overlay. */
-  private readonly overlayImage: HTMLImageElement
+  /** Layer 3. The animated character. */
+  private readonly character: HTMLElement
+  /** One strip per sheet; only the one playing is visible. */
+  private readonly characterStrips: HTMLElement[] = []
   /** Layer 2's fire group: the warm light, then the animated flame over it. */
   private readonly fire: HTMLElement
   /** The warm light. Its opacity is driven by the flicker, so it is kept as a field. */
@@ -222,18 +256,28 @@ export class MainMenu {
     this.backdrop.dataset.testid = 'main_menu_backdrop'
     this.backdrop.src = MAIN_MENU_BACKGROUND_URL
 
-    this.overlayImage = new Image()
-    this.overlayImage.className = 'main-menu-overlay-art'
-    this.overlayImage.alt = ''
-    this.overlayImage.decoding = 'async'
-    this.overlayImage.draggable = false
-    this.overlayImage.src = MAIN_MENU_OVERLAY_URL
+    // The animated character: a one-cell window with each sheet sliding behind it. Both
+    // sheets are drawn even though only one plays at a time, so switching between them
+    // never reveals a window with nothing in it.
+    const cellPx = CHARACTER_CELL * CHARACTER_SCALE
+    const characterWindow = el('div', 'main-menu-character-window')
+    characterWindow.dataset.testid = 'main_menu_character'
+    characterWindow.style.left = `${(CHARACTER_CELL_X / CANVAS_WIDTH) * 100}%`
+    characterWindow.style.top = `${(CHARACTER_CELL_Y / CANVAS_HEIGHT) * 100}%`
+    characterWindow.style.width = `${(cellPx / CANVAS_WIDTH) * 100}%`
+    characterWindow.style.height = `${(cellPx / CANVAS_HEIGHT) * 100}%`
 
-    this.overlay = el('div', 'main-menu-overlay')
-    this.overlay.dataset.testid = 'main_menu_overlay'
-    // Decoration only: the buttons live above it and must never lose a click to it.
-    this.overlay.setAttribute('aria-hidden', 'true')
-    this.overlay.append(this.overlayImage)
+    this.characterStrips = MAIN_MENU_CHARACTER_FILES.map((file, i) => {
+      const strip = el('div', `main-menu-character-strip main-menu-character-strip--${i}`)
+      strip.dataset.testid = `main_menu_character_strip_${i}`
+      strip.style.backgroundImage = `url(${assetUrl(`bg/menu_buttons/${file}`)})`
+      characterWindow.append(strip)
+      return strip
+    })
+
+    this.character = el('div', 'main-menu-character')
+    this.character.setAttribute('aria-hidden', 'true')
+    this.character.append(characterWindow)
 
     // The fire group. Two pieces: a warm light, and the animated flame over it. Both are
     // decoration, and the buttons live above them, so neither may ever take a click.
@@ -277,7 +321,7 @@ export class MainMenu {
     // Both of these are positioned by percentage, and a percentage of the root is a
     // percentage of the letterbox bands rather than of the artwork. They get the real
     // contain rect instead.
-    this.canvasBoxes.push(fireCanvas, this.artButtons)
+    this.canvasBoxes.push(fireCanvas, this.artButtons, this.character)
 
     // Every screen is mounted up front and switched with `hidden`, rather than built on
     // demand. Each screen is a fixed piece of markup, so there is nothing to save by
@@ -293,7 +337,7 @@ export class MainMenu {
     // The stack, back to front: background, fire, character, buttons. Appended in exactly
     // this order so paint order follows from document order and nothing has to be kept in
     // sync by hand-tuned z-index values.
-    this.root.append(this.backdrop, this.fire, this.overlay, this.ui)
+    this.root.append(this.backdrop, this.fire, this.character, this.ui)
 
     this.show('main')
     this.syncFullscreenLabel()
@@ -537,13 +581,18 @@ export class MainMenu {
     // itself over an empty fire pit.
     const flame = new Image()
     flame.src = MAIN_MENU_CAMPFIRE_FLAME_URL
+    const characters = MAIN_MENU_CHARACTER_FILES.map((file) => {
+      const img = new Image()
+      img.src = assetUrl(`bg/menu_buttons/${file}`)
+      return img
+    })
 
     // Every canvas, including the plates: revealing the menu before the buttons have
     // decoded would show a title screen with nothing clickable on it.
     return Promise.all([
       settled(this.backdrop),
-      settled(this.overlayImage),
       settled(flame),
+      ...characters.map(settled),
       ...this.artImages.map(settled),
     ]).then(() => undefined)
   }
@@ -616,6 +665,23 @@ export class MainMenu {
       // read as the fire glowing, not as a lamp being switched.
       const breath = 0.5 + 0.5 * Math.sin(seconds * 2.2)
       this.fireGlow.style.opacity = (0.62 + 0.38 * breath).toFixed(3)
+
+      // The two character sheets play in turn and then repeat, so the loop is the sheets
+      // back to back rather than either one alone.
+      const total = CHARACTER_FRAMES * this.characterStrips.length
+      const cursor = Math.floor(seconds * CHARACTER_FPS) % total
+      const sheet = Math.floor(cursor / CHARACTER_FRAMES)
+      const localFrame = cursor - sheet * CHARACTER_FRAMES
+      for (let i = 0; i < this.characterStrips.length; i++) {
+        const strip = this.characterStrips[i]
+        if (i === sheet) {
+          strip.style.visibility = 'visible'
+          strip.style.setProperty('--character-frame', String(localFrame))
+        } else if (strip.style.visibility !== 'hidden') {
+          strip.style.visibility = 'hidden'
+        }
+      }
+
       this.fireFrame = requestAnimationFrame(step)
     }
     this.fireFrame = requestAnimationFrame(step)
