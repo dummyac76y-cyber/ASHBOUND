@@ -5,6 +5,7 @@ import type { PlayerAction } from './game/PlayerAction'
 import { SpriteAnimationSystem } from './game/SpriteAnimationSystem'
 import { AnimationInspectorDialog } from './ui/AnimationInspectorDialog'
 import { GameHud } from './ui/GameHud'
+import { MainMenu } from './ui/MainMenu'
 import { KEY_HINTS, VirtualControls } from './ui/VirtualControls'
 import './style.css'
 
@@ -125,6 +126,34 @@ async function boot(): Promise<void> {
   app.append(hud.root, controls.root, keyHints())
   loading.remove()
 
+  // --- The main menu gates the world ---
+  //
+  // The simulation is held until START GAME rather than being started and paused:
+  // nothing behind the menu moves, so the scene the player walks into is the one they
+  // were just looking at. `?debug=1` skips the menu entirely so the pixel-level
+  // verification harness measures the world, not a title screen.
+  const debugMode = new URLSearchParams(location.search).has('debug')
+  let started = debugMode
+
+  function setStarted(next: boolean): void {
+    started = next
+    // The in-game furniture belongs to the world, so it appears and disappears with it
+    // rather than sitting on top of the menu.
+    hud.root.hidden = !started
+    controls.root.hidden = !started
+  }
+  setStarted(started)
+
+  const menu = new MainMenu({
+    onStart: () => setStarted(true),
+    // A browser tab cannot close itself: `window.close` is ignored on a page that did
+    // not open it. So web QUIT returns to the title rather than offering a button that
+    // silently does nothing. Android really does exit, in GameScreen.
+    onQuit: () => setStarted(false),
+  })
+  app.append(menu.root)
+  void menu.whenReady().then(() => menu.reveal())
+
   // --- Sizing: letterbox the 640x360 logical viewport into the canvas ---
   let dpr = 1
   function resize(): void {
@@ -149,7 +178,7 @@ async function boot(): Promise<void> {
     if (lastFrameTime !== 0) {
       const dt = (now - lastFrameTime) / 1000
       lastFrameTime = now
-      if (!paused) world.update(dt)
+      if (!paused && started) world.update(dt)
 
       frameCounter++
       if (now - lastFpsCalc >= 1000) {

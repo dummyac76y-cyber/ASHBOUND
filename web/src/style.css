@@ -561,3 +561,241 @@ body {
     overflow-x: auto;
   }
 }
+
+/* ---------- Main menu ----------
+   Three stacked layers: the backdrop, the character overlay, and the UI. The art
+   layers are kept free of transforms, filters, opacity and animation on purpose --
+   the supplied artwork has to reach the screen exactly as supplied, and every one of
+   those properties is a way to change it. The verifier enforces that.
+
+   The two art layers use the same box and the same `contain` scaling. The overlay is
+   a 1280x720 transparent canvas the same size as the 1280x720 backdrop, so scaling
+   both by the same factor puts the character exactly where it was composed against
+   the background. Desync these two rules and the character slides off. */
+
+.main-menu {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  overflow: hidden;
+  /* Held hidden until the artwork has decoded, so it is never shown half-drawn. */
+  visibility: hidden;
+}
+
+.main-menu.main-menu-ready {
+  visibility: visible;
+}
+
+.main-menu-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* `contain` scales by one factor, so it can neither crop nor stretch. `cover` would
+     crop, `100% 100%` would squash. */
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+
+/* Layer 2 -- the character / campfire overlay.
+   Geometry deliberately mirrors .main-menu-backdrop exactly. */
+.main-menu-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.main-menu-overlay-art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+
+/* Layer 3 -- everything readable or clickable. */
+.main-menu-ui {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+}
+
+/* Cozy medieval pixel-art chrome: hard borders, no rounded corners, no gradients. */
+.menu-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  min-width: min(420px, 88vw);
+  padding: 32px 28px;
+  border: 2px solid rgba(24, 18, 12, 0.85);
+  background: rgba(18, 15, 12, 0.78);
+  box-shadow:
+    inset 0 0 0 2px rgba(214, 178, 106, 0.28),
+    0 10px 0 rgba(0, 0, 0, 0.35);
+  text-align: center;
+}
+
+.menu-panel-wide {
+  min-width: min(560px, 92vw);
+}
+
+.menu-panel[hidden] {
+  display: none;
+}
+
+.menu-title {
+  margin: 0;
+  font-size: clamp(38px, 8vw, 76px);
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  color: #f2e4c4;
+  text-shadow:
+    0 3px 0 #2a1d12,
+    0 0 22px rgba(255, 198, 116, 0.28);
+}
+
+.menu-heading {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #f2e4c4;
+  text-shadow: 0 2px 0 #2a1d12;
+}
+
+.menu-subtitle {
+  margin: 0;
+  max-width: 42ch;
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: 0.06em;
+  color: #c9b593;
+}
+
+.menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-top: 6px;
+}
+
+.menu-button {
+  width: 100%;
+  padding: 13px 18px;
+  border: 2px solid #2a1d12;
+  background: linear-gradient(#3c2c1e, #2b1f16);
+  box-shadow:
+    inset 0 0 0 2px rgba(214, 178, 106, 0.4),
+    0 4px 0 #150f0a;
+  color: #f2e4c4;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-align: center;
+  cursor: pointer;
+  /* No transition: the verifier treats any transition on an art layer as a way for the
+     supplied image to move or resize, and none belongs here. */
+}
+
+.menu-button:hover,
+.menu-button:focus-visible {
+  background: linear-gradient(#4d3a27, #38291d);
+  box-shadow:
+    inset 0 0 0 2px rgba(240, 205, 130, 0.65),
+    0 4px 0 #150f0a;
+  outline: none;
+}
+
+.menu-button:active {
+  transform: translateY(2px);
+  box-shadow:
+    inset 0 0 0 2px rgba(214, 178, 106, 0.4),
+    0 2px 0 #150f0a;
+}
+
+.menu-button-ghost {
+  background: rgba(18, 15, 12, 0.6);
+}
+
+.menu-button-wide {
+  width: 100%;
+  max-width: 240px;
+}
+
+.menu-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.menu-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  padding: 12px 16px;
+  border: 2px solid #2a1d12;
+  background: rgba(60, 44, 30, 0.75);
+  box-shadow: inset 0 0 0 2px rgba(214, 178, 106, 0.3);
+  color: #f2e4c4;
+  font: inherit;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-align: left;
+}
+
+/* A control with nothing behind it. Dimmed and not interactive, so it does not
+   pretend to work. */
+.menu-setting-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.menu-setting {
+  cursor: pointer;
+}
+
+button.menu-setting:hover {
+  background: rgba(77, 58, 39, 0.85);
+}
+
+.menu-setting-label {
+  font-weight: 700;
+}
+
+.menu-setting-value {
+  color: #c9b593;
+  letter-spacing: 0.1em;
+}
+
+.menu-empty {
+  padding: 22px 12px;
+  border: 2px dashed rgba(214, 178, 106, 0.35);
+  color: #c9b593;
+  font-size: 15px;
+  letter-spacing: 0.1em;
+}
+
+.menu-empty-reason {
+  margin: 0;
+  max-width: 46ch;
+  color: #9d8c72;
+  font-size: 12px;
+  line-height: 1.6;
+}
