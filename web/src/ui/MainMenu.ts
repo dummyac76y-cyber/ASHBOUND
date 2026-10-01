@@ -6,8 +6,9 @@ import { assetUrl } from '../assetUrl'
  * Three things stack here and it matters that they stay three things:
  *
  *   1. `.main-menu-backdrop`  the supplied background artwork
- *   2. `.main-menu-overlay`   the character/campfire artwork, on its own transparent canvas
- *   3. `.main-menu-ui`        the title, the entries, and the sub-screens
+ *   2. `.main-menu-overlay`   the character, on its own transparent canvas
+ *   3. `.main-menu-campfire`  the campfire, on its own transparent canvas
+ *   4. `.main-menu-ui`        the title, the entries, and the sub-screens
  *
  * Keeping the artwork out of the UI layer is what lets the art stay exactly as
  * supplied. If the character were baked into the background, or drawn by the UI
@@ -35,6 +36,19 @@ export const MAIN_MENU_BACKGROUND_URL = assetUrl(`bg/${MAIN_MENU_BACKGROUND_FILE
 export const MAIN_MENU_OVERLAY_FILE = 'main_menu_overlay.png'
 
 export const MAIN_MENU_OVERLAY_URL = assetUrl(`bg/${MAIN_MENU_OVERLAY_FILE}`)
+
+/**
+ * The campfire, as its own transparent 1280x720 canvas like the character.
+ *
+ * Its visible ink sits at x 680..819, immediately left of the character's x 826..999,
+ * so the two share no pixel at all: they stand side by side rather than one in front of
+ * the other. The campfire is still drawn after the character, so that a flame reads in
+ * front should either canvas ever be revised to touch. Today that ordering is
+ * invisible, which is worth knowing rather than assuming.
+ */
+export const MAIN_MENU_CAMPFIRE_FILE = 'main_menu_campfire.png'
+
+export const MAIN_MENU_CAMPFIRE_URL = assetUrl(`bg/${MAIN_MENU_CAMPFIRE_FILE}`)
 
 /** Which screen the menu is showing. The entries live on `main`. */
 export type MenuScreen = 'main' | 'load' | 'settings' | 'quit'
@@ -79,9 +93,13 @@ export class MainMenu {
   private readonly backdrop: HTMLImageElement
   /** Layer 2's element, kept separate from the image so the layer can exist alone. */
   private readonly overlay: HTMLElement
-  /** Layer 2. The character/campfire overlay. */
+  /** Layer 2. The character overlay. */
   private readonly overlayImage: HTMLImageElement
-  /** Layer 3. Everything the player reads or clicks. */
+  /** Layer 3's element, kept separate from the image like layer 2's. */
+  private readonly campfire: HTMLElement
+  /** Layer 3. The campfire overlay. */
+  private readonly campfireImage: HTMLImageElement
+  /** Layer 4. Everything the player reads or clicks. */
   private readonly ui: HTMLDivElement
 
   private readonly screens = new Map<MenuScreen, HTMLElement>()
@@ -110,6 +128,19 @@ export class MainMenu {
     this.overlay.setAttribute('aria-hidden', 'true')
     this.overlay.append(this.overlayImage)
 
+    // Same canvas size and the same box as the backdrop, for the same reason.
+    this.campfireImage = new Image()
+    this.campfireImage.className = 'main-menu-campfire-art'
+    this.campfireImage.alt = ''
+    this.campfireImage.decoding = 'async'
+    this.campfireImage.draggable = false
+    this.campfireImage.src = MAIN_MENU_CAMPFIRE_URL
+
+    this.campfire = el('div', 'main-menu-campfire')
+    this.campfire.dataset.testid = 'main_menu_campfire'
+    this.campfire.setAttribute('aria-hidden', 'true')
+    this.campfire.append(this.campfireImage)
+
     this.ui = el('div', 'main-menu-ui')
     this.ui.dataset.testid = 'main_menu_ui'
 
@@ -128,7 +159,10 @@ export class MainMenu {
 
     this.root = el('div', 'main-menu')
     this.root.dataset.testid = 'main_menu'
-    this.root.append(this.backdrop, this.overlay, this.ui)
+    // Paint order: backdrop, the two transparent art canvases, then the UI. The order
+    // of the two canvases between themselves is currently invisible -- their ink does
+    // not touch -- but is fixed here anyway so it cannot drift.
+    this.root.append(this.backdrop, this.overlay, this.campfire, this.ui)
 
     this.show('main')
     this.syncFullscreenLabel()
@@ -292,7 +326,9 @@ export class MainMenu {
         img.addEventListener('error', done)
       })
     }
-    return Promise.all([settled(this.backdrop), settled(this.overlayImage)]).then(() => undefined)
+    return Promise.all([settled(this.backdrop), settled(this.overlayImage), settled(this.campfireImage)]).then(
+      () => undefined,
+    )
   }
 
   /** The backdrop's decoded size, or null if it has not loaded. For verification. */

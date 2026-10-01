@@ -644,7 +644,11 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 14px;
-  min-width: min(400px, calc(100vw - 56px));
+  /* `width`, not `min-width`: a min-width lets the widest child -- the title -- set the
+     panel's width, which is how the button column once grew far enough to cover the
+     campfire. `max-width` then stops it escaping the column on narrow screens. */
+  width: min(400px, calc(100vw - 56px));
+  max-width: 100%;
   padding: 32px 28px;
   border: 2px solid rgba(24, 18, 12, 0.85);
   background: rgba(18, 15, 12, 0.78);
@@ -655,7 +659,8 @@ body {
 }
 
 .menu-panel-wide {
-  min-width: min(520px, calc(100vw - 56px));
+  width: min(520px, calc(100vw - 56px));
+  max-width: 100%;
 }
 
 .menu-panel[hidden] {
@@ -664,9 +669,13 @@ body {
 
 .menu-title {
   margin: 0;
-  font-size: clamp(38px, 8vw, 76px);
+  /* Sized to fit the column rather than to fill the screen. The supplied art puts the
+     campfire at x 680 and the character at x 826, so the menu column has to stay left
+     of 680 at this viewport. */
+  font-size: clamp(26px, 4.2vw, 52px);
   font-weight: 800;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.12em;
+  max-width: 100%;
   color: #f2e4c4;
   text-shadow:
     0 3px 0 #2a1d12,
@@ -806,4 +815,25 @@ button.menu-setting:hover {
   color: #9d8c72;
   font-size: 12px;
   line-height: 1.6;
+}
+
+/* Layer 3 -- the campfire.
+   Geometry mirrors .main-menu-backdrop and .main-menu-overlay exactly, for the same
+   reason: the supplied canvas is already positioned, so only the shared box and scale
+   place it correctly. */
+.main-menu-campfire {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.main-menu-campfire-art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
 }

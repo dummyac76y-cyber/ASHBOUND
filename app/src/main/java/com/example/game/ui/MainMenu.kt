@@ -42,9 +42,10 @@ import androidx.compose.ui.unit.sp
  *
  * Three things stack here and it matters that they stay three things:
  *
- *   1. `main_menu`        the supplied background artwork
- *   2. `main_menu_overlay` the character/campfire artwork, on its own transparent canvas
- *   3. `main_menu_ui`      the title, the entries, and the sub-screens
+ *   1. `main_menu`         the supplied background artwork
+ *   2. `main_menu_overlay`  the character, on its own transparent canvas
+ *   3. `main_menu_campfire` the campfire, on its own transparent canvas
+ *   4. `main_menu_ui`       the title, the entries, and the sub-screens
  *
  * Keeping the artwork out of the UI layer is what lets the art stay exactly as supplied.
  * Mirrors web/src/ui/MainMenu.ts.
@@ -62,6 +63,16 @@ const val MAIN_MENU_BACKGROUND_FILE = "main_menu.jpg"
  * `MAIN_MENU_OVERLAY_FILE` in the web build.
  */
 const val MAIN_MENU_OVERLAY_FILE = "main_menu_overlay.png"
+
+/**
+ * The campfire, as its own transparent 1280x720 canvas like the character.
+ *
+ * Its visible ink sits at x 680..819, immediately left of the character's x 826..999,
+ * so the two share no pixel: they stand side by side rather than one in front of the
+ * other. It is still drawn after the character so a flame would read in front should
+ * either canvas ever be revised to touch. Today that ordering is invisible.
+ */
+const val MAIN_MENU_CAMPFIRE_FILE = "main_menu_campfire.png"
 
 enum class MenuScreen {
     MAIN,
@@ -105,9 +116,22 @@ fun rememberMenuBackground(assetFile: String = MAIN_MENU_BACKGROUND_FILE): Image
     }
 }
 
-/** The character/campfire overlay. Same folder, same canvas size as the backdrop. */
+/** The character overlay. Same folder, same canvas size as the backdrop. */
 @Composable
 fun rememberMenuOverlay(assetFile: String = MAIN_MENU_OVERLAY_FILE): ImageBitmap? {
+    val context = LocalContext.current
+    return remember(assetFile) {
+        runCatching {
+            context.assets.open("bg/$assetFile").use { stream ->
+                BitmapFactory.decodeStream(stream)?.asImageBitmap()
+            }
+        }.getOrNull()
+    }
+}
+
+/** The campfire overlay. Same folder, same canvas size as the backdrop. */
+@Composable
+fun rememberMenuCampfire(assetFile: String = MAIN_MENU_CAMPFIRE_FILE): ImageBitmap? {
     val context = LocalContext.current
     return remember(assetFile) {
         runCatching {
@@ -148,7 +172,20 @@ fun MainMenu(modifier: Modifier = Modifier, onAction: (MainMenuAction) -> Unit) 
             }
         }
 
-        // --- Layer 3: the UI --------------------------------------------------
+        // --- Layer 3: the campfire ---------------------------------------------
+        // Same box and same ContentScale.Fit as the others, so it registers too.
+        Box(Modifier.fillMaxSize().testTag("main_menu_campfire")) {
+            rememberMenuCampfire()?.let { image ->
+                Image(
+                    bitmap = image,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                )
+            }
+        }
+
+        // --- Layer 4: the UI --------------------------------------------------
         MenuUi(onAction)
     }
 }
@@ -163,7 +200,7 @@ private fun MenuUi(onAction: (MainMenuAction) -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(start = 40.dp)
+            .padding(start = 24.dp)
             .testTag("main_menu_ui"),
         horizontalAlignment = Alignment.Start,
         verticalArrangement = Arrangement.Center,
@@ -232,14 +269,17 @@ private fun MenuUi(onAction: (MainMenuAction) -> Unit) {
 private fun MenuTitle(onPick: (MenuScreen) -> Unit) {
     Column(
         horizontalAlignment = Alignment.Start,
+        // Stays clear of the campfire at ~53% and the character at ~64% of the art's
+        // width. On a wide screen 0.40 plus the start padding lands near 45%, which is
+        // why this is a fraction of the screen rather than a fixed dp width.
         modifier = Modifier
-            .fillMaxWidth(0.62f)
+            .fillMaxWidth(0.40f)
             .testTag("main_menu_title"),
     ) {
         Text(
             "ASHBOUND",
             color = Parchment,
-            fontSize = 44.sp,
+            fontSize = 34.sp,
             fontWeight = FontWeight.Black,
             letterSpacing = 9.sp,
         )
@@ -265,7 +305,7 @@ private fun MenuPanel(heading: String, content: @Composable () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .testTag("main_menu_panel")
-            .fillMaxWidth(0.86f)
+            .fillMaxWidth(0.44f)
             .padding(24.dp)
             .background(PanelColor)
             .border(2.dp, BorderDark)

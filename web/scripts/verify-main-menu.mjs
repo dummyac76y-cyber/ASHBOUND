@@ -33,13 +33,17 @@ const distDir = join(webRoot, 'dist')
 
 /** The backdrop, as both engines name it. Declared once; checked against both copies. */
 const MENU_BG = 'main_menu.jpg'
-/** The character/campfire overlay. */
+/** The character overlay. */
 const MENU_OVERLAY = 'main_menu_overlay.png'
+/** The campfire overlay. */
+const MENU_CAMPFIRE = 'main_menu_campfire.png'
 
 const ANDROID_ASSET = join(repoRoot, 'app/src/main/assets/bg', MENU_BG)
 const WEB_ASSET = join(webRoot, 'public/bg', MENU_BG)
 const ANDROID_OVERLAY = join(repoRoot, 'app/src/main/assets/bg', MENU_OVERLAY)
 const WEB_OVERLAY = join(webRoot, 'public/bg', MENU_OVERLAY)
+const ANDROID_CAMPFIRE = join(repoRoot, 'app/src/main/assets/bg', MENU_CAMPFIRE)
+const WEB_CAMPFIRE = join(webRoot, 'public/bg', MENU_CAMPFIRE)
 
 const MENU_TS = join(webRoot, 'src/ui/MainMenu.ts')
 const MENU_CSS = join(webRoot, 'src/style.css')
@@ -150,21 +154,26 @@ console.log('\n1. the artwork is stored exactly as supplied, in both engines')
     )
   }
 
-  const oa = existsSync(ANDROID_OVERLAY)
-  const ow = existsSync(WEB_OVERLAY)
-  if (!oa) {
-    pending('the character overlay has not been supplied yet', `expected at ${ANDROID_OVERLAY.replace(`${repoRoot}/`, '')}`)
-  } else {
-    check('the overlay is in the Android assets tree', true, ANDROID_OVERLAY.replace(`${repoRoot}/`, ''))
-    check('and synced to the web copy', ow, WEB_OVERLAY.replace(`${webRoot}/`, ''))
-    const ab = readFileSync(ANDROID_OVERLAY)
-    if (ow) {
-      const wb = readFileSync(WEB_OVERLAY)
-      check('the overlay copies are byte-for-byte identical', ab.equals(wb), `${ab.length} vs ${wb.length} bytes`)
+  // Both transparent canvases are checked the same way. The registration argument rests
+  // entirely on each being the backdrop's canvas size, so that is asserted per file.
+  for (const [label, androidPath, webPath] of [
+    ['character overlay', ANDROID_OVERLAY, WEB_OVERLAY],
+    ['campfire overlay', ANDROID_CAMPFIRE, WEB_CAMPFIRE],
+  ]) {
+    if (!existsSync(androidPath)) {
+      pending(`the ${label} has not been supplied yet`, `expected at ${androidPath.replace(`${repoRoot}/`, '')}`)
+      continue
+    }
+    check(`the ${label} is in the Android assets tree`, true, androidPath.replace(`${repoRoot}/`, ''))
+    const has = existsSync(webPath)
+    check('and synced to the web copy', has, webPath.replace(`${webRoot}/`, ''))
+    const ab = readFileSync(androidPath)
+    if (has) {
+      const wb = readFileSync(webPath)
+      check('the two copies are byte-for-byte identical', ab.equals(wb), `${ab.length} vs ${wb.length} bytes`)
     }
     check('it is still a PNG, so its transparency survived', ab[0] === 0x89 && ab.subarray(1, 4).toString('ascii') === 'PNG', 'PNG signature intact')
-    const size = pngSize(ANDROID_OVERLAY)
-    // The whole registration argument rests on this: same canvas size as the backdrop.
+    const size = pngSize(androidPath)
     check(
       'it is the same canvas size as the backdrop, which is what lets it register',
       size !== null && size.width === 1280 && size.height === 720,
@@ -187,11 +196,11 @@ console.log('\n2. the menu is what the page shows, and the artwork decodes untou
   await page.goto(`${base}/`, { waitUntil: 'networkidle' })
 
   // The overlay is optional until it is supplied, so a 404 for it alone is survivable.
-  const realMissing = missing.filter((m) => !m.includes(MENU_OVERLAY))
+  const realMissing = missing.filter((m) => !m.includes(MENU_OVERLAY) && !m.includes(MENU_CAMPFIRE))
   check('the page raises no script errors', errors.length === 0, errors.join('; '))
   check('the page requests no missing assets', realMissing.length === 0, realMissing.join('; ') || 'every request succeeded')
 
-  const overlaySupplied = existsSync(ANDROID_OVERLAY)
+  const overlaySupplied = existsSync(ANDROID_OVERLAY) && existsSync(ANDROID_CAMPFIRE)
 
   const res = await page.evaluate(() => {
     const img = document.querySelector('.main-menu-backdrop')
@@ -241,147 +250,212 @@ console.log('\n2. the menu is what the page shows, and the artwork decodes untou
     )
   }
 
-  // --- The overlay: same canvas, same box, so the character registers -------------
-  const overlay = await page.evaluate(() => {
-    const img = document.querySelector('.main-menu-overlay-art')
-    const box = document.querySelector('.main-menu-overlay')
-    const backdrop = document.querySelector('.main-menu-backdrop')
-    if (!img || !box || !backdrop) return null
-    const r = img.getBoundingClientRect()
-    const b = backdrop.getBoundingClientRect()
-    const cs = getComputedStyle(img)
-    return {
-      natural: { width: img.naturalWidth, height: img.naturalHeight },
-      rendered: { left: r.left, top: r.top, width: r.width, height: r.height },
-      backdrop: { left: b.left, top: b.top, width: b.width, height: b.height },
-      objectFit: cs.objectFit,
-      transform: cs.transform,
-      filter: cs.filter,
-      opacity: cs.opacity,
-      animation: cs.animationName,
-      pointerEvents: cs.pointerEvents,
-    }
-  })
+  // --- The two transparent art canvases ------------------------------------------
+  //
+  // Both are checked identically, because they make the identical claim: a 1280x720
+  // canvas the same size as the backdrop, already positioned within it, drawn in the
+  // backdrop's own box with the backdrop's own scaling. If that holds for one it holds
+  // for the other, and it is what makes each land where it was composed.
+  const ART_LAYERS = [
+    { name: 'character overlay', sel: '.main-menu-overlay-art', supplied: existsSync(ANDROID_OVERLAY) },
+    { name: 'campfire overlay', sel: '.main-menu-campfire-art', supplied: existsSync(ANDROID_CAMPFIRE) },
+  ]
 
-  check('the overlay layer exists, separately from the backdrop and the UI', overlay !== null, '.main-menu-overlay')
-  if (!overlaySupplied) {
-    pending('overlay registration is not measured yet', 'the overlay file has not been supplied')
-  } else if (overlay) {
-    check('the overlay decoded at the backdrop\'s own canvas size', overlay.natural.width === 1280 && overlay.natural.height === 720, `${overlay.natural.width}x${overlay.natural.height}`)
+  for (const layer of ART_LAYERS) {
+    const info = await page.evaluate((sel) => {
+      const img = document.querySelector(sel)
+      const backdrop = document.querySelector('.main-menu-backdrop')
+      if (!img || !backdrop) return null
+      const r = img.getBoundingClientRect()
+      const b = backdrop.getBoundingClientRect()
+      const cs = getComputedStyle(img)
+      return {
+        natural: { width: img.naturalWidth, height: img.naturalHeight },
+        rendered: { left: r.left, top: r.top, width: r.width, height: r.height },
+        backdrop: { left: b.left, top: b.top, width: b.width, height: b.height },
+        objectFit: cs.objectFit,
+        transform: cs.transform,
+        filter: cs.filter,
+        opacity: cs.opacity,
+        animation: cs.animationName,
+        pointerEvents: cs.pointerEvents,
+      }
+    }, layer.sel)
+
+    check(`the ${layer.name} layer is present, separately from the backdrop and the UI`, info !== null, layer.sel)
+
+    if (!layer.supplied) {
+      pending(`${layer.name} registration is not measured yet`, 'the file has not been supplied')
+      continue
+    }
+    if (!info) continue
+
+    const n = `the ${layer.name}`
+    check(`${n} decoded at the backdrop's own canvas size`, info.natural.width === 1280 && info.natural.height === 720, `${info.natural.width}x${info.natural.height}`)
     const same = (a, b) => Math.abs(a - b) < 0.5
     check(
-      'it is drawn in exactly the same box as the backdrop, so the character registers against it',
-      same(overlay.rendered.left, overlay.backdrop.left) &&
-        same(overlay.rendered.top, overlay.backdrop.top) &&
-        same(overlay.rendered.width, overlay.backdrop.width) &&
-        same(overlay.rendered.height, overlay.backdrop.height),
-      `overlay ${overlay.rendered.left.toFixed(1)},${overlay.rendered.top.toFixed(1)} ${overlay.rendered.width.toFixed(1)}x${overlay.rendered.height.toFixed(1)} vs backdrop ${overlay.backdrop.left.toFixed(1)},${overlay.backdrop.top.toFixed(1)} ${overlay.backdrop.width.toFixed(1)}x${overlay.backdrop.height.toFixed(1)}`,
+      `${n} is drawn in exactly the same box as the backdrop, so it registers against it`,
+      same(info.rendered.left, info.backdrop.left) &&
+        same(info.rendered.top, info.backdrop.top) &&
+        same(info.rendered.width, info.backdrop.width) &&
+        same(info.rendered.height, info.backdrop.height),
+      `art ${info.rendered.left.toFixed(1)},${info.rendered.top.toFixed(1)} ${info.rendered.width.toFixed(1)}x${info.rendered.height.toFixed(1)} vs backdrop ${info.backdrop.left.toFixed(1)},${info.backdrop.top.toFixed(1)} ${info.backdrop.width.toFixed(1)}x${info.backdrop.height.toFixed(1)}`,
     )
-    check('it keeps its aspect too, so nothing about it is cropped', Math.abs(overlay.natural.width / overlay.natural.height - overlay.rendered.width / overlay.rendered.height) < 0.001, `source ${(overlay.natural.width / overlay.natural.height).toFixed(4)}, displayed ${(overlay.rendered.width / overlay.rendered.height).toFixed(4)}`)
-    check('it is not transformed', overlay.transform === 'none' || overlay.transform === 'matrix(1, 0, 0, 1, 0, 0)', `transform ${overlay.transform}`)
-    check('not filtered', overlay.filter === 'none', `filter ${overlay.filter}`)
-    check('not faded', overlay.opacity === '1', `opacity ${overlay.opacity}`)
-    check('not animated', overlay.animation === 'none', `animation ${overlay.animation}`)
-    check('and it cannot steal clicks from the buttons beneath it', overlay.pointerEvents === 'none', `pointer-events ${overlay.pointerEvents}`)
+    check(`${n} keeps its aspect too, so nothing about it is cropped`, Math.abs(info.natural.width / info.natural.height - info.rendered.width / info.rendered.height) < 0.001, `source ${(info.natural.width / info.natural.height).toFixed(4)}, displayed ${(info.rendered.width / info.rendered.height).toFixed(4)}`)
+    check(`it is not transformed`, info.transform === 'none' || info.transform === 'matrix(1, 0, 0, 1, 0, 0)', `transform ${info.transform}`)
+    check(`it is not filtered`, info.filter === 'none', `filter ${info.filter}`)
+    check(`it is not faded`, info.opacity === '1', `opacity ${info.opacity}`)
+    check(`it is not animated`, info.animation === 'none', `animation ${info.animation}`)
+    check(`and it cannot steal clicks from the buttons beneath it`, info.pointerEvents === 'none', `pointer-events ${info.pointerEvents}`)
+  }
 
+  if (overlaySupplied) {
     // Real paint order, measured rather than assumed.
     //
-    // Both art layers are pointer-events:none so they cannot steal clicks from the
+    // Every art layer is pointer-events:none so it cannot steal clicks from the
     // buttons, and elementsFromPoint skips such nodes entirely -- it cannot answer this
     // as shipped. Hit-testing them is only a measurement trick, so pointer-events is
-    // switched on, the stack is read, and it is switched back.
+    // switched on, the stack is read, and it is switched straight back.
     const order = await page.evaluate(() => {
       const b = document.querySelector('.main-menu-backdrop')
-      const o = document.querySelector('.main-menu-overlay')
+      const o = document.querySelector('.main-menu-overlay-art')
+      const c = document.querySelector('.main-menu-campfire-art')
       const u = document.querySelector('.main-menu-ui')
-      if (!b || !o || !u) return null
-      const prev = [b, o, u].map((n) => n.style.pointerEvents)
-      for (const n of [b, o, u]) n.style.pointerEvents = 'auto'
-      // The centre of the UI panel: inside all three layers at once.
+      if (!b || !o || !c || !u) return null
+      const nodes = [b, o, c, u]
+      const prev = nodes.map((n) => n.style.pointerEvents)
+      for (const n of nodes) n.style.pointerEvents = 'auto'
       const r = u.getBoundingClientRect()
       const stack = document.elementsFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-      for (let i = 0; i < 3; i++) [b, o, u][i].style.pointerEvents = prev[i]
+      for (let i = 0; i < nodes.length; i++) nodes[i].style.pointerEvents = prev[i]
       const cs = (n) => getComputedStyle(n)
       return {
-        // elementsFromPoint returns front-to-back, so a higher index means further back.
         ui: stack.indexOf(u),
-        overlay: stack.indexOf(o),
+        campfire: stack.indexOf(c),
+        character: stack.indexOf(o),
         backdrop: stack.indexOf(b),
-        artZ: { backdrop: cs(b).zIndex, overlay: cs(o).zIndex },
-        noTransform: [b, o, u].every((n) => ['none', 'matrix(1, 0, 0, 1, 0, 0)'].includes(cs(n).transform)),
+        artZ: [cs(b).zIndex, cs(o).zIndex, cs(c).zIndex],
+        noTransform: nodes.every((n) => ['none', 'matrix(1, 0, 0, 1, 0, 0)'].includes(cs(n).transform)),
       }
     })
+    // elementsFromPoint returns front-to-back, so a smaller index is nearer the viewer.
+    // What matters is that the UI is in front of everything, the backdrop behind
+    // everything, and the two art canvases between them. The canvases' order relative to
+    // each other is deliberately not asserted: their ink boxes are six pixels apart and
+    // share no pixel, so whichever way they fall is invisible, and pinning it down would
+    // only make the test brittle.
     check(
-      'the overlay paints between the backdrop and the UI',
-      order.backdrop > order.overlay && order.overlay > order.ui,
-      `front-to-back: ui ${order.ui}, overlay ${order.overlay}, backdrop ${order.backdrop}`,
+      'the UI is in front of both art canvases and the backdrop is behind both',
+      order.ui < order.character &&
+        order.ui < order.campfire &&
+        order.backdrop > order.character &&
+        order.backdrop > order.campfire,
+      `front-to-back: ui ${order.ui}, character ${order.character}, campfire ${order.campfire}, backdrop ${order.backdrop}`,
     )
     check(
-      'and the two art layers are ordered by document order, not by a z-index',
-      order.artZ.backdrop === 'auto' && order.artZ.overlay === 'auto',
-      `z-index ${order.artZ.backdrop} / ${order.artZ.overlay}`,
+      'the art layers are ordered among themselves by document order, not by a z-index',
+      order.artZ.every((z) => z === 'auto'),
+      `z-index ${order.artZ.join(' / ')}`,
     )
     check('nor is any layer reordered by a transform', order.noTransform, 'no transform on any layer')
 
-    // Where the art actually puts ink, read from the alpha channel. A 1280x720 canvas
+    // Where each canvas actually puts ink, read from its alpha channel. A 1280x720 canvas
     // that is 98% transparent still has one specific block of visible pixels, and that
-    // block has to land where it was composed and miss the entries.
-    const ink = await page.evaluate(async () => {
-      const img = document.querySelector('.main-menu-overlay-art')
-      await img.decode()
-      const c = document.createElement('canvas')
-      c.width = img.naturalWidth
-      c.height = img.naturalHeight
-      const g = c.getContext('2d')
-      g.drawImage(img, 0, 0)
-      const d = g.getImageData(0, 0, c.width, c.height).data
-      let minX = Infinity
-      let minY = Infinity
-      let maxX = -1
-      let maxY = -1
-      let opaque = 0
-      for (let y = 0; y < c.height; y++) {
-        for (let x = 0; x < c.width; x++) {
-          if (d[(y * c.width + x) * 4 + 3] > 8) {
-            opaque++
-            if (x < minX) minX = x
-            if (y < minY) minY = y
-            if (x > maxX) maxX = x
-            if (y > maxY) maxY = y
+    // block has to land inside the frame and clear of the entries.
+    const inks = await page.evaluate(async (sels) => {
+      const out = []
+      for (const sel of sels) {
+        const img = document.querySelector(sel)
+        await img.decode()
+        const c = document.createElement('canvas')
+        c.width = img.naturalWidth
+        c.height = img.naturalHeight
+        const g = c.getContext('2d')
+        g.drawImage(img, 0, 0)
+        const d = g.getImageData(0, 0, c.width, c.height).data
+        let minX = Infinity
+        let minY = Infinity
+        let maxX = -1
+        let maxY = -1
+        let opaque = 0
+        for (let y = 0; y < c.height; y++) {
+          for (let x = 0; x < c.width; x++) {
+            if (d[(y * c.width + x) * 4 + 3] > 8) {
+              opaque++
+              if (x < minX) minX = x
+              if (y < minY) minY = y
+              if (x > maxX) maxX = x
+              if (y > maxY) maxY = y
+            }
           }
         }
+        const r = img.getBoundingClientRect()
+        const sx = r.width / c.width
+        const sy = r.height / c.height
+        out.push({
+          sel,
+          ratio: opaque / (c.width * c.height),
+          box: {
+            left: r.left + minX * sx,
+            top: r.top + minY * sy,
+            right: r.left + (maxX + 1) * sx,
+            bottom: r.top + (maxY + 1) * sy,
+          },
+        })
       }
-      const r = img.getBoundingClientRect()
-      return {
-        total: c.width * c.height,
-        opaque,
-        box: {
-          left: r.left + minX * (r.width / c.width),
-          top: r.top + minY * (r.height / c.height),
-          right: r.left + (maxX + 1) * (r.width / c.width),
-          bottom: r.top + (maxY + 1) * (r.height / c.height),
-        },
-      }
-    })
-    check('the overlay is a transparent overlay, not a second background', ink.opaque / ink.total < 0.1, `${((ink.opaque / ink.total) * 100).toFixed(1)}% of the canvas is visible`)
-    check(
-      'the character lands where it was composed, inside the frame',
-      ink.box.left >= 0 && ink.box.top >= 0 && ink.box.right <= 1280 && ink.box.bottom <= 720,
-      `x ${Math.round(ink.box.left)}..${Math.round(ink.box.right)}, y ${Math.round(ink.box.top)}..${Math.round(ink.box.bottom)}`,
-    )
-    const collisions = await page.evaluate((b) => {
+      return out
+    }, ART_LAYERS.filter((l) => l.supplied).map((l) => l.sel))
+
+    for (const ink of inks) {
+      const name = ART_LAYERS.find((l) => l.sel === ink.sel).name
+      check(`the ${name} is a transparent overlay, not a second background`, ink.ratio < 0.1, `${(ink.ratio * 100).toFixed(2)}% of the canvas is visible`)
+      check(
+        `the ${name} lands where it was composed, inside the frame`,
+        ink.box.left >= 0 && ink.box.top >= 0 && ink.box.right <= 1280 && ink.box.bottom <= 720,
+        `x ${Math.round(ink.box.left)}..${Math.round(ink.box.right)}, y ${Math.round(ink.box.top)}..${Math.round(ink.box.bottom)}`,
+      )
+      const hits = await page.evaluate((b) => {
+        const area = (a, c) =>
+          Math.max(0, Math.min(a.right, c.right) - Math.max(a.left, c.left)) *
+          Math.max(0, Math.min(a.bottom, c.bottom) - Math.max(a.top, c.top))
+        return [...document.querySelectorAll('.menu-button')]
+          .map((n) => ({ text: n.textContent.trim().slice(0, 12), area: area(b, n.getBoundingClientRect()) }))
+          .filter((r) => r.area > 1)
+      }, ink.box)
+      check(
+        `and the ${name} does not cover any of the four entries, so they stay readable`,
+        hits.length === 0,
+        hits.length ? hits.map((h) => `${h.text} by ${Math.round(h.area)}px^2`).join(', ') : 'no entry overlaps the art',
+      )
+    }
+
+    // The two canvases are separate objects standing side by side, so the entries have to
+    // clear both. Checking them one at a time against the same buttons could still miss
+    // a case where together they bracket the column.
+    const combined = await page.evaluate((boxes) => {
       const area = (a, c) =>
         Math.max(0, Math.min(a.right, c.right) - Math.max(a.left, c.left)) *
         Math.max(0, Math.min(a.bottom, c.bottom) - Math.max(a.top, c.top))
+      const union = boxes.reduce(
+        (acc, b) => ({
+          left: Math.min(acc.left, b.left),
+          top: Math.min(acc.top, b.top),
+          right: Math.max(acc.right, b.right),
+          bottom: Math.max(acc.bottom, b.bottom),
+        }),
+        { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity },
+      )
       return [...document.querySelectorAll('.menu-button')]
-        .map((n) => ({ text: n.textContent.trim().slice(0, 12), area: area(b, n.getBoundingClientRect()) }))
+        .map((n) => ({ text: n.textContent.trim().slice(0, 12), area: area(union, n.getBoundingClientRect()) }))
         .filter((r) => r.area > 1)
-    }, ink.box)
+    }, inks.map((i) => i.box))
     check(
-      'and it does not cover any of the four entries, so they stay readable',
-      collisions.length === 0,
-      collisions.length ? collisions.map((c) => `${c.text} by ${Math.round(c.area)}px^2`).join(', ') : 'no entry overlaps the art',
+      'and neither canvas together brackets the entries',
+      combined.length === 0,
+      combined.length ? combined.map((h) => `${h.text} by ${Math.round(h.area)}px^2`).join(', ') : 'the menu column is clear of both',
     )
+  } else {
+    pending('art layer registration is not measured yet', 'the art canvases have not been supplied')
   }
 
   await page.close()
@@ -407,7 +481,7 @@ console.log('\n3. the four menu entries, and what each one does')
       hudHidden: document.querySelector('.hud')?.hidden ?? null,
       controlsHidden: document.querySelector('.controls')?.hidden ?? null,
       layerChain: (() => {
-        const sel = ['.main-menu-backdrop', '.main-menu-overlay', '.main-menu-ui']
+        const sel = ['.main-menu-backdrop', '.main-menu-overlay', '.main-menu-campfire', '.main-menu-ui']
         return sel.map((s) => {
           const n = document.querySelector(s)
           return n ? `${s}:${getComputedStyle(n).position}` : `${s}:MISSING`
@@ -428,8 +502,9 @@ console.log('\n3. the four menu entries, and what each one does')
   check('the in-game HUD is hidden behind the menu', labels.hudHidden === true, `hud.hidden ${labels.hudHidden}`)
   check('and so are the touch controls', labels.controlsHidden === true, `controls.hidden ${labels.controlsHidden}`)
   check(
-    'the backdrop, the character/campfire overlay and the UI are three separate layers',
-    labels.layerChain === '.main-menu-backdrop:absolute .main-menu-overlay:absolute .main-menu-ui:relative',
+    'the backdrop, the character, the campfire and the UI are four separate layers',
+    labels.layerChain ===
+      '.main-menu-backdrop:absolute .main-menu-overlay:absolute .main-menu-campfire:absolute .main-menu-ui:relative',
     labels.layerChain,
   )
 
@@ -544,23 +619,26 @@ console.log('\n5. Android mirrors the same menu')
   // `window.close` is ignored by the browser, and prose about a call is not a call.
   const codeOnly = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
 
-  const overlaySupplied = existsSync(ANDROID_OVERLAY)
+  const overlaySupplied = existsSync(ANDROID_OVERLAY) && existsSync(ANDROID_CAMPFIRE)
 
   check('both engines load the background by the same synced filename', menuTs.includes('main_menu.jpg') && ktMenu.includes('"main_menu.jpg"'), `bg/main_menu.jpg`)
   check('web draws it with contain, never crop', /object-fit:\s*contain/.test(css))
-  check('the web stylesheet puts no transition or animation on the art layers', !/\.main-menu-(backdrop|overlay)[^{]*\{[^}]*(transition|animation)/.test(css), 'no transition/animation on .main-menu-backdrop or .main-menu-overlay')
+  check('the web stylesheet puts no transition or animation on the art layers', !/\.main-menu-(backdrop|overlay|campfire)[^{]*\{[^}]*(transition|animation)/.test(css), 'no transition/animation on .main-menu-backdrop / -overlay / -campfire')
   check('Android scales the artwork to fit, never cropping it', /ContentScale\.Fit/.test(ktMenu), 'ContentScale.Fit')
   check('Android does not tint the artwork', !/ColorFilter|colorFilter/.test(ktMenu), 'no colour filter on the image')
 
   if (overlaySupplied) {
-    check('Android loads the overlay from the same assets folder, by the same filename as the web build', ktMenu.includes('"main_menu_overlay.png"') && ktMenu.includes('"bg/$assetFile"') && menuTs.includes('main_menu_overlay.png'), 'assets/bg/main_menu_overlay.png')
+    check('Android loads the character overlay by the same filename the web build asks for', ktMenu.includes('"main_menu_overlay.png"') && menuTs.includes('main_menu_overlay.png'), 'assets/bg/main_menu_overlay.png')
+    check('and the campfire overlay likewise', ktMenu.includes('"main_menu_campfire.png"') && menuTs.includes('main_menu_campfire.png'), 'assets/bg/main_menu_campfire.png')
+    check('both are read from the same assets folder by the same loader', ktMenu.includes('"bg/$assetFile"'), 'assets/bg/<file>')
+    // One per art layer: backdrop, character, campfire.
     const fits = (ktMenu.match(/ContentScale\.Fit/g) || []).length
-    check('and draws it with the same ContentScale.Fit as the backdrop, so the two register', fits >= 2, `${fits} uses of ContentScale.Fit`)
+    check('every art layer is drawn with the same ContentScale.Fit as the backdrop, so they all register', fits >= 3, `${fits} uses of ContentScale.Fit`)
   } else {
-    pending('Android overlay parity is not checked yet', 'the overlay file has not been supplied')
+    pending('Android art layer parity is not checked yet', 'the art canvases have not been supplied')
   }
 
-  check('Android keeps the backdrop, the overlay and the UI as three layers', /main_menu"/.test(ktMenu) && /main_menu_overlay/.test(ktMenu) && /main_menu_ui/.test(ktMenu), 'main_menu / main_menu_overlay / main_menu_ui')
+  check('Android keeps the backdrop, both art canvases and the UI as four layers', /main_menu"/.test(ktMenu) && /main_menu_overlay/.test(ktMenu) && /main_menu_campfire/.test(ktMenu) && /main_menu_ui/.test(ktMenu), 'main_menu / main_menu_overlay / main_menu_campfire / main_menu_ui')
 
   const labels = ['START GAME', 'LOAD GAME', 'SETTINGS', 'QUIT']
   const found = labels.filter((l) => ktMenu.includes(`"${l}"`))
