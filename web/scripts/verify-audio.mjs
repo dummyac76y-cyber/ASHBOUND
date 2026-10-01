@@ -215,7 +215,6 @@ section('Wiring')
  * catalogue entry that looks finished and is not.
  */
 const RESERVED = {
-  campfire: 'no campfire entity exists in the world yet',
   block: 'nothing damages the player, so no block ever connects',
   hurt: 'nothing damages the player',
   death: 'nothing damages the player',
@@ -256,6 +255,15 @@ check('the web starts the menu ambience', /audio\.start\(MAIN_MENU_AMBIENCE\)/.t
 check('the web menu stops cues on start', /audio\.stop\(\)/.test(WEB_MAIN))
 check('Android starts the menu music', /audio\.start\(MAIN_MENU_MUSIC\)/.test(KT_MENU))
 check('Android starts the menu ambience', /audio\.start\(MAIN_MENU_AMBIENCE\)/.test(KT_MENU))
+// The fire's crackle rides with the menu, not with a world object that does not exist yet.
+// AUDIO_SETUP.md asks for exactly this, and it keeps the menu to one place that decides what
+// it is playing.
+check('the web starts the campfire with the menu cues', /audio\.start\(CAMPFIRE\)/.test(WEB_MAIN))
+check('Android starts the campfire with the menu cues', /audio\.start\(CAMPFIRE\)/.test(KT_MENU))
+check(
+  'and the campfire stops with them rather than looping on',
+  /audio\.stop\(\)/.test(WEB_MAIN) && /onDispose\s*\{\s*audio\.stop\(\)/s.test(KT_MENU),
+)
 check('Android stops cues when the menu is torn down', /onDispose\s*\{\s*audio\.stop\(\)/s.test(KT_MENU))
 check('the menu music id matches on both', /MAIN_MENU_MUSIC\s*=\s*'main_menu_music'/.test(WEB_SYSTEM) && /MAIN_MENU_MUSIC\s*=\s*"main_menu_music"/.test(KT_ENGINE))
 

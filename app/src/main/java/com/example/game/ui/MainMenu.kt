@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import com.example.game.audio.AUDIO_CLIPS
+import com.example.game.audio.CAMPFIRE
 import com.example.game.audio.AudioEngine
 import com.example.game.audio.MAIN_MENU_AMBIENCE
 import com.example.game.audio.MAIN_MENU_MUSIC
@@ -598,6 +599,10 @@ fun MainMenu(
     LaunchedEffect(Unit) {
         audio.start(MAIN_MENU_MUSIC)
         audio.start(MAIN_MENU_AMBIENCE)
+        // The fire's own crackle belongs to the title screen's fire, not to a world object.
+        // There is no campfire entity in the game yet, so it rides with the menu ambience and
+        // is stopped by the same `stop()` on teardown.
+        audio.start(CAMPFIRE)
     }
     DisposableEffect(Unit) {
         onDispose { audio.stop() }

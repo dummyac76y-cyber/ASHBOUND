@@ -2,6 +2,7 @@ import { assetUrl } from './assetUrl'
 import {
   AUDIO_CLIPS,
   AudioSystem,
+  CAMPFIRE,
   MAIN_MENU_AMBIENCE,
   MAIN_MENU_MUSIC,
 } from './game/AudioSystem'
@@ -209,6 +210,11 @@ async function boot(): Promise<void> {
     else {
       audio.start(MAIN_MENU_MUSIC)
       audio.start(MAIN_MENU_AMBIENCE)
+      // The fire's own crackle belongs to the title screen's fire, not to a world object.
+      // There is no campfire entity in the game yet, so it rides with the menu ambience and
+      // is stopped by the same `stop()`; wiring it here rather than as a second loop means
+      // there is still only one place that decides what the menu is playing.
+      audio.start(CAMPFIRE)
     }
   }
   setStarted(started)
@@ -312,6 +318,7 @@ async function boot(): Promise<void> {
       if (!started) {
         audio.start(MAIN_MENU_MUSIC)
         audio.start(MAIN_MENU_AMBIENCE)
+        audio.start(CAMPFIRE)
       }
     }
   })

@@ -96,6 +96,15 @@ export const AUDIO_CLIPS: readonly AudioClip[] = [
 export const MAIN_MENU_MUSIC = 'main_menu_music'
 export const MAIN_MENU_AMBIENCE = 'main_menu_ambience'
 
+/**
+ * The fire's own crackle.
+ *
+ * Started with the menu rather than by a world object: the loop lives where the visible fire
+ * is, and there is no campfire entity in the game yet. When one exists this becomes its loop
+ * instead, at the same id and the same path, so nothing else has to change.
+ */
+export const CAMPFIRE = 'campfire'
+
 /** What `loadAll` found. Kept so the settings screen and the verifier can report it. */
 export interface AudioInventory {
   /** Ids whose file decoded. */
