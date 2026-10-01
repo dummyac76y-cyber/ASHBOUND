@@ -423,16 +423,22 @@ class AudioEngine(private val context: Context) {
      * Cancels repeating clips' timers as well as their players, and forgets the intent either
      * way. Forgetting it matters most for a repeating clip: a menu ambience left wanted after
      * the menu is torn down would keep firing one-shots at a screen nobody is on.
+     *
+     * The intent is forgotten *before* the timers are walked, not inside that walk. Clearing
+     * it per-timer meant a `stop()` over an empty [repeating] map forgot nothing at all, which
+     * is exactly the state the menu is torn down in whenever its ambience had already come and
+     * gone -- a title screen the player sat on past the first firing. The title cues stayed
+     * wanted, and the next thing that consults `wanted` (a category being unmuted, or a resume)
+     * started the menu music and the campfire under the first walk of the game.
      */
     fun stop(id: String? = null) {
         val h = handler()
+        if (id != null) wanted.remove(id) else wanted.clear()
         for ((key, runnable) in repeating.toList()) {
             if (id != null && key != id) continue
             h?.removeCallbacks(runnable)
             repeating.remove(key)
-            if (id != null) wanted.remove(key) else wanted.clear()
         }
-        if (id != null) wanted.remove(id)
 
         val targets = if (id != null) listOf(id) else loops.keys.toList()
         for (target in targets) {

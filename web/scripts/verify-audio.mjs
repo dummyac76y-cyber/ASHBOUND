@@ -309,6 +309,18 @@ section('Ambience rides the FX switch')
  * the menu, so it is the one they notice surviving a mute.
  */
 for (const [label, system] of [['web', WEB_SYSTEM], ['Android', KT_ENGINE]]) {
+  // The menu is torn down with a bare `stop()`, and that is the one call whose whole job is
+  // to leave nothing behind. Forgetting the intent has to be unconditional: it used to happen
+  // per repeating timer, so a `stop()` over an empty timer map forgot nothing at all -- which is
+  // the state the menu is in once its ambience has come and gone. The title cues stayed wanted,
+  // and the next thing that consults `wanted` (a category unmuted, or a resume) put the menu
+  // music and the campfire back under the first walk of the game.
+  check(
+    `${label}: stop() forgets the intent even when nothing is repeating`,
+    // The clear/delete has to come before the walk over the timers, not inside it.
+    /stop\(id\??: string\)(: void)? \{\s*[^}]*?wanted\.(clear\(\)|delete\(id\))/.test(system) ||
+      /fun stop\(id: String\? = null\) \{\s*val h = handler\(\)\s*\n\s*if \(id != null\) wanted\.remove\(id\) else wanted\.clear\(\)/.test(system),
+  )
   check(
     `${label}: the ambience mixer is scaled by the FX flag, not the music one`,
     /gains\.ambience\.gain\.value = this\.sfxEnabled/.test(system) ||
