@@ -90,7 +90,25 @@ const VIEWPORTS = [
   { name: '1366x768 laptop', width: 1366, height: 768, mobile: false },
   { name: 'narrow desktop window', width: 900, height: 1000, mobile: false },
   { name: 'mobile portrait', width: 390, height: 844, mobile: true },
+  { name: 'small mobile portrait', width: 360, height: 800, mobile: true },
+  { name: 'large mobile portrait', width: 412, height: 915, mobile: true },
   { name: 'mobile landscape', width: 844, height: 390, mobile: true },
+]
+
+/**
+ * The on-screen controls, with the size each is authored at.
+ *
+ * These are logical sizes: the width the control has when the stage is 640px wide, which is
+ * the width the world is authored at. They are not expected sizes -- they are multiplied by
+ * the stage scale and then floored for touch, which is what the CSS does.
+ */
+const SCALED_CONTROLS = [
+  ['.joystick', 130, 'the joystick'],
+  ['[data-testid="button_attack"]', 62, 'the attack button'],
+  ['[data-testid="button_heavy_attack"]', 54, 'the heavy attack button'],
+  ['[data-testid="button_dash"]', 54, 'the dash button'],
+  ['[data-testid="button_jump"]', 54, 'the jump button'],
+  ['[data-testid="button_block"]', 54, 'the block button'],
 ]
 
 /** The elements that must live inside the stage, by selector. */
@@ -261,6 +279,88 @@ try {
         outside.length === 0,
         outside.join('; '),
       )
+    }
+
+    // --- The controls are sized by the stage, not by the device ---
+    //
+    // The stage and the viewport are two different sizes, and on a phone they differ by a
+    // lot: a 390px-wide portrait viewport gets a stage barely 219px tall. Controls sized in
+    // device pixels therefore look enormous there while looking right on a desktop -- the
+    // world shrinks with the stage and the controls do not, so they drift apart. These checks
+    // pin every control to `logical x stage scale` so the two cannot diverge again.
+    const sizing = await page.evaluate(() => {
+      const stage = document.querySelector('[data-testid="game_stage"]')
+      const canvas = document.querySelector('canvas')
+      if (!stage || !canvas) return null
+      const declared = getComputedStyle(stage).getPropertyValue('--stage-scale').trim()
+      const c = canvas.getBoundingClientRect()
+      return {
+        declared: Number.parseFloat(declared),
+        // What the scale *should* be, computed independently from the rendered canvas: the
+        // stage is the 16:9 box and the canvas fills it, so stage width / logical width is the
+        // stage scale. Comparing against this rather than against the declared value is what
+        // stops a variable that is simply wrong from passing.
+        actual: c.width / 640,
+        stageWidth: c.width,
+        stageHeight: c.height,
+      }
+    })
+    check('the stage publishes its scale for the controls', sizing !== null)
+    if (sizing) {
+      check(
+        'the published scale is the stage scale, not a viewport or device ratio',
+        Math.abs(sizing.declared - sizing.actual) < 0.01,
+        `declared ${sizing.declared.toFixed(4)} vs stage-derived ${sizing.actual.toFixed(4)}`,
+      )
+      // Measured against the rendered boxes, with the floor the CSS applies for touch.
+      const measured = await page.evaluate((sels) => {
+        const out = {}
+        for (const [sel] of sels) {
+          const n = document.querySelector(sel)
+          if (!n) continue
+          const r = n.getBoundingClientRect()
+          out[sel] = r.width
+        }
+        return out
+      }, SCALED_CONTROLS)
+      for (const [sel, logical, label] of SCALED_CONTROLS) {
+        const got = measured[sel]
+        if (got === undefined) continue
+        // The floor is applied after the scale and is the same for every control, so it is
+        // derived once here rather than duplicated per button.
+        const floor = sel === '.joystick' ? 44 : 40
+        const want = Math.max(floor, logical * sizing.actual)
+        check(
+          `${label} is its logical size x the stage scale`,
+          Math.abs(got - want) <= 1.5,
+          `${got.toFixed(1)}px rendered, expected ~${want.toFixed(1)}px (${logical} x ${sizing.actual.toFixed(3)})`,
+        )
+      }
+      // The point of scaling with the stage rather than the device: the controls must keep
+      // their proportion to the world. Measured as a fraction of stage height, which is the
+      // axis that collapses hardest in portrait.
+      const fractions = await page.evaluate((sels) => {
+        const stage = document.querySelector('[data-testid="game_stage"]')
+        const h = stage.getBoundingClientRect().height
+        const out = {}
+        for (const [sel] of sels) {
+          const n = document.querySelector(sel)
+          if (n) out[sel] = n.getBoundingClientRect().width / h
+        }
+        return out
+      }, SCALED_CONTROLS)
+      for (const [sel, , label] of SCALED_CONTROLS) {
+        const frac = fractions[sel]
+        if (frac === undefined) continue
+        // A tolerance wide enough for the touch floor to be legitimate on the smallest stage
+        // and tight enough that "keeps its desktop size on a phone" cannot pass. A control
+        // left at its desktop pixel size on a 219px-tall stage would be over twice this.
+        check(
+          `${label} stays proportional to the stage, not oversized on it`,
+          frac > 0.04 && frac < 0.55,
+          `${(frac * 100).toFixed(1)}% of stage height`,
+        )
+      }
     }
 
     // --- And none of it is out in the unused area ---

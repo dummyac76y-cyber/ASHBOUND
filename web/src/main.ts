@@ -269,6 +269,23 @@ async function boot(): Promise<void> {
     canvas.height = Math.max(1, Math.round(rect.height * dpr))
     // Strictly disable bilinear interpolation to keep pixel-art crisp.
     ctx.imageSmoothingEnabled = false
+    // Publish the stage scale for the controls.
+    //
+    // The on-screen controls are DOM, not canvas, so they cannot read the transform that
+    // scales the world -- and until this existed they did not try. They were sized in fixed
+    // pixels, which is correct only at one stage size: a 130px joystick is a modest corner of
+    // a 1280px stage and most of a phone's, where the stage is barely 390px wide. Fixed pixels
+    // make the controls scale with the *device* while the world scales with the stage, so the
+    // two drift apart in opposite directions and a narrow screen gets the largest controls in
+    // the game wrapped around the smallest world.
+    //
+    // This is the same division the renderer uses in `tick`, from the same logical size, so
+    // there is one scale and not two. It is the backing store divided by the logical width,
+    // which is the stage scale exactly -- the canvas fills the stage, so its ratio is the
+    // stage's. Expressed in CSS pixels rather than device pixels by dividing the DPR back out,
+    // since a custom property consumed by the stylesheet is in CSS pixels.
+    const scale = canvas.width / dpr / GameWorld.LOGICAL_WIDTH
+    stage.style.setProperty('--stage-scale', String(scale))
   }
   // Observed on the stage rather than the canvas, so the backing store is rebuilt when the
   // stage resizes even if the canvas box somehow has not moved yet.

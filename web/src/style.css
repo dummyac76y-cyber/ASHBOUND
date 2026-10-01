@@ -257,16 +257,24 @@ body {
 .controls {
   position: absolute;
   inset: 0;
-  padding: 16px 24px;
+  padding: calc(16px * var(--stage-scale, 1)) calc(24px * var(--stage-scale, 1));
   pointer-events: none;
 }
 
 .joystick {
   position: absolute;
-  left: 24px;
-  bottom: 16px;
-  width: 130px;
-  height: 130px;
+  left: calc(24px * var(--stage-scale, 1));
+  bottom: calc(16px * var(--stage-scale, 1));
+  /* Logical size x the stage scale. The 130px is the size at a 640px-wide stage, which is
+     the width the world is authored at, so at full scale it is unchanged from before. */
+  width: calc(130px * var(--stage-scale, 1));
+  height: calc(130px * var(--stage-scale, 1));
+  /* A thumb this small stops being hittable. The floor is deliberately modest and is applied
+     *after* the scale, so it rescues a tiny stage without inflating a large one -- a minimum
+     that scaled with the stage could not rescue anything, and one applied before it would
+     make the controls huge relative to the background, which is the bug being fixed. */
+  min-width: 44px;
+  min-height: 44px;
   border-radius: 50%;
   background: radial-gradient(circle, rgba(34, 38, 56, 0.4), rgba(16, 18, 28, 0.2));
   pointer-events: auto;
@@ -275,8 +283,8 @@ body {
 
 .joystick-ring {
   position: absolute;
-  inset: 4px;
-  border: 2px solid rgba(255, 255, 255, 0.27);
+  inset: calc(4px * var(--stage-scale, 1));
+  border: calc(2px * var(--stage-scale, 1)) solid rgba(255, 255, 255, 0.27);
   border-radius: 50%;
 }
 
@@ -285,27 +293,27 @@ body {
   top: 50%;
   width: 0;
   height: 0;
-  border-top: 5px solid transparent;
-  border-bottom: 5px solid transparent;
+  border-top: calc(5px * var(--stage-scale, 1)) solid transparent;
+  border-bottom: calc(5px * var(--stage-scale, 1)) solid transparent;
   transform: translateY(-50%);
 }
 
 .joystick-arrow-left {
-  left: 12px;
-  border-right: 8px solid rgba(255, 255, 255, 0.47);
+  left: calc(12px * var(--stage-scale, 1));
+  border-right: calc(8px * var(--stage-scale, 1)) solid rgba(255, 255, 255, 0.47);
 }
 
 .joystick-arrow-right {
-  right: 12px;
-  border-left: 8px solid rgba(255, 255, 255, 0.47);
+  right: calc(12px * var(--stage-scale, 1));
+  border-left: calc(8px * var(--stage-scale, 1)) solid rgba(255, 255, 255, 0.47);
 }
 
 .joystick-thumb {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 48px;
-  height: 48px;
+  width: calc(48px * var(--stage-scale, 1));
+  height: calc(48px * var(--stage-scale, 1));
   border-radius: 50%;
   transform: translate(-50%, -50%);
   background: radial-gradient(circle, #5b6998, #282e47);
@@ -314,19 +322,19 @@ body {
 
 .action-cluster {
   position: absolute;
-  right: 24px;
-  bottom: 16px;
+  right: calc(24px * var(--stage-scale, 1));
+  bottom: calc(16px * var(--stage-scale, 1));
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: calc(8px * var(--stage-scale, 1));
   pointer-events: auto;
 }
 
 .action-row {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: calc(14px * var(--stage-scale, 1));
 }
 
 /*
@@ -336,6 +344,11 @@ body {
  */
 .action-btn {
   --btn-color: #39405a;
+  /* Logical size (set per button by VirtualControls) x the stage scale, with a small floor
+     applied after scaling so a tiny stage still has a tappable target. Same rule as the
+     joystick: the floor rescues small screens without inflating large ones. */
+  width: max(40px, calc(var(--btn-logical-size, 54px) * var(--stage-scale, 1)));
+  height: max(40px, calc(var(--btn-logical-size, 54px) * var(--stage-scale, 1)));
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -358,13 +371,13 @@ body {
 }
 
 .action-btn-label {
-  font-size: 11px;
+  font-size: max(7px, calc(11px * var(--stage-scale, 1)));
   font-weight: 900;
   line-height: 1;
 }
 
 .action-btn-sub {
-  font-size: 8px;
+  font-size: max(6px, calc(8px * var(--stage-scale, 1)));
   font-weight: 700;
   color: rgba(255, 255, 255, 0.8);
   line-height: 1;
@@ -387,8 +400,8 @@ body {
 
 .key-hints {
   position: absolute;
-  left: 24px;
-  bottom: 156px;
+  left: calc(24px * var(--stage-scale, 1));
+  bottom: calc(156px * var(--stage-scale, 1));
   display: none;
   flex-wrap: wrap;
   gap: 4px 10px;
@@ -570,21 +583,13 @@ body {
     display: none;
   }
 
-  .controls {
-    padding: 10px 12px;
-  }
-
-  .joystick {
-    left: 12px;
-    bottom: 12px;
-    width: 112px;
-    height: 112px;
-  }
-
-  .action-cluster {
-    right: 12px;
-    bottom: 12px;
-  }
+  /* The controls used to be resized here, against the viewport width: a smaller joystick and
+     tighter insets once the screen was under 560px. That is the same bug in miniature -- it
+     sizes the controls by the device rather than by the stage, and it is why a phone got a
+     112px joystick over a 390px-wide stage while a 1920px desktop stage got 130px logical.
+     They now derive from --stage-scale, which the stage itself publishes, so this breakpoint
+     has nothing left to say about them. The stage already narrows on a narrow screen and the
+     controls follow it down. */
 
   .modal-body {
     flex-direction: column;

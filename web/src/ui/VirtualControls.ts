@@ -132,8 +132,12 @@ class ActionButton {
     this.root.type = 'button'
     this.root.dataset.testid = testTag
     this.root.setAttribute('aria-label', label)
-    this.root.style.width = `${size}px`
-    this.root.style.height = `${size}px`
+    // The size is published as the *logical* size and the stylesheet multiplies it by the
+    // stage scale. Setting `width` here instead would pin the button to device pixels, which
+    // is the bug this replaced: the control would keep its desktop size on a phone while the
+    // world it sits on shrank. A custom property is used rather than an inline `width`
+    // precisely so the stylesheet stays the one place that decides how big a control is.
+    this.root.style.setProperty('--btn-logical-size', `${size}px`)
 
     if (iconUrl) {
       const img = document.createElement('img')
