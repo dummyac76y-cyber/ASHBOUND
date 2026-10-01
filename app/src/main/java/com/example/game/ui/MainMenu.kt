@@ -388,20 +388,81 @@ private fun MenuTitle(surface: Modifier) {
  * artwork carries its own label, so nothing is drawn on top of it -- the label lives on the
  * node's content description, which is what a screen reader would otherwise be missing.
  */
+/** One clickable area: a supplied plate, scaled, plus whatever growth it needs to stay hittable. */
+private data class HitTarget(
+    val art: MenuButtonArt,
+    val left: Dp,
+    val top: Dp,
+    val width: Dp,
+    val height: Dp,
+)
+
+/** The four entries that share the column, in the order they are stacked. */
+private val STACKED_IDS = setOf("start_game", "load_game", "settings", "quit")
+
+/**
+ * Builds the clickable areas for the supplied plates.
+ *
+ * A 1280x720 composition letterboxed into a tall portrait phone scales to roughly a
+ * quarter of its intended size, and a proportionally correct target is then far too
+ * small to hit: the credits control comes out around 15dp across, against a 48dp minimum
+ * comfortable touch target, so a press misses it almost every time. That reads as "the
+ * button does not work" even though it is wired correctly.
+ *
+ * So each area grows to at least [minTouch]. The artwork is untouched -- only the
+ * invisible hit area changes -- and the four stacked entries may only grow as far as the
+ * midpoint to their neighbours, because growing freely would make one target start
+ * swallowing the taps meant for the next.
+ */
 @Composable
 private fun ArtButtons(surface: Modifier, canvas: CanvasBox, onPick: (String) -> Unit) {
+    val minTouch = 48.dp
+    val scaled = MENU_BUTTON_ART.map { art ->
+        HitTarget(
+            art = art,
+            left = (art.x * canvas.scale).dp,
+            top = (art.y * canvas.scale).dp,
+            width = (art.w * canvas.scale).dp,
+            height = (art.h * canvas.scale).dp,
+        )
+    }
+    val stacked = scaled.filter { it.art.id in STACKED_IDS }.sortedBy { it.top }
+
     Box(surface.testTag("main_menu_art_buttons")) {
         for (art in MENU_BUTTON_ART) {
             rememberMenuButtonArt(art.file)?.let { image ->
                 Image(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
             }
+            val target = scaled.first { it.art.id == art.id }
+            val index = stacked.indexOfFirst { it.art.id == art.id }
+
+            // Stacked entries are bounded by their neighbours; everything else, such as the
+            // credits control in the corner, is free to grow.
+            val width = maxOf(target.width, minTouch)
+            val (top, height) = if (index >= 0) {
+                val bandTop = if (index == 0) 0.dp else stacked[index - 1].top + stacked[index - 1].height
+                val next = stacked.getOrNull(index + 1)
+                val bandBottom = next?.top ?: canvas.height
+                val h = minOf(maxOf(target.height, minTouch), bandBottom - bandTop)
+                // Centred on the plate, then clamped inside the band so neighbours cannot meet.
+                val t = (target.top + target.height / 2f - h / 2f).coerceIn(bandTop, bandBottom - h)
+                t to h
+            } else {
+                val h = maxOf(target.height, minTouch)
+                (target.top + target.height / 2f - h / 2f) to h
+            }
+
+            // Keep the grown target on the frame. The credits control sits in the corner,
+            // so its minimum size would otherwise push it off the right edge or off the top.
+            val clampedWidth = width.coerceAtMost(canvas.width)
+            val left = target.left.coerceIn(0.dp, canvas.width - clampedWidth)
+            val maxTop = (canvas.height - height).coerceAtLeast(0.dp)
+            val clampedTop = top.coerceIn(0.dp, maxTop)
+
             Box(
                 modifier = Modifier
-                    .offset(
-                        x = (art.x * canvas.scale).dp,
-                        y = (art.y * canvas.scale).dp,
-                    )
-                    .size((art.w * canvas.scale).dp, (art.h * canvas.scale).dp)
+                    .offset(x = left, y = clampedTop)
+                    .size(clampedWidth, height)
                     .semantics { contentDescription = art.label }
                     .clickable { onPick(art.id) }
                     .testTag("main_menu_${art.id}"),

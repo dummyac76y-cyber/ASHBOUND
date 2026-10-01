@@ -109,6 +109,24 @@ function boxToPercent(box: { x: number; y: number; w: number; h: number }): stri
 }
 
 /**
+ * The same box, anchored to the right edge instead of the left.
+ *
+ * The credits control lives in the top-right corner, and it is the control that needs its
+ * hit area grown to stay tappable. A minimum size on a left-anchored box grows to the
+ * right, which runs the target off the side of the frame; on a phone viewport the plate is
+ * only about ten pixels from that edge. Anchoring the right edge makes the growth go
+ * inward, so the control stays on screen and stays under the finger at every viewport.
+ */
+function boxToPercentFromRight(box: { x: number; y: number; w: number; h: number }): string {
+  return [
+    `right:${100 - ((box.x + box.w) / CANVAS_WIDTH) * 100}%`,
+    `top:${(box.y / CANVAS_HEIGHT) * 100}%`,
+    `width:${(box.w / CANVAS_WIDTH) * 100}%`,
+    `height:${(box.h / CANVAS_HEIGHT) * 100}%`,
+  ].join(';')
+}
+
+/**
  * Entries that were considered and explicitly ruled out. Never add these.
  *
  * CREDITS was on this list and has been removed: the supplied artwork includes a credits
@@ -279,12 +297,14 @@ export class MainMenu {
       button.dataset.index = String(index)
       button.setAttribute('aria-label', art.label)
       const outset = 4
-      button.style.cssText = boxToPercent({
+      const outsetBox = {
         x: art.box.x - outset,
         y: art.box.y - outset,
         w: art.box.w + outset * 2,
         h: art.box.h + outset * 2,
-      })
+      }
+      button.style.cssText =
+        art.id === 'credits' ? boxToPercentFromRight(outsetBox) : boxToPercent(outsetBox)
       button.addEventListener('click', () => {
         if (art.id === 'start_game') {
           // Leave before starting: the world is about to own the screen, and a menu

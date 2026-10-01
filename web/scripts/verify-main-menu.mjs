@@ -704,6 +704,31 @@ console.log('\n3. the four menu entries, and what each one does')
   check('and the player can get back', quit.canReturn, 'return control present')
   await page.click('.menu-panel:not([hidden]) [data-testid="main_menu_back"]')
 
+  // CREDITS
+  await page.click('[data-testid="main_menu_credits"]')
+  const credits = await page.evaluate(() => {
+    const p = document.querySelector('[data-testid="main_menu_screen_credits"]')
+    if (!p || p.hidden) return null
+    const r = p.getBoundingClientRect()
+    return {
+      screen: document.querySelector('.main-menu')?.dataset.screen ?? null,
+      heading: p.querySelector('.menu-heading')?.textContent.trim() ?? '',
+      width: r.width,
+      height: r.height,
+      visible: getComputedStyle(p).display !== 'none' && r.width > 10 && r.height > 10,
+      inFrame: r.right > 0 && r.left < 1280 && r.bottom > 0 && r.top < 720,
+      canReturn: Boolean(p.querySelector('[data-testid="main_menu_back"]')),
+    }
+  })
+  check('the credits control opens the credits screen', credits !== null && credits.screen === 'credits', `screen ${credits?.screen}`)
+  if (credits) {
+    check('which is headed CREDITS', credits.heading === 'CREDITS', credits.heading)
+    check('and is actually drawn, not a hidden or zero-size panel', credits.visible, `${credits.width.toFixed(0)}x${credits.height.toFixed(0)}`)
+    check('and sits inside the frame', credits.inFrame, 'within the viewport')
+    check('and can be left again', credits.canReturn, 'BACK')
+  }
+  await page.click('.menu-panel:not([hidden]) [data-testid="main_menu_back"]')
+
   // START GAME
   await page.click('[data-testid="main_menu_start_game"]')
   await page.waitForTimeout(120)
@@ -845,12 +870,18 @@ console.log('\n5. the composition scales as one piece, at ordinary viewports')
   // A `contain` backdrop on a viewport of another shape letterboxes. The plates are
   // canvases registered to that backdrop, so they have to letterbox with it -- and stay
   // inside the frame and undistorted -- without needing fullscreen.
+  // The phone shapes matter most here. A 1280x720 composition in a portrait phone shrinks
+  // to roughly a quarter of its intended size, which is what made the controls too small
+  // to tap; desktop-only viewports could never have caught it.
   for (const [w, h] of [
     [1280, 720],
     [1440, 900],
     [1024, 768],
     [1920, 1080],
     [800, 600],
+    [390, 844],
+    [844, 390],
+    [768, 1024],
   ]) {
     const page = await browser.newPage({ viewport: { width: w, height: h } })
     await page.goto(`${base}/`, { waitUntil: 'networkidle' })
@@ -883,6 +914,37 @@ console.log('\n5. the composition scales as one piece, at ordinary viewports')
         if (entries[i].top < entries[i - 1].bottom) out.stack = false
         out.gap = i === 1 ? entries[i].top - entries[i - 1].bottom : out.gap
       }
+
+      // A control below this size cannot be hit reliably. The credits control scaled to
+      // about 18px on a phone viewport and read as "the button does not work", so the hit
+      // areas are measured, not just the artwork behind them.
+      out.tooSmall = []
+      out.unreachable = out.stackOrder.length ? [] : []
+      out.reachable = []
+      out.hits = []
+      for (const el of document.querySelectorAll('.menu-art-hit')) {
+        const b = el.getBoundingClientRect()
+        const id = el.dataset.testid.replace('main_menu_', '')
+        const ok = b.width >= 40 && b.height >= 40
+        out.reachable.push(ok)
+        if (!ok) out.tooSmall.push(`${id} ${b.width.toFixed(0)}x${b.height.toFixed(0)}`)
+        out.hits.push({ id, top: b.top, bottom: b.bottom, left: b.left, right: b.right })
+      }
+
+      // The minimum sizes grow each hit area, so also prove the growth did not make one
+      // target swallow the taps meant for the next.
+      const stackedHits = out.hits
+        .filter((x) => x.id !== 'credits')
+        .sort((a, b) => a.top - b.top)
+      out.overlap = []
+      for (let i = 1; i < stackedHits.length; i++) {
+        const above = stackedHits[i - 1]
+        const thisHit = stackedHits[i]
+        if (thisHit.top < above.bottom && thisHit.left < above.right && above.left < thisHit.right) {
+          out.overlap.push(`${above.id}/${thisHit.id}`)
+          out.stack = false
+        }
+      }
       out.viewport = { w: window.innerWidth, h: window.innerHeight }
       return out
     })
@@ -899,7 +961,12 @@ console.log('\n5. the composition scales as one piece, at ordinary viewports')
     check(
       `at ${w}x${h} the four entries stack in order without overlapping`,
       r.stack && r.stackOrder === 'start_game,load_game,settings,quit',
-      `${r.stackOrder}${r.stack ? '' : ' (overlapping or out of order)'}`,
+      `${r.stackOrder}${r.stack ? '' : ` (${r.overlap.join(', ') || 'out of order'})`}`,
+    )
+    check(
+      `at ${w}x${h} every control is big enough to tap reliably`,
+      r.reachable.length === 5 && r.reachable.every(Boolean),
+      r.tooSmall.length ? `too small: ${r.tooSmall.join(', ')}` : 'all at least 40x40',
     )
     await page.close()
   }
@@ -980,6 +1047,38 @@ console.log('\n7. Android mirrors the same menu')
   check('and gives every control an accessible name, the baked-in label being invisible to one', /contentDescription = art\.label/.test(ktMenu), 'semantics on each hit area')
   check('Android wires the supplied credits control rather than leaving it decorative', ktMenu.includes('"credits"') && ktMenu.includes('MenuScreen.CREDITS'), 'credits -> CREDITS screen')
   check('and Android has that credits screen', /MenuScreen\.CREDITS -> MenuPanel\("CREDITS"/.test(ktMenu), 'credits panel')
+
+  const ktCode = codeOnly(ktMenu)
+  // Android cannot be compiled here, so the touch-target fix is asserted statically. This
+  // is the defect the user reported: a proportionally scaled 1280x720 canvas becomes about
+  // a quarter size in a portrait phone, leaving the credits control roughly 15dp across
+  // against a 48dp minimum, so presses miss it and it reads as broken.
+  check(
+    'Android gives every control a 48dp minimum touch target',
+    /val minTouch = 48\.dp/.test(ktCode) && /maxOf\(target\.width, minTouch\)/.test(ktCode) && /maxOf\(target\.height, minTouch\)/.test(ktCode),
+    'minTouch = 48.dp applied to width and height',
+  )
+  check(
+    'and bounds each stacked entry by its neighbours, so growth cannot steal the next tap',
+    /bandTop/.test(ktCode) && /bandBottom/.test(ktCode) && /coerceIn\(bandTop, bandBottom - h\)/.test(ktCode),
+    'entries are clamped to the midpoint between neighbours',
+  )
+  check(
+    'and keeps a grown target on the frame, which the corner credits control needs',
+    /coerceIn\(0\.dp, canvas\.width - clampedWidth\)/.test(ktCode) && /canvas\.height - height/.test(ktCode),
+    'left and top are clamped inside the canvas',
+  )
+  check(
+    'and the web grows its hit areas the same way',
+    /\.menu-art-hit[\s\S]{0,2000}min-width: 44px/.test(css) && /\.menu-art-hit[\s\S]{0,2000}min-height: 40px/.test(css),
+    'min-width 44px, min-height 40px',
+  )
+  check(
+    'and the web anchors the credits control by its right edge, so the growth goes inward',
+    /function boxToPercentFromRight/.test(codeOnly(menuTs)) &&
+      /art\.id === 'credits' \? boxToPercentFromRight/.test(codeOnly(menuTs)),
+    'credits uses the right-anchored box',
+  )
 
   const forbidden = ['DUEL ONLINE', 'PRACTICE', 'CHARACTERS'].filter((f) => ktMenu.includes(f))
   check('and none of the ruled-out entries appear there either', forbidden.length === 0, forbidden.length ? forbidden.join(', ') : 'none present')

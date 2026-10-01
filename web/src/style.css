@@ -910,6 +910,17 @@ button.menu-setting:hover {
   cursor: pointer;
   pointer-events: auto;
   outline: none;
+  /*
+   * A 1280x720 composition scaled into a phone-shaped viewport shrinks proportionally, and
+   * a proportionally correct target can end up too small to hit: the credits control is
+   * about 18px across at a 390px-wide viewport. Minimums keep every control reachable
+   * without touching the artwork, which stays exactly as supplied.
+   *
+   * The stacked height is held a little under the entries' scaled pitch so neighbouring
+   * targets cannot grow into each other and start stealing taps from one another.
+   */
+  min-width: 44px;
+  min-height: 40px;
 }
 
 /* Keyboard focus still needs a ring, or the control is unreachable without a mouse. It is
