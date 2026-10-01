@@ -821,24 +821,81 @@ button.menu-setting:hover {
   line-height: 1.6;
 }
 
-/* Layer 3 -- the campfire.
-   Geometry mirrors .main-menu-backdrop and .main-menu-overlay exactly, for the same
-   reason: the supplied canvas is already positioned, so only the shared box and scale
-   place it correctly. */
-.main-menu-campfire {
+/* Layer 2 -- the animated campfire and its light.
+   The supplied sheet is 8 frames of 128x128 on a 1024x128 strip. It is played, not
+   rescaled: a clip window the size of one cell sits at the fire's place on the canvas,
+   and the whole strip slides behind that window by exactly one cell per frame. Nothing
+   here scales or crops a pixel of the artwork.
+   The window is positioned in canvas percentages rather than pixels, so it is scaled by
+   the same single factor the backdrop is. That is what keeps the fire registered to the
+   background at every viewport and at every frame of the loop. */
+.main-menu-fire {
   position: absolute;
   inset: 0;
   pointer-events: none;
 }
 
-.main-menu-campfire-art {
+/* The backdrop's own box, reproduced.
+   The static art gets this for free: it is an <img> with `object-fit: contain`, which
+   letterboxes itself. A div has no such thing, so percentages against the full root would
+   be percentages of the letterbox bands rather than of the artwork -- which puts the fire
+   thousands of pixels from the background on a portrait phone. This is that same box, so
+   every percentage below is a percentage of the 1280x720 canvas. */
+.main-menu-fire-canvas {
   position: absolute;
-  inset: 0;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   width: 100%;
+  max-height: 100%;
+  aspect-ratio: 1280 / 720;
+  pointer-events: none;
+}
+
+/* The warm light. Centred on the fire's ink and sized in canvas percentages for the same
+   reason as the flame. `screen` lightens what it covers, which is what a glow does; a
+   plain translucent fill would wash the ground out instead of lighting it. Opacity is
+   driven from the animation loop, so the light breathes with the flame. */
+.main-menu-fire-glow {
+  position: absolute;
+  left: 58.5547%;
+  top: 71.5278%;
+  width: 20.3125%;
+  height: 36.1111%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side,
+    rgba(255, 176, 74, 0.5) 0%,
+    rgba(255, 140, 40, 0.24) 38%,
+    rgba(210, 96, 20, 0.09) 66%,
+    rgba(180, 70, 10, 0) 100%
+  );
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
+/* The one-cell window. `overflow: hidden` is what makes it a window at all. */
+.main-menu-fire-flame {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* The whole strip, eight cells wide, slid by one eighth of itself per frame. The
+   percentage translate is relative to the strip's own width, so a step is exactly one
+   cell at any scale. Nearest-neighbour keeps the pixel art's hard edges, matching how
+   every other sprite in the project is drawn. */
+.main-menu-fire-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 800%;
   height: 100%;
-  object-fit: contain;
-  user-select: none;
-  -webkit-user-drag: none;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+  transform: translateX(calc(-1 * var(--campfire-frame, 0) * 12.5%));
   pointer-events: none;
 }
 

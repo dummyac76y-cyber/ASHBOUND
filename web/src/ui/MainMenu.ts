@@ -7,10 +7,9 @@ import { assetUrl } from '../assetUrl'
  *
  * Back to front, which is the required stack:
  *
- *   1. `.main-menu-backdrop`  the supplied background artwork
- *   2. `.main-menu-overlay`   the character, on its own transparent canvas
- *   3. `.main-menu-campfire`  the campfire, on its own transparent canvas
- *   4. `.main-menu-ui`        the title, the entries, and the sub-screens
+ *   1. `.main-menu-backdrop`  the supplied background artwork, untouched
+ *   2. `.main-menu-fire`      the animated campfire, its light, then the character
+ *   3. `.main-menu-ui`        the title, the entries, and the sub-screens
  *
  * Keeping the artwork out of the UI layer is what lets the art stay exactly as
  * supplied. If the character were baked into the background, or drawn by the UI
@@ -40,18 +39,45 @@ export const MAIN_MENU_OVERLAY_FILE = 'main_menu_overlay.png'
 export const MAIN_MENU_OVERLAY_URL = assetUrl(`bg/${MAIN_MENU_OVERLAY_FILE}`)
 
 /**
- * The campfire, as its own transparent 1280x720 canvas like the character.
+ * The animated campfire.
  *
- * Its visible ink sits at x 680..819, immediately left of the character's x 826..999, so
- * the two share no pixel today and stand side by side. The order between them is not
- * incidental, though: the stack is background -> character -> campfire -> buttons, so the
- * campfire draws in front of the character. That ordering is currently invisible; it is
- * stated here so a future revision of either canvas lands on the intended stack rather
- * than on whatever happens to be measured.
+ * The supplied sheet is a 1024x128 horizontal strip of eight 128x128 cells, measured
+ * from the file itself: every frame's ink bottoms out on the same row (y=99) while the
+ * top edge moves between y=21 and y=32, so the fire is anchored at its base and only the
+ * tip flickers. That is why the sheet is drawn unscaled and unmoved -- the motion is
+ * already built into the artwork, and it has to stay registered to the background at
+ * every frame rather than merely on average.
+ *
+ * Each cell carries the whole fire: flame above (rows 28..64) and the dark log and stone
+ * base below (rows 66..98). So this replaces the old static fire outright rather than
+ * stacking a flame on top of one that was still there.
+ *
+ * The cell sits at canvas (686, 455). That is where the ink lands on the fire the static
+ * artwork put there -- the ink centres on the old fire's centre x and its base lands on
+ * the old fire's base -- so the fire stays on the same spot in the scene. The cell is
+ * positioned in canvas percentages, which means it is scaled by exactly the one factor
+ * the backdrop is, at any viewport, and cannot drift away from it.
  */
-export const MAIN_MENU_CAMPFIRE_FILE = 'main_menu_campfire.png'
+export const MAIN_MENU_CAMPFIRE_FLAME_FILE = 'campfire_flame.png'
 
-export const MAIN_MENU_CAMPFIRE_URL = assetUrl(`bg/${MAIN_MENU_CAMPFIRE_FILE}`)
+export const MAIN_MENU_CAMPFIRE_FLAME_URL = assetUrl(
+  `bg/menu_buttons/${MAIN_MENU_CAMPFIRE_FLAME_FILE}`,
+)
+
+/** Cells in the strip, and the size of one, both measured from the supplied file. */
+export const CAMPFIRE_FLAME_FRAMES = 8
+export const CAMPFIRE_FLAME_CELL = 128
+
+/**
+ * Frames per second. Slow on purpose: at twelve the eight-frame loop repeats every two
+ * thirds of a second, which reads as a fire breathing. Faster would shimmer, and a
+ * shimmer over pixel art that is otherwise held perfectly still looks like a fault.
+ */
+export const CAMPFIRE_FLAME_FPS = 12
+
+/** Where the cell's top-left goes on the 1280x720 canvas. See the note above. */
+export const CAMPFIRE_FLAME_CELL_X = 686
+export const CAMPFIRE_FLAME_CELL_Y = 455
 
 /**
  * The supplied button artwork.
@@ -164,12 +190,16 @@ export class MainMenu {
   private readonly overlay: HTMLElement
   /** Layer 2. The character overlay. */
   private readonly overlayImage: HTMLImageElement
-  /** Layer 3's element, kept separate from the image like layer 2's. */
-  private readonly campfire: HTMLElement
-  /** Layer 3. The campfire overlay. */
-  private readonly campfireImage: HTMLImageElement
-  /** Layer 4. Everything the player reads or clicks. */
+  /** Layer 2's fire group: the warm light, then the animated flame over it. */
+  private readonly fire: HTMLElement
+  /** The warm light. Its opacity is driven by the flicker, so it is kept as a field. */
+  private readonly fireGlow: HTMLElement
+  /** The whole 8-cell strip, slid behind a one-cell window to pick the frame. */
+  private readonly fireStrip: HTMLElement
+  /** Layer 3. Everything the player reads or clicks. */
   private readonly ui: HTMLDivElement
+  /** The pending fire-animation frame, so `dispose` can cancel it. */
+  private fireFrame = 0
 
   private readonly screens = new Map<MenuScreen, HTMLElement>()
   /** The supplied plates and their hit areas. Shown on the title screen only. */
@@ -201,18 +231,33 @@ export class MainMenu {
     this.overlay.setAttribute('aria-hidden', 'true')
     this.overlay.append(this.overlayImage)
 
-    // Same canvas size and the same box as the backdrop, for the same reason.
-    this.campfireImage = new Image()
-    this.campfireImage.className = 'main-menu-campfire-art'
-    this.campfireImage.alt = ''
-    this.campfireImage.decoding = 'async'
-    this.campfireImage.draggable = false
-    this.campfireImage.src = MAIN_MENU_CAMPFIRE_URL
+    // The fire group. Two pieces: a warm light, and the animated flame over it. Both are
+    // decoration, and the buttons live above them, so neither may ever take a click.
+    this.fireGlow = el('div', 'main-menu-fire-glow')
+    this.fireGlow.dataset.testid = 'main_menu_fire_glow'
 
-    this.campfire = el('div', 'main-menu-campfire')
-    this.campfire.dataset.testid = 'main_menu_campfire'
-    this.campfire.setAttribute('aria-hidden', 'true')
-    this.campfire.append(this.campfireImage)
+    // The flame is a one-cell window with the whole strip sliding behind it, which is how
+    // a sprite sheet is played without scaling or cropping a single pixel of it.
+    this.fireStrip = el('div', 'main-menu-fire-strip')
+    this.fireStrip.style.backgroundImage = `url(${MAIN_MENU_CAMPFIRE_FLAME_URL})`
+
+    const flameWindow = el('div', 'main-menu-fire-flame')
+    flameWindow.dataset.testid = 'main_menu_fire_flame'
+    flameWindow.style.left = `${(CAMPFIRE_FLAME_CELL_X / CANVAS_WIDTH) * 100}%`
+    flameWindow.style.top = `${(CAMPFIRE_FLAME_CELL_Y / CANVAS_HEIGHT) * 100}%`
+    flameWindow.style.width = `${(CAMPFIRE_FLAME_CELL / CANVAS_WIDTH) * 100}%`
+    flameWindow.style.height = `${(CAMPFIRE_FLAME_CELL / CANVAS_HEIGHT) * 100}%`
+    flameWindow.append(this.fireStrip)
+
+    // The canvas box the two live in, so their percentages are percentages of the
+    // artwork rather than of any letterbox band around it.
+    const fireCanvas = el('div', 'main-menu-fire-canvas')
+    fireCanvas.append(this.fireGlow, flameWindow)
+
+    this.fire = el('div', 'main-menu-fire')
+    this.fire.dataset.testid = 'main_menu_fire'
+    this.fire.setAttribute('aria-hidden', 'true')
+    this.fire.append(fireCanvas)
 
     this.ui = el('div', 'main-menu-ui')
     this.ui.dataset.testid = 'main_menu_ui'
@@ -237,13 +282,14 @@ export class MainMenu {
 
     this.root = el('div', 'main-menu')
     this.root.dataset.testid = 'main_menu'
-    // The stack, back to front: background, character, campfire, buttons. Appended in
-    // exactly this order so paint order follows from document order and nothing has to
-    // be kept in sync by hand-tuned z-index values.
-    this.root.append(this.backdrop, this.overlay, this.campfire, this.ui)
+    // The stack, back to front: background, fire, character, buttons. Appended in exactly
+    // this order so paint order follows from document order and nothing has to be kept in
+    // sync by hand-tuned z-index values.
+    this.root.append(this.backdrop, this.fire, this.overlay, this.ui)
 
     this.show('main')
     this.syncFullscreenLabel()
+    this.startFireAnimation()
 
     // Leaving the menu by other means (Esc, the browser's own fullscreen gesture)
     // still has to leave the label truthful.
@@ -471,12 +517,18 @@ export class MainMenu {
         img.addEventListener('error', done)
       })
     }
+    // The flame is a CSS background rather than an <img>, so nothing waits on it by
+    // itself; it is preloaded here and awaited with the rest, or the menu would reveal
+    // itself over an empty fire pit.
+    const flame = new Image()
+    flame.src = MAIN_MENU_CAMPFIRE_FLAME_URL
+
     // Every canvas, including the plates: revealing the menu before the buttons have
     // decoded would show a title screen with nothing clickable on it.
     return Promise.all([
       settled(this.backdrop),
       settled(this.overlayImage),
-      settled(this.campfireImage),
+      settled(flame),
       ...this.artImages.map(settled),
     ]).then(() => undefined)
   }
@@ -506,8 +558,32 @@ export class MainMenu {
     this.fullscreenValue.textContent = document.fullscreenElement ? 'ON' : 'OFF'
   }
 
+  /**
+   * Plays the flame and flickers the light.
+   *
+   * One rAF drives both from a single clock, so the light and the flame stay in step
+   * instead of drifting apart, and the loop is cancelled in `dispose` so a menu that has
+   * been torn down stops asking for frames. The frame is written as a custom property
+   * rather than a style string, because CSS owns the translate that uses it.
+   */
+  private startFireAnimation(): void {
+    const startedAt = performance.now()
+    const step = (now: number): void => {
+      const seconds = (now - startedAt) / 1000
+      const frame = Math.floor(seconds * CAMPFIRE_FLAME_FPS) % CAMPFIRE_FLAME_FRAMES
+      this.fireStrip.style.setProperty('--campfire-frame', String(frame))
+      // A slow breath rather than a strobe, and shallow on purpose: the light should
+      // read as the fire glowing, not as a lamp being switched.
+      const breath = 0.5 + 0.5 * Math.sin(seconds * 2.2)
+      this.fireGlow.style.opacity = (0.62 + 0.38 * breath).toFixed(3)
+      this.fireFrame = requestAnimationFrame(step)
+    }
+    this.fireFrame = requestAnimationFrame(step)
+  }
+
   /** Detaches the menu. The caller is about to hand the screen to something else. */
   dispose(): void {
+    cancelAnimationFrame(this.fireFrame)
     this.root.remove()
   }
 }

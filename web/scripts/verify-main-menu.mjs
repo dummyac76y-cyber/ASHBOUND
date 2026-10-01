@@ -26,6 +26,7 @@ import { createHash } from 'node:crypto'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright-core'
+import { readPng } from './lib/artwork.mjs'
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url))
 const webRoot = fileURLToPath(new URL('..', import.meta.url))
@@ -35,8 +36,14 @@ const distDir = join(webRoot, 'dist')
 const MENU_BG = 'main_menu.jpg'
 /** The character overlay. */
 const MENU_OVERLAY = 'main_menu_overlay.png'
-/** The campfire overlay. */
-const MENU_CAMPFIRE = 'main_menu_campfire.png'
+/** The animated campfire: 8 frames of 128x128 on one 1024x128 strip. */
+const MENU_CAMPFIRE = 'campfire_flame.png'
+/** The strip's own geometry, measured from the supplied file rather than assumed. */
+const CAMPFIRE_STRIP = { width: 1024, height: 128, frames: 8, cell: 128 }
+/** Where the cell goes on the canvas, and where its ink then lands. */
+const CAMPFIRE_CELL = { x: 686, y: 455 }
+/** The ink inside one cell, measured from the file's alpha channel. */
+const CAMPFIRE_INK = { x0: 12, x1: 115, y0: 21, y1: 99 }
 
 /**
  * The supplied button plates, with each plate's visible bounds measured from its own
@@ -57,8 +64,8 @@ const ANDROID_ASSET = join(repoRoot, 'app/src/main/assets/bg', MENU_BG)
 const WEB_ASSET = join(webRoot, 'public/bg', MENU_BG)
 const ANDROID_OVERLAY = join(repoRoot, 'app/src/main/assets/bg', MENU_OVERLAY)
 const WEB_OVERLAY = join(webRoot, 'public/bg', MENU_OVERLAY)
-const ANDROID_CAMPFIRE = join(repoRoot, 'app/src/main/assets/bg', MENU_CAMPFIRE)
-const WEB_CAMPFIRE = join(webRoot, 'public/bg', MENU_CAMPFIRE)
+const ANDROID_CAMPFIRE = join(repoRoot, 'app/src/main/assets/bg/menu_buttons', MENU_CAMPFIRE)
+const WEB_CAMPFIRE = join(webRoot, 'public/bg/menu_buttons', MENU_CAMPFIRE)
 
 const MENU_TS = join(webRoot, 'src/ui/MainMenu.ts')
 const MENU_CSS = join(webRoot, 'src/style.css')
@@ -173,7 +180,6 @@ console.log('\n1. the artwork is stored exactly as supplied, in both engines')
   // entirely on each being the backdrop's canvas size, so that is asserted per file.
   for (const [label, androidPath, webPath] of [
     ['character overlay', ANDROID_OVERLAY, WEB_OVERLAY],
-    ['campfire overlay', ANDROID_CAMPFIRE, WEB_CAMPFIRE],
   ]) {
     if (!existsSync(androidPath)) {
       pending(`the ${label} has not been supplied yet`, `expected at ${androidPath.replace(`${repoRoot}/`, '')}`)
@@ -273,7 +279,6 @@ console.log('\n2. the menu is what the page shows, and the artwork decodes untou
   // for the other, and it is what makes each land where it was composed.
   const ART_LAYERS = [
     { name: 'character overlay', sel: '.main-menu-overlay-art', supplied: existsSync(ANDROID_OVERLAY) },
-    { name: 'campfire overlay', sel: '.main-menu-campfire-art', supplied: existsSync(ANDROID_CAMPFIRE) },
   ]
 
   for (const layer of ART_LAYERS) {
@@ -334,7 +339,7 @@ console.log('\n2. the menu is what the page shows, and the artwork decodes untou
     const order = await page.evaluate(() => {
       const b = document.querySelector('.main-menu-backdrop')
       const o = document.querySelector('.main-menu-overlay-art')
-      const c = document.querySelector('.main-menu-campfire-art')
+      const c = document.querySelector('.main-menu-fire')
       const u = document.querySelector('.main-menu-ui')
       if (!b || !o || !c || !u) return null
       const nodes = [b, o, c, u]
@@ -355,19 +360,14 @@ console.log('\n2. the menu is what the page shows, and the artwork decodes untou
     })
     // The required stack, back to front:
     //
-    //   main menu background -> character -> campfire -> main menu buttons
+    //   main menu background -> animated campfire and light -> character -> buttons
     //
     // elementsFromPoint returns front-to-back, so a smaller index is nearer the viewer and
-    // the required order appears as ui < campfire < character < backdrop.
-    //
-    // The character/campfire relationship was originally left unasserted on the grounds
-    // that their ink boxes are six pixels apart and share none, so the order is invisible
-    // today. It is specified regardless, and now measured: "invisible" means a change
-    // would go unnoticed by eye, not that it does not matter.
+    // the required order appears as ui < character < campfire < backdrop.
     check(
-      'the stack is background, then character, then campfire, then the buttons',
-      order.ui < order.campfire && order.campfire < order.character && order.character < order.backdrop,
-      `front-to-back: ui ${order.ui}, campfire ${order.campfire}, character ${order.character}, backdrop ${order.backdrop}`,
+      'the stack is background, then the fire, then the character, then the buttons',
+      order.ui < order.character && order.character < order.campfire && order.campfire < order.backdrop,
+      `front-to-back: ui ${order.ui}, character ${order.character}, fire ${order.campfire}, backdrop ${order.backdrop}`,
     )
     check(
       'that order comes from document order rather than from a hand-tuned z-index',
@@ -500,7 +500,7 @@ console.log('\n3. the four menu entries, and what each one does')
       hudHidden: document.querySelector('.hud')?.hidden ?? null,
       controlsHidden: document.querySelector('.controls')?.hidden ?? null,
       layerChain: (() => {
-        const sel = ['.main-menu-backdrop', '.main-menu-overlay', '.main-menu-campfire', '.main-menu-ui']
+        const sel = ['.main-menu-backdrop', '.main-menu-fire', '.main-menu-overlay', '.main-menu-ui']
         return sel.map((s) => {
           const n = document.querySelector(s)
           return n ? `${s}:${getComputedStyle(n).position}` : `${s}:MISSING`
@@ -532,9 +532,9 @@ console.log('\n3. the four menu entries, and what each one does')
   check('and so are the touch controls', labels.controlsHidden === true, `controls.hidden ${labels.controlsHidden}`)
   check('every supplied plate is on the menu', labels.platesPresent === 5, `${labels.platesPresent} plates`)
   check(
-    'the backdrop, the character, the campfire and the UI are four separate layers',
+    'the backdrop, the fire, the character and the UI are four separate layers',
     labels.layerChain ===
-      '.main-menu-backdrop:absolute .main-menu-overlay:absolute .main-menu-campfire:absolute .main-menu-ui:relative',
+      '.main-menu-backdrop:absolute .main-menu-fire:absolute .main-menu-overlay:absolute .main-menu-ui:relative',
     labels.layerChain,
   )
 
@@ -989,7 +989,165 @@ console.log('\n6. the simulation is held until START GAME, and runs after it')
 }
 
 // ---------------------------------------------------------------------------------
-console.log('\n7. Android mirrors the same menu')
+console.log('\n7. the campfire is animated, and stays on the same spot every frame')
+// ---------------------------------------------------------------------------------
+{
+  // Measured from the supplied file, not taken on trust: the numbers the placement is
+  // derived from are re-read here, so a wrong constant fails instead of hiding.
+  const png = readPng(ANDROID_CAMPFIRE)
+  check(
+    'the flame sheet is a 1024x128 strip, as supplied',
+    png.width === CAMPFIRE_STRIP.width && png.height === CAMPFIRE_STRIP.height,
+    `${png.width}x${png.height}`,
+  )
+  check(
+    'which divides into eight 128px cells',
+    png.width / CAMPFIRE_STRIP.cell === CAMPFIRE_STRIP.frames,
+    `${png.width / CAMPFIRE_STRIP.cell} cells`,
+  )
+
+  const a = (x, y) => png.px(x, y)[3]
+  let soft = 0
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      const v = a(x, y)
+      if (v !== 0 && v !== 255) soft++
+    }
+  }
+  check(
+    'the sheet keeps hard-edged transparency, so no frame was resampled',
+    soft === 0,
+    `${soft} pixels with intermediate alpha`,
+  )
+
+  // Every frame's ink, and the claim that matters: the base does not move, only the tip.
+  const cellInk = []
+  for (let f = 0; f < CAMPFIRE_STRIP.frames; f++) {
+    let x0 = CAMPFIRE_STRIP.cell, x1 = -1, y0 = CAMPFIRE_STRIP.cell, y1 = -1
+    for (let y = 0; y < CAMPFIRE_STRIP.cell; y++) {
+      for (let x = 0; x < CAMPFIRE_STRIP.cell; x++) {
+        if (a(f * CAMPFIRE_STRIP.cell + x, y) > 8) {
+          if (x < x0) x0 = x
+          if (x > x1) x1 = x
+          if (y < y0) y0 = y
+          if (y > y1) y1 = y
+        }
+      }
+    }
+    cellInk.push({ x0, x1, y0, y1 })
+  }
+  const union = cellInk.reduce((acc, b) => ({
+    x0: Math.min(acc.x0, b.x0), x1: Math.max(acc.x1, b.x1),
+    y0: Math.min(acc.y0, b.y0), y1: Math.max(acc.y1, b.y1),
+  }))
+  check(
+    'the ink sits where the placement assumes it does, in every frame',
+    union.x0 === CAMPFIRE_INK.x0 && union.x1 === CAMPFIRE_INK.x1 &&
+      union.y0 === CAMPFIRE_INK.y0 && union.y1 === CAMPFIRE_INK.y1,
+    `x ${union.x0}..${union.x1} y ${union.y0}..${union.y1}`,
+  )
+  const bottoms = [...new Set(cellInk.map((b) => b.y1))]
+  const tops = [...new Set(cellInk.map((b) => b.y0))]
+  check(
+    'every frame is anchored at the same base row, so the fire cannot slide',
+    bottoms.length === 1,
+    `base rows ${bottoms.join(', ')}`,
+  )
+  check(
+    'and only the tip moves, which is what makes it a flicker rather than a slide',
+    tops.length > 1,
+    `tip rows ${tops.sort((x, y) => x - y).join(', ')}`,
+  )
+
+  const fingerprints = cellInk.map(
+    (b) => `${b.x0}.${b.x1}.${b.y0}.${b.y1}:${[b.y0, b.y1].join('-')}`,
+  )
+  check(
+    'the eight frames are genuinely different poses',
+    new Set(fingerprints).size === CAMPFIRE_STRIP.frames,
+    `${new Set(fingerprints).size} distinct of ${CAMPFIRE_STRIP.frames}`,
+  )
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
+  await page.goto(`${base}/`, { waitUntil: 'networkidle' })
+  await page.waitForSelector('.main-menu-ready')
+
+  // Sample the loop over time: the frame index must advance and wrap, and the light must
+  // breathe rather than sit at a constant.
+  const seen = new Set()
+  const glows = new Set()
+  for (let i = 0; i < 60; i++) {
+    const s = await page.evaluate(() => {
+      const strip = document.querySelector('.main-menu-fire-strip')
+      const glow = document.querySelector('.main-menu-fire-glow')
+      return {
+        frame: strip?.style.getPropertyValue('--campfire-frame') ?? '',
+        glow: glow?.style.opacity ?? '',
+      }
+    })
+    seen.add(s.frame)
+    glows.add(s.glow)
+    await page.waitForTimeout(40)
+  }
+  const frames = [...seen].filter(Boolean).map(Number).sort((a, b) => a - b)
+  check(
+    'the flame actually animates, and every frame is reached',
+    frames.length === CAMPFIRE_STRIP.frames,
+    `frames seen: ${frames.join(', ') || 'none'}`,
+  )
+  check(
+    'the warm light flickers rather than sitting still',
+    glows.size > 5 && [...glows].every((g) => Number(g) > 0 && Number(g) <= 1),
+    `${glows.size} distinct opacities`,
+  )
+
+  // Registration: the cell must sit on the backdrop's own canvas at every viewport.
+  for (const [w, h] of [
+    [1280, 720],
+    [1920, 1080],
+    [390, 844],
+  ]) {
+    await page.setViewportSize({ width: w, height: h })
+    await page.waitForTimeout(120)
+    const geo = await page.evaluate(
+      ([cx, cy]) => {
+        const win = document.querySelector('.main-menu-fire-flame')
+        const back = document.querySelector('.main-menu-backdrop')
+        if (!win || !back) return null
+        const b = back.getBoundingClientRect()
+        const r = win.getBoundingClientRect()
+        // The backdrop is `contain` in a box that is not 16:9, so the artwork occupies a
+        // letterboxed rectangle inside that box. Its own element box is the whole box, so
+        // the artwork rect has to be derived rather than read, or every measurement is
+        // taken against the wrong origin on any viewport that letterboxes.
+        const scale = Math.min(b.width / 1280, b.height / 720)
+        const artLeft = b.left + (b.width - 1280 * scale) / 2
+        const artTop = b.top + (b.height - 720 * scale) / 2
+        return {
+          left: (r.x - artLeft) / scale,
+          top: (r.y - artTop) / scale,
+          w: r.width / scale,
+          h: r.height / scale,
+        }
+      },
+      [CAMPFIRE_CELL.x, CAMPFIRE_CELL.y],
+    )
+    check(
+      `at ${w}x${h} the flame cell sits on the background's canvas, unscaled`,
+      geo !== null &&
+        Math.abs(geo.left - CAMPFIRE_CELL.x) < 1 &&
+        Math.abs(geo.top - CAMPFIRE_CELL.y) < 1 &&
+        Math.abs(geo.w - CAMPFIRE_STRIP.cell) < 1 &&
+        Math.abs(geo.h - CAMPFIRE_STRIP.cell) < 1,
+      geo
+        ? `canvas x ${geo.left.toFixed(1)} y ${geo.top.toFixed(1)}, ${geo.w.toFixed(1)}x${geo.h.toFixed(1)}`
+        : 'no fire element',
+    )
+  }
+  await page.close()
+}
+
+console.log('\n8. Android mirrors the same menu')
 // ---------------------------------------------------------------------------------
 {
   const ktMenu = readFileSync(KT_MENU, 'utf8')
@@ -1006,22 +1164,53 @@ console.log('\n7. Android mirrors the same menu')
 
   check('both engines load the background by the same synced filename', menuTs.includes('main_menu.jpg') && ktMenu.includes('"main_menu.jpg"'), `bg/main_menu.jpg`)
   check('web draws it with contain, never crop', /object-fit:\s*contain/.test(css))
-  check('the web stylesheet puts no transition or animation on the art layers', !/\.main-menu-(backdrop|overlay|campfire)[^{]*\{[^}]*(transition|animation)/.test(css), 'no transition/animation on .main-menu-backdrop / -overlay / -campfire')
+  check(
+    'the web stylesheet puts no transition or animation on the static art layers',
+    !/\.main-menu-(backdrop|overlay)[^{]*\{[^}]*(transition|animation)/.test(css),
+    'no transition/animation on .main-menu-backdrop / -overlay',
+  )
+  // The fire is the one layer that does move, and it moves only because the loop steps a
+  // sprite offset. A CSS transition or keyframe animation on it would drift off the
+  // background instead of playing the supplied frames.
+  check(
+    'the flame plays by stepping frames, not by a CSS animation of its own',
+    /@keyframes/.test(css) === false && !/\.main-menu-fire[^{]*\{[^}]*animation/.test(css),
+    'no keyframes, no animation on .main-menu-fire*',
+  )
   check('Android scales the artwork to fit, never cropping it', /ContentScale\.Fit/.test(ktMenu), 'ContentScale.Fit')
   check('Android does not tint the artwork', !/ColorFilter|colorFilter/.test(ktMenu), 'no colour filter on the image')
 
   if (overlaySupplied) {
     check('Android loads the character overlay by the same filename the web build asks for', ktMenu.includes('"main_menu_overlay.png"') && menuTs.includes('main_menu_overlay.png'), 'assets/bg/main_menu_overlay.png')
-    check('and the campfire overlay likewise', ktMenu.includes('"main_menu_campfire.png"') && menuTs.includes('main_menu_campfire.png'), 'assets/bg/main_menu_campfire.png')
-    check('both are read from the same assets folder by the same loader', ktMenu.includes('"bg/$assetFile"'), 'assets/bg/<file>')
-    // One per art layer: backdrop, character, campfire.
+    check(
+      'and both engines load the flame strip by the same filename',
+      ktMenu.includes('"campfire_flame.png"') && menuTs.includes('campfire_flame.png'),
+      'assets/bg/menu_buttons/campfire_flame.png',
+    )
+    check('the character overlay is read from the assets root by the same loader', ktMenu.includes('"bg/$assetFile"'), 'assets/bg/<file>')
+    // One per static art layer: backdrop and character. The flame is a sprite strip, drawn
+    // a cell at a time rather than fitted to the canvas.
     const fits = (ktMenu.match(/ContentScale\.Fit/g) || []).length
-    check('every art layer is drawn with the same ContentScale.Fit as the backdrop, so they all register', fits >= 3, `${fits} uses of ContentScale.Fit`)
+    check('every static art layer is drawn with the same ContentScale.Fit as the backdrop, so they both register', fits >= 2, `${fits} uses of ContentScale.Fit`)
   } else {
     pending('Android art layer parity is not checked yet', 'the art canvases have not been supplied')
   }
 
-  check('Android keeps the backdrop, both art canvases and the UI as four layers', /main_menu"/.test(ktMenu) && /main_menu_overlay/.test(ktMenu) && /main_menu_campfire/.test(ktMenu) && /main_menu_ui/.test(ktMenu), 'main_menu / main_menu_overlay / main_menu_campfire / main_menu_ui')
+  check(
+    'Android keeps the backdrop, the fire, the character and the UI as four layers',
+    /main_menu"/.test(ktMenu) && /main_menu_fire/.test(ktMenu) && /main_menu_overlay/.test(ktMenu) && /main_menu_ui/.test(ktMenu),
+    'main_menu / main_menu_fire / main_menu_overlay / main_menu_ui',
+  )
+  // The Android side of the fire. It cannot be compiled in this environment, so the claims
+  // that matter are asserted against the source: the same cell, the same placement, the
+  // same frame rate, and no rescaling of the supplied strip.
+  const ktFire = codeOnly(ktMenu)
+  check('Android plays the same eight frames at the same rate', /CAMPFIRE_FLAME_FRAMES = 8/.test(ktFire) && /CAMPFIRE_FLAME_FPS = 12/.test(ktFire), '8 frames at 12 fps')
+  check('Android places the cell where the web does', /CAMPFIRE_FLAME_CELL_X = 686/.test(ktFire) && /CAMPFIRE_FLAME_CELL_Y = 455/.test(ktFire), 'cell at (686, 455)')
+  check('Android draws the flame inside the shared canvas box, so it scales with the backdrop', /MenuFire\(\s*Modifier\s*\.offset\(x = fireCanvas\.offsetX, y = fireCanvas\.offsetY\)/.test(ktFire), 'MenuFire on the canvas surface')
+  check('Android clips to one cell and slides the strip behind it', /clipToBounds\(\)/.test(ktFire) && /offset\(x = \(-frame \* CAMPFIRE_FLAME_CELL\)\.dp\)/.test(ktFire), 'clipToBounds + per-frame offset')
+  check('Android keeps the pixel art unsmoothed and unscaled', /FilterQuality\.None/.test(ktFire) && /CAMPFIRE_FLAME_CELL \* CAMPFIRE_FLAME_FRAMES/.test(ktFire), 'FilterQuality.None, strip sized in whole cells')
+  check('Android has the same warm light as the web', /main_menu_fire_glow/.test(ktFire) && /Brush\.radialGradient/.test(ktFire), 'radial glow layer')
 
   const labels = ['START GAME', 'LOAD GAME', 'SETTINGS', 'QUIT']
   const found = labels.filter((l) => ktMenu.includes(`"${l}"`))

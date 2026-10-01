@@ -20,19 +20,27 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -46,15 +54,16 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.min
+import kotlin.math.sin
 
 /**
  * The Ashbound main menu.
  *
  * Four layers, back to front, which is the required stack:
  *
- *   1. `main_menu`         the supplied background artwork
- *   2. `main_menu_overlay`  the character, on its own transparent canvas
- *   3. `main_menu_campfire` the campfire, on its own transparent canvas
+ *   1. `main_menu`         the supplied background artwork, untouched
+ *   2. `main_menu_fire`     the animated campfire and its warm light
+ *   3. `main_menu_overlay`  the character, on its own transparent canvas
  *   4. `main_menu_ui`       the title, the supplied button plates, and the sub-screens
  *
  * Every piece of supplied artwork is a full 1280x720 canvas already composed against the
@@ -77,15 +86,37 @@ const val MAIN_MENU_BACKGROUND_FILE = "main_menu.jpg"
 const val MAIN_MENU_OVERLAY_FILE = "main_menu_overlay.png"
 
 /**
- * The campfire, as its own transparent 1280x720 canvas like the character.
+ * The animated campfire.
  *
- * Its visible ink sits at x 680..819, immediately left of the character's x 826..999, so
- * the two share no pixel today. The order between them is not incidental, though: the
- * stack is background -> character -> campfire -> buttons, so the campfire draws in
- * front of the character. That ordering is currently invisible; it is stated here so a
- * future revision of either canvas lands on the intended stack.
+ * The supplied sheet is a 1024x128 horizontal strip of eight 128x128 cells, measured
+ * from the file itself: every frame's ink bottoms out on the same row (y=99) while the top
+ * edge moves between y=21 and y=32, so the fire is anchored at its base and only the tip
+ * flickers. Each cell carries the whole fire, flame above and the dark log and stone base
+ * below, so this replaces the old static fire outright rather than stacking a flame on one
+ * that was still underneath.
+ *
+ * The cell is placed at canvas (686, 455): the ink centres on the old fire's centre x and
+ * its base lands on the old fire's base, so the fire stays on the same spot. It is
+ * positioned inside the shared canvas box, so it is scaled by the one factor the backdrop
+ * is and cannot drift from the background at any viewport or any frame.
  */
-const val MAIN_MENU_CAMPFIRE_FILE = "main_menu_campfire.png"
+const val MAIN_MENU_CAMPFIRE_FLAME_FILE = "campfire_flame.png"
+
+private const val CAMPFIRE_FLAME_FRAMES = 8
+private const val CAMPFIRE_FLAME_CELL = 128
+private const val CAMPFIRE_FLAME_CELL_X = 686
+private const val CAMPFIRE_FLAME_CELL_Y = 455
+
+/**
+ * Frames per second, matching the web. Slow on purpose: at twelve the eight-frame loop
+ * repeats every two thirds of a second, which reads as a fire breathing.
+ */
+private const val CAMPFIRE_FLAME_FPS = 12
+
+/** The warm light, centred on the fire's ink. Same numbers as the web engine's glow. */
+private const val CAMPFIRE_GLOW_CX = 749.5f
+private const val CAMPFIRE_GLOW_CY = 515f
+private const val CAMPFIRE_GLOW_R = 130f
 
 /** Every supplied canvas is this size, as is the backdrop. */
 private const val CANVAS_WIDTH = 1280
@@ -175,16 +206,101 @@ fun rememberMenuOverlay(assetFile: String = MAIN_MENU_OVERLAY_FILE): ImageBitmap
     }
 }
 
-/** The campfire overlay. Same folder, same canvas size as the backdrop. */
+/**
+ * The animated flame strip, loaded from the same folder as the supplied plates.
+ *
+ * Decoded whole rather than frame by frame: it is one 1024x128 sheet, and a single decode
+ * keeps every frame on exactly the pixels the artist drew, with no chance of a frame being
+ * resampled on its way to the screen.
+ */
 @Composable
-fun rememberMenuCampfire(assetFile: String = MAIN_MENU_CAMPFIRE_FILE): ImageBitmap? {
+fun rememberMenuCampfireFlame(
+    assetFile: String = MAIN_MENU_CAMPFIRE_FLAME_FILE,
+): ImageBitmap? {
     val context = LocalContext.current
     return remember(assetFile) {
         runCatching {
-            context.assets.open("bg/$assetFile").use { stream ->
+            context.assets.open("bg/menu_buttons/$assetFile").use { stream ->
                 BitmapFactory.decodeStream(stream)?.asImageBitmap()
             }
         }.getOrNull()
+    }
+}
+
+/**
+ * The fire: a warm light, and the animated flame over it.
+ *
+ * The flame is a one-cell window with the whole strip sliding behind it, which plays a
+ * sprite sheet without scaling or cropping a pixel of it. The window is sized and offset
+ * inside the shared canvas box, so it carries the same single scale factor as the
+ * backdrop and stays registered to the background at every frame.
+ */
+@Composable
+fun MenuFire(surface: Modifier, flame: ImageBitmap?) {
+    var frame by remember { mutableIntStateOf(0) }
+    var glow by remember { mutableFloatStateOf(0f) }
+
+    // One clock drives both, so the light and the flame stay in step rather than drifting
+    // apart. Cancelled with the composition, so a torn-down menu stops asking for frames.
+    LaunchedEffect(Unit) {
+        val started = withFrameNanos { it }
+        while (true) {
+            withFrameNanos { now ->
+                val seconds = (now - started) / 1_000_000_000f
+                frame = (seconds * CAMPFIRE_FLAME_FPS).toInt() % CAMPFIRE_FLAME_FRAMES
+                // A slow breath rather than a strobe, and shallow on purpose.
+                glow = 0.62f + 0.38f * (0.5f + 0.5f * sin(seconds * 2.2f))
+            }
+        }
+    }
+
+    Box(surface.testTag("main_menu_fire")) {
+        // The warm light. Screen-like lightening is not available the way CSS `screen` is,
+        // so this is a plain warm falloff at low alpha, which reads the same at this size.
+        Box(
+            Modifier
+                .offset(
+                    x = (CAMPFIRE_GLOW_CX - CAMPFIRE_GLOW_R).dp,
+                    y = (CAMPFIRE_GLOW_CY - CAMPFIRE_GLOW_R).dp,
+                )
+                .size((CAMPFIRE_GLOW_R * 2).dp)
+                .alpha(glow)
+                .background(
+                    Brush.radialGradient(
+                        0.0f to Color(0xFFFFB04A).copy(alpha = 0.50f),
+                        0.38f to Color(0xFFFF8C28).copy(alpha = 0.24f),
+                        0.66f to Color(0xFFD26014).copy(alpha = 0.09f),
+                        1.0f to Color(0x00B4460A),
+                    ),
+                    CircleShape,
+                )
+                .testTag("main_menu_fire_glow"),
+        )
+
+        if (flame != null) {
+            Box(
+                Modifier
+                    .offset(x = CAMPFIRE_FLAME_CELL_X.dp, y = CAMPFIRE_FLAME_CELL_Y.dp)
+                    .size(CAMPFIRE_FLAME_CELL.dp)
+                    .clipToBounds()
+                    .testTag("main_menu_fire_flame"),
+            ) {
+                Image(
+                    flame,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(
+                            width = (CAMPFIRE_FLAME_CELL * CAMPFIRE_FLAME_FRAMES).dp,
+                            height = CAMPFIRE_FLAME_CELL.dp,
+                        )
+                        .offset(x = (-frame * CAMPFIRE_FLAME_CELL).dp),
+                    // The window is exactly one cell and the image exactly the whole strip,
+                    // so this is one-to-one: no rescaling of the supplied artwork.
+                    contentScale = ContentScale.FillBounds,
+                    filterQuality = FilterQuality.None,
+                )
+            }
+        }
     }
 }
 
@@ -245,17 +361,25 @@ fun MainMenu(modifier: Modifier = Modifier, onAction: (MainMenuAction) -> Unit) 
             }
         }
 
-        // --- Layer 2: the character ------------------------------------------
-        // Same box and same ContentScale.Fit as the backdrop, so it registers.
-        Box(Modifier.fillMaxSize().testTag("main_menu_overlay")) {
-            rememberMenuOverlay()?.let { image ->
-                Image(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+        // --- Layer 2: the campfire and its light -----------------------------
+        // Under the character, as the required stack asks: background, fire, character.
+        // Drawn in the shared canvas box so it scales by one factor with the backdrop.
+        Box(Modifier.fillMaxSize()) {
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val fireCanvas = canvasBox()
+                MenuFire(
+                    Modifier
+                        .offset(x = fireCanvas.offsetX, y = fireCanvas.offsetY)
+                        .size(fireCanvas.width, fireCanvas.height),
+                    rememberMenuCampfireFlame(),
+                )
             }
         }
 
-        // --- Layer 3: the campfire -------------------------------------------
-        Box(Modifier.fillMaxSize().testTag("main_menu_campfire")) {
-            rememberMenuCampfire()?.let { image ->
+        // --- Layer 3: the character ------------------------------------------
+        // Same box and same ContentScale.Fit as the backdrop, so it registers.
+        Box(Modifier.fillMaxSize().testTag("main_menu_overlay")) {
+            rememberMenuOverlay()?.let { image ->
                 Image(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
             }
         }
