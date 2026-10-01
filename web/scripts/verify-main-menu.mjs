@@ -48,7 +48,8 @@ const CAMPFIRE_STRIP = { width: 1024, height: 128, frames: 8, cell: 128 }
  * base row 552. See CAMPFIRE_SUPPLIED_FIRE below, which re-measures that rather than
  * trusting it.
  */
-const CAMPFIRE_CELL = { x: 685.5, y: 453 }
+const CAMPFIRE_FLAME_SCALE = 1.32
+const CAMPFIRE_CELL = { x: 665.02, y: 420 }
 /** The ink inside one flame cell, measured from the file's alpha channel. */
 const CAMPFIRE_CELL_INK = { x0: 12, w: 104, y1: 99 }
 /** Where the supplied campfire canvas puts the fire: its solid core, glow excluded. */
@@ -84,7 +85,9 @@ const MENU_CHARACTER_FILES = ['character_idle_a.png', 'character_idle_b.png']
 /** Frames per sheet, and the cell size, both measured from the files. */
 const CHARACTER_FRAMES = 16
 /** The sheets' ink box, and the static character's, so the scale is re-derived here. */
-const CHARACTER_SHEET_INK = { x0: 8, y0: 11, y1: 82 }
+const CHARACTER_SHEET_INK = { x0: 8, y0: 11, x1: 85, y1: 82 }
+/** How much smaller than the static figure the animation is drawn. */
+const CHARACTER_SIZE = 0.9
 const CHARACTER_STATIC_INK = { x: 826, y: 386, w: 174, h: 161 }
 
 const ANDROID_ASSET = join(repoRoot, 'app/src/main/assets/bg', MENU_BG)
@@ -1354,12 +1357,12 @@ console.log('\n8. the campfire is animated, and stays on the same spot every fra
       [CAMPFIRE_CELL.x, CAMPFIRE_CELL.y],
     )
     check(
-      `at ${w}x${h} the flame cell sits on the background's canvas, unscaled`,
+      `at ${w}x${h} the flame cell sits on the background's canvas, at the drawing scale`,
       geo !== null &&
         Math.abs(geo.left - CAMPFIRE_CELL.x) < 1 &&
         Math.abs(geo.top - CAMPFIRE_CELL.y) < 1 &&
-        Math.abs(geo.w - CAMPFIRE_STRIP.cell) < 1 &&
-        Math.abs(geo.h - CAMPFIRE_STRIP.cell) < 1,
+        Math.abs(geo.w - CAMPFIRE_STRIP.cell * CAMPFIRE_FLAME_SCALE) < 1 &&
+        Math.abs(geo.h - CAMPFIRE_STRIP.cell * CAMPFIRE_FLAME_SCALE) < 1,
       geo
         ? `canvas x ${geo.left.toFixed(1)} y ${geo.top.toFixed(1)}, ${geo.w.toFixed(1)}x${geo.h.toFixed(1)}`
         : 'no fire element',
@@ -1430,18 +1433,26 @@ console.log('\n9. the character is animated, and sits where the static one was')
 
   // The scale is derived from height; check it also reproduces the width, which is what
   // proves it was not simply fitted to one dimension.
-  const h = union.y1 - union.y0
-  const w = union.x1 - union.x0
-  const scale = CHARACTER_STATIC_INK.h / h
+  // Edges, because the placement is anchored on edges: ink spans [y0, y1] inclusive.
+  const h = union.y1 + 1 - union.y0
+  const w = union.x1 + 1 - union.x0
+  const scale = (CHARACTER_STATIC_INK.h * CHARACTER_SIZE) / h
+  const targetH = CHARACTER_STATIC_INK.h * CHARACTER_SIZE
+  const targetW = CHARACTER_STATIC_INK.w * CHARACTER_SIZE
   check(
-    'the derived scale matches the static figure in height and width together',
-    Math.abs(w * scale - CHARACTER_STATIC_INK.w) < 2,
-    `${w} x ${h} at ${scale.toFixed(4)} -> ${(w * scale).toFixed(1)} wide against ${CHARACTER_STATIC_INK.w}`,
+    'the derived scale matches the sized static figure in height and width together',
+    Math.abs(h * scale - targetH) < 1 && Math.abs(w * scale - targetW) < 1,
+    `${w} x ${h} at ${scale.toFixed(4)} -> ${(w * scale).toFixed(1)} x ${(h * scale).toFixed(1)} against ${targetW.toFixed(1)} x ${targetH.toFixed(1)}`,
   )
   check(
-    'and it is a uniform scale, so the pixel art keeps its proportions',
-    Math.abs(scale - 161 / 71) < 0.001,
-    `x${scale.toFixed(4)}`,
+    'and it is the static figure at the size factor, scaled uniformly so the art keeps its proportions',
+    Math.abs(scale - (161 * CHARACTER_SIZE) / 72) < 0.001,
+    `x${scale.toFixed(4)}, ${CHARACTER_SIZE * 100}% of 161/72`,
+  )
+  check(
+    'the character really is drawn smaller than the static figure it replaces',
+    h * scale < CHARACTER_STATIC_INK.h - 1,
+    `${(h * scale).toFixed(1)} tall against the static ${CHARACTER_STATIC_INK.h}`,
   )
 
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
@@ -1486,8 +1497,14 @@ console.log('\n9. the character is animated, and sits where the static one was')
       const T = b.top + (b.height - 720 * sc) / 2
       return { x: (r.left - L) / sc, y: (r.top - T) / sc, w: r.width / sc, h: r.height / sc }
     })
-    const wantX = CHARACTER_STATIC_INK.x - union.x0 * scale
-    const wantY = CHARACTER_STATIC_INK.y - union.y0 * scale
+    // Anchored on the figure's centre column and base row, not its top left: the check has
+    // to use the same rule the code does, or a correctly anchored figure fails it.
+    const wantX =
+      CHARACTER_STATIC_INK.x +
+      CHARACTER_STATIC_INK.w / 2 -
+      ((union.x0 + union.x1 + 1) / 2) * scale
+    const wantY =
+      CHARACTER_STATIC_INK.y + CHARACTER_STATIC_INK.h - (union.y1 + 1) * scale
     const wantS = 96 * scale
     check(
       `at ${w2}x${h2} the character cell lands on the static character's place`,
@@ -1500,8 +1517,30 @@ console.log('\n9. the character is animated, and sits where the static one was')
 
   const ktFire = codeOnly(ktMenu)
   check('Android plays both sheets, sixteen frames each, at the same rate', /CHARACTER_FRAMES = 16/.test(ktFire) && /CHARACTER_FPS = 8/.test(ktFire), '16 frames at 8 fps')
-  check('Android derives the same scale from the same two measurements', /CHARACTER_STATIC_H\.toFloat\(\) \/ \(CHARACTER_SHEET_INK_Y1 - CHARACTER_SHEET_INK_Y0\)\.toFloat\(\)/.test(ktFire), '161 / 71')
-  check('Android plays the sheets one after the other, not one alone', /cursor \/ CHARACTER_FRAMES/.test(ktFire), 'cursor / CHARACTER_FRAMES')
+  check(
+    'Android derives the same scale from the same two measurements',
+    /CHARACTER_STATIC_H \* CHARACTER_SIZE\)\.toFloat\(\)/.test(ktFire) && /CHARACTER_SIZE = 0\.9f/.test(ktFire),
+    '161 * 0.9 / 71',
+  )
+  check(
+    'Android anchors the figure on its centre column and base row too',
+    /CHARACTER_STATIC_X \+ CHARACTER_STATIC_W \/ 2f/.test(ktFire) &&
+      /CHARACTER_STATIC_Y \+ CHARACTER_STATIC_H - CHARACTER_SHEET_INK_Y1 \* CHARACTER_SCALE/.test(ktFire),
+    'centre column + base row',
+  )
+  check(
+    'both engines wrap their frame counters forwards, so a negative first tick cannot index off the front',
+    /function wrapFrame/.test(codeOnly(readFileSync(MENU_TS, 'utf8'))) &&
+      /\(\(frame % length\) \+ length\) % length/.test(codeOnly(readFileSync(MENU_TS, 'utf8'))) &&
+      /coerceAtLeast\(0\)\) % CHARACTER_SEQUENCE\.size/.test(ktFire),
+    'wrapFrame + coerceAtLeast(0)',
+  )
+  check(
+    'Android plays the same order, with the last sheet running in reverse',
+    /CHARACTER_SEQUENCE\[cursor\]/.test(ktFire) &&
+      /List\(CHARACTER_FRAMES - 2\) \{ 1 to \(CHARACTER_FRAMES - 2 - it\) \}/.test(ktFire),
+    'boomerang on the last sheet',
+  )
   check('Android clips to one cell and slides the sheet behind it', /clipToBounds\(\)/.test(ktFire) && /offset\(x = \(-frame \* CHARACTER_CELL \* CHARACTER_SCALE\)\.dp\)/.test(ktFire), 'clipToBounds + per-frame offset')
   check('Android keeps the character pixel art unsmoothed', /FilterQuality\.None/.test(ktFire), 'FilterQuality.None')
   check('Android loads the sheets from the same folder as the plates', /"bg\/menu_buttons\/\$file"/.test(ktFire), 'assets/bg/menu_buttons/<file>')
@@ -1613,7 +1652,12 @@ console.log('\n9b. the artwork is oriented and placed the way the supplied files
       return {
         facing,
         staticFire: { core, bottom: core[1] + core[3] - 1, centreX: core[0] + core[2] / 2 },
-        flame: { union, centreX: union[0] + union[2] / 2, baseY: union[1] + union[3] - 1 },
+        flame: {
+          union,
+          centreX: union[0] + union[2] / 2,
+          // union is [x0, y0, w, h] with y0/h inclusive, so the base row is y0 + h.
+          baseY: union[1] + union[3],
+        },
         fireIoU: { asIs: iou(refFire, fm), mirrored: iou(refFire, flip(fm)) },
       }
     },
@@ -1648,8 +1692,10 @@ console.log('\n9b. the artwork is oriented and placed the way the supplied files
   )
 
   // --- where the fire belongs --------------------------------------------------
-  const wantCellX = measured.staticFire.centreX - measured.flame.centreX
-  const wantCellY = measured.staticFire.bottom - measured.flame.baseY
+  // Anchored on centre column and base row, at the drawing scale -- the same rule the code
+  // uses, so this fails if the anchoring is changed on one side only.
+  const wantCellX = measured.staticFire.centreX - measured.flame.centreX * CAMPFIRE_FLAME_SCALE
+  const wantCellY = measured.staticFire.bottom - measured.flame.baseY * CAMPFIRE_FLAME_SCALE
   check(
     'the flame cell is placed where the supplied campfire canvas puts the fire',
     Math.abs(CAMPFIRE_CELL.x - wantCellX) < 0.5 && Math.abs(CAMPFIRE_CELL.y - wantCellY) < 0.5,
@@ -1776,12 +1822,24 @@ console.log('\n10. Android mirrors the same menu')
     '8 frames at 8 fps, both engines',
   )
   check(
-    'Android places the cell where the web does',
-    /CAMPFIRE_FLAME_CELL_X = 685\.5f/.test(ktFire) && /CAMPFIRE_FLAME_CELL_Y = 453f/.test(ktFire),
-    'cell at (685.5, 453)',
+    'Android places the cell where the web does, from the same centre column and base row',
+    /CAMPFIRE_SUPPLIED_CENTRE_X - CAMPFIRE_CELL_INK_CENTRE_X \* CAMPFIRE_FLAME_SCALE/.test(ktFire) &&
+      /CAMPFIRE_SUPPLIED_BASE_Y - CAMPFIRE_CELL_INK_BASE_Y \* CAMPFIRE_FLAME_SCALE/.test(ktFire),
+    'centre column + base row, scaled',
+  )
+  check(
+    'Android draws the flame at the same size as the web',
+    /CAMPFIRE_FLAME_SCALE = 1\.32f/.test(ktFire) &&
+      /CAMPFIRE_FLAME_CELL \* CAMPFIRE_FLAME_SCALE\)\.dp/.test(ktFire),
+    'scale 1.32 on the cell and the strip',
   )
   check('Android draws the flame inside the shared canvas box, so it scales with the backdrop', /MenuFire\(\s*Modifier\s*\.offset\(x = fireCanvas\.offsetX, y = fireCanvas\.offsetY\)/.test(ktFire), 'MenuFire on the canvas surface')
-  check('Android clips to one cell and slides the strip behind it', /clipToBounds\(\)/.test(ktFire) && /offset\(x = \(-frame \* CAMPFIRE_FLAME_CELL\)\.dp\)/.test(ktFire), 'clipToBounds + per-frame offset')
+  check(
+    'Android clips to one cell and slides the strip behind it',
+    /clipToBounds\(\)/.test(ktFire) &&
+      /offset\(x = \(-frame \* CAMPFIRE_FLAME_CELL \* CAMPFIRE_FLAME_SCALE\)\.dp\)/.test(ktFire),
+    'clipToBounds + per-frame offset',
+  )
   check('Android keeps the pixel art unsmoothed and unscaled', /FilterQuality\.None/.test(ktFire) && /CAMPFIRE_FLAME_CELL \* CAMPFIRE_FLAME_FRAMES/.test(ktFire), 'FilterQuality.None, strip sized in whole cells')
   check('Android has the same warm light as the web', /main_menu_fire_glow/.test(ktFire) && /Brush\.radialGradient/.test(ktFire), 'radial glow layer')
 

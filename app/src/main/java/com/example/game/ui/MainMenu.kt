@@ -117,23 +117,58 @@ const val MAIN_MENU_OVERLAY_FILE = "main_menu_overlay.png"
  */
 private const val CHARACTER_STATIC_X = 826
 private const val CHARACTER_STATIC_Y = 386
+private const val CHARACTER_STATIC_W = 174
 private const val CHARACTER_STATIC_H = 161
+/** The sheets' ink, as edges rather than pixel indices, so anchoring is arithmetic. */
 private const val CHARACTER_SHEET_INK_X0 = 8
+private const val CHARACTER_SHEET_INK_X1 = 86
 private const val CHARACTER_SHEET_INK_Y0 = 11
-private const val CHARACTER_SHEET_INK_Y1 = 82
+private const val CHARACTER_SHEET_INK_Y1 = 83
 private const val CHARACTER_FRAMES = 16
 private const val CHARACTER_CELL = 96
 
-private const val CHARACTER_SCALE =
-    CHARACTER_STATIC_H.toFloat() / (CHARACTER_SHEET_INK_Y1 - CHARACTER_SHEET_INK_Y0).toFloat()
-private const val CHARACTER_CELL_X =
-    CHARACTER_STATIC_X - CHARACTER_SHEET_INK_X0 * CHARACTER_SCALE
-private const val CHARACTER_CELL_Y =
-    CHARACTER_STATIC_Y - CHARACTER_SHEET_INK_Y0 * CHARACTER_SCALE
+/**
+ * How much smaller than the static figure the animation is drawn. The figure was sitting at
+ * the full size of the static composition, which read as looming over the fire rather than
+ * sitting beside it. Every other number below is still derived from the artwork.
+ */
+private const val CHARACTER_SIZE = 0.9f
 
 /**
- * Frames per second, matching the web. The two sheets are 32 frames, so at eight the loop
- * takes four seconds: a settled breathing rather than a fidget.
+ * 72 rows of sheet ink become 161 * 0.9 = 145 tall, and 78 columns become 157 against a
+ * target of 174 * 0.9 = 157: one uniform factor, so the pixel art keeps its proportions
+ * and its hard nearest-neighbour edges.
+ */
+private const val CHARACTER_SCALE =
+    (CHARACTER_STATIC_H * CHARACTER_SIZE).toFloat() /
+        (CHARACTER_SHEET_INK_Y1 - CHARACTER_SHEET_INK_Y0).toFloat()
+
+/**
+ * Anchored on the figure's centre column and its base row rather than its top left, so
+ * changing its size never lifts it off the ground or slides it sideways.
+ */
+private const val CHARACTER_CELL_X =
+    CHARACTER_STATIC_X + CHARACTER_STATIC_W / 2f -
+        (CHARACTER_SHEET_INK_X0 + CHARACTER_SHEET_INK_X1) / 2f * CHARACTER_SCALE
+private const val CHARACTER_CELL_Y =
+    CHARACTER_STATIC_Y + CHARACTER_STATIC_H - CHARACTER_SHEET_INK_Y1 * CHARACTER_SCALE
+
+/**
+ * The order the two sheets play in, as [sheet, frame] pairs.
+ *
+ * The first sheet plays straight through. The last one plays forward and then back the way
+ * it came -- 0..15 and then 14..1 -- which is a boomerang: it arrives back at the pose it
+ * started from, so the loop closes without the figure snapping. Frame 15 is not repeated at
+ * the turn and frame 1 steps into frame 0, so every step is a single frame either way.
+ */
+private val CHARACTER_SEQUENCE: List<Pair<Int, Int>> =
+    List(CHARACTER_FRAMES) { 0 to it } +
+        List(CHARACTER_FRAMES) { 1 to it } +
+        List(CHARACTER_FRAMES - 2) { 1 to (CHARACTER_FRAMES - 2 - it) }
+
+/**
+ * Frames per second, matching the web. The sequence is 46 steps, so at eight the loop takes
+ * a shade under six seconds: a settled breathing rather than a fidget.
  */
 private const val CHARACTER_FPS = 8
 
@@ -159,8 +194,31 @@ const val MAIN_MENU_CAMPFIRE_FLAME_FILE = "campfire_flame.png"
 
 private const val CAMPFIRE_FLAME_FRAMES = 8
 private const val CAMPFIRE_FLAME_CELL = 128
-private const val CAMPFIRE_FLAME_CELL_X = 685.5f
-private const val CAMPFIRE_FLAME_CELL_Y = 453f
+/** One flame cell's ink, as edges, measured from the sheet's alpha channel. */
+private const val CAMPFIRE_CELL_INK_CENTRE_X = 64f
+private const val CAMPFIRE_CELL_INK_BASE_Y = 100f
+
+/** The fire in the supplied canvas: its solid core, with the soft glow excluded. */
+private const val CAMPFIRE_SUPPLIED_CENTRE_X = 749.5f
+private const val CAMPFIRE_SUPPLIED_BASE_Y = 552f
+
+/**
+ * How much bigger the flame is drawn than the sheet's own pixels. The sheet's ink is 104
+ * wide and about 74 tall against the supplied fire's 139 by 96: at the sheet's own size the
+ * fire read as a spark beside the seated figure rather than the fire it is meant to be.
+ * 104 * 1.32 = 137 against 139, and 74 * 1.32 = 98 against 96. Uniform, so the flame keeps
+ * its proportions, and FilterQuality.None keeps the scaled edges hard.
+ */
+private const val CAMPFIRE_FLAME_SCALE = 1.32f
+
+/**
+ * Anchored on the fire's centre column and its base row rather than its top left, so
+ * scaling the flame up grows it out of the same spot on the ground.
+ */
+private val CAMPFIRE_FLAME_CELL_X =
+    CAMPFIRE_SUPPLIED_CENTRE_X - CAMPFIRE_CELL_INK_CENTRE_X * CAMPFIRE_FLAME_SCALE
+private val CAMPFIRE_FLAME_CELL_Y =
+    CAMPFIRE_SUPPLIED_BASE_Y - CAMPFIRE_CELL_INK_BASE_Y * CAMPFIRE_FLAME_SCALE
 
 /**
  * Frames per second, matching the web. Slow on purpose: at twelve the eight-frame loop
@@ -302,7 +360,8 @@ fun MenuFire(surface: Modifier, flame: ImageBitmap?) {
         while (true) {
             withFrameNanos { now ->
                 val seconds = (now - started) / 1_000_000_000f
-                frame = (seconds * CAMPFIRE_FLAME_FPS).toInt() % CAMPFIRE_FLAME_FRAMES
+                frame =
+                    ((seconds * CAMPFIRE_FLAME_FPS).toInt().coerceAtLeast(0)) % CAMPFIRE_FLAME_FRAMES
                 // A slow breath rather than a strobe, and shallow on purpose.
                 glow = 0.62f + 0.38f * (0.5f + 0.5f * sin(seconds * 2.2f))
             }
@@ -336,7 +395,7 @@ fun MenuFire(surface: Modifier, flame: ImageBitmap?) {
             Box(
                 Modifier
                     .offset(x = CAMPFIRE_FLAME_CELL_X.dp, y = CAMPFIRE_FLAME_CELL_Y.dp)
-                    .size(CAMPFIRE_FLAME_CELL.dp)
+                    .size((CAMPFIRE_FLAME_CELL * CAMPFIRE_FLAME_SCALE).dp)
                     .clipToBounds()
                     .testTag("main_menu_fire_flame"),
             ) {
@@ -345,12 +404,13 @@ fun MenuFire(surface: Modifier, flame: ImageBitmap?) {
                     contentDescription = null,
                     modifier = Modifier
                         .size(
-                            width = (CAMPFIRE_FLAME_CELL * CAMPFIRE_FLAME_FRAMES).dp,
-                            height = CAMPFIRE_FLAME_CELL.dp,
+                            width = (CAMPFIRE_FLAME_CELL * CAMPFIRE_FLAME_FRAMES * CAMPFIRE_FLAME_SCALE).dp,
+                            height = (CAMPFIRE_FLAME_CELL * CAMPFIRE_FLAME_SCALE).dp,
                         )
-                        .offset(x = (-frame * CAMPFIRE_FLAME_CELL).dp),
-                    // The window is exactly one cell and the image exactly the whole strip,
-                    // so this is one-to-one: no rescaling of the supplied artwork.
+                        .offset(x = (-frame * CAMPFIRE_FLAME_CELL * CAMPFIRE_FLAME_SCALE).dp),
+                    // The window is one cell at the drawing scale and the image exactly the
+                    // whole strip at the same scale, so the strip is never resampled; only
+                    // the whole fire is scaled, by one factor, uniformly.
                     contentScale = ContentScale.FillBounds,
                     filterQuality = FilterQuality.None,
                 )
@@ -384,9 +444,13 @@ fun MenuCharacter(surface: Modifier, sheets: List<ImageBitmap?>) {
         while (true) {
             withFrameNanos { now ->
                 val seconds = (now - started) / 1_000_000_000f
-                val cursor = (seconds * CHARACTER_FPS).toInt() % (CHARACTER_FRAMES * sheets.size)
-                sheetIndex = cursor / CHARACTER_FRAMES
-                frame = cursor - sheetIndex * CHARACTER_FRAMES
+                // coerceAtLeast(0) because Kotlin's % keeps the sign too, and a negative
+                // index would walk off the front of the sequence.
+                val cursor =
+                    ((seconds * CHARACTER_FPS).toInt().coerceAtLeast(0)) % CHARACTER_SEQUENCE.size
+                val (sheet, localFrame) = CHARACTER_SEQUENCE[cursor]
+                sheetIndex = sheet
+                frame = localFrame
             }
         }
     }

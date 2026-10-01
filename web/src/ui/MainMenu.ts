@@ -52,23 +52,63 @@ export const MAIN_MENU_CHARACTER_FILES = ['character_idle_a.png', 'character_idl
 export const CHARACTER_FRAMES = 16
 export const CHARACTER_CELL = 96
 
-/** The sheets' ink box, so the scale and the placement are derived, not guessed. */
-const CHARACTER_SHEET_INK = { x0: 8, y0: 11, x1: 85, y1: 82 }
+/** The sheets' ink box, as edges rather than pixel indices, so anchoring is arithmetic. */
+const CHARACTER_SHEET_INK = { x0: 8, y0: 11, x1: 86, y1: 83 }
 
 /**
- * Matches the animation to the static figure. Height and width agree to within a pixel:
- * 72 * 2.236 = 161 tall, and 78 * 2.236 = 174 wide, against 174x161 in the composition.
+ * How much smaller than the static figure the animation is drawn.
+ *
+ * The figure was sitting at the full size of the static composition, which is too big for
+ * the scene it stands in: the seated character read as looming over the fire rather than
+ * sitting beside it. Ninety per cent puts it back in proportion while leaving every other
+ * decision below derived from the artwork rather than from this number -- the size, the
+ * ground contact row and the centre column all still come from measurements.
+ */
+const CHARACTER_SIZE = 0.9
+
+/**
+ * The scale that takes the sheets' own figure onto the static one, scaled down.
+ *
+ * 72 rows of sheet ink become 161 * 0.9 = 145 tall, so the factor is 145 / 72 = 2.012, and
+ * 78 columns become 157 against a target of 174 * 0.9 = 157. Height and width agree to
+ * within a pixel and the factor is uniform, so the pixel art keeps its proportions and its
+ * hard nearest-neighbour edges.
  */
 export const CHARACTER_SCALE =
-  CHARACTER_STATIC_INK.h / (CHARACTER_SHEET_INK.y1 - CHARACTER_SHEET_INK.y0)
-
-/** Where the cell goes so the drawn figure lands exactly on the static one. */
-export const CHARACTER_CELL_X = CHARACTER_STATIC_INK.x - CHARACTER_SHEET_INK.x0 * CHARACTER_SCALE
-export const CHARACTER_CELL_Y = CHARACTER_STATIC_INK.y - CHARACTER_SHEET_INK.y0 * CHARACTER_SCALE
+  (CHARACTER_STATIC_INK.h * CHARACTER_SIZE) / (CHARACTER_SHEET_INK.y1 - CHARACTER_SHEET_INK.y0)
 
 /**
- * Frames per second. Slow on purpose: the two sheets are 32 frames, so at eight the loop
- * takes four seconds, which is a settled breathing rather than a fidget.
+ * Where the cell goes.
+ *
+ * Anchored on the figure's centre column and its base row rather than its top left, so
+ * changing its size never lifts it off the ground or slides it sideways: the seated figure
+ * keeps the same footprint in the composition and only its height changes. Both are
+ * measured off the static overlay, which is what puts it in the right place.
+ */
+export const CHARACTER_CELL_X =
+  CHARACTER_STATIC_INK.x + CHARACTER_STATIC_INK.w / 2 - (CHARACTER_SHEET_INK.x0 + CHARACTER_SHEET_INK.x1) / 2 * CHARACTER_SCALE
+export const CHARACTER_CELL_Y =
+  CHARACTER_STATIC_INK.y + CHARACTER_STATIC_INK.h - CHARACTER_SHEET_INK.y1 * CHARACTER_SCALE
+
+/**
+ * The order the two sheets play in, as [sheet, frame] pairs.
+ *
+ * The first sheet plays straight through. The last one plays forward and then back the
+ * way it came -- 0..15 and then 14..1 -- which is a boomerang: it arrives back at the pose
+ * it started from, so the loop can close without the figure snapping. Running it in reverse
+ * is what makes the cycle read as one movement instead of two clips with a cut between them.
+ * Frame 15 is not repeated at the turn and frame 1 steps into frame 0, so every step is a
+ * single frame either way and nothing sits still for two counts.
+ */
+export const CHARACTER_SEQUENCE: readonly (readonly [number, number])[] = [
+  ...Array.from({ length: CHARACTER_FRAMES }, (_, i): [number, number] => [0, i]),
+  ...Array.from({ length: CHARACTER_FRAMES }, (_, i): [number, number] => [1, i]),
+  ...Array.from({ length: CHARACTER_FRAMES - 2 }, (_, i): [number, number] => [1, CHARACTER_FRAMES - 2 - i]),
+]
+
+/**
+ * Frames per second. Slow on purpose: the sequence is 46 steps, so at eight the loop takes
+ * a shade under six seconds, which is a settled breathing rather than a fidget.
  */
 export const CHARACTER_FPS = 8
 
@@ -96,10 +136,9 @@ export const CHARACTER_FPS = 8
  * positioned in canvas percentages, so it is scaled by exactly the one factor the backdrop
  * is, at any viewport, and cannot drift away from it.
  *
- * The sheet is drawn at its own size rather than scaled onto the supplied fire, because the
- * two are different drawings: the supplied canvas' fire is 139x96 and this cell's ink is
- * 104x79. Stretching one onto the other would distort the pixel art, so the animation keeps
- * its own proportions and takes only its position from the supplied file.
+ * The sheet is scaled by one uniform factor rather than stretched onto the supplied fire, so
+ * the flame keeps its proportions; what it takes from that file is the fire's size and its
+ * place on the ground.
  */
 export const MAIN_MENU_CAMPFIRE_FLAME_FILE = 'campfire_flame.png'
 
@@ -118,11 +157,54 @@ export const CAMPFIRE_FLAME_CELL = 128
  */
 export const CAMPFIRE_FLAME_FPS = 8
 
+/** One flame cell's ink, as edges, measured from the sheet's alpha channel. */
+const CAMPFIRE_CELL_INK = { x0: 12, x1: 116, centreX: 64, baseY: 100 }
+
+/** The fire in the supplied canvas: its solid core, with the soft glow excluded. */
+const CAMPFIRE_SUPPLIED_FIRE = { x0: 680, w: 139, centreX: 749.5, baseY: 552 }
+
+/**
+ * How much bigger the flame is drawn than the sheet's own pixels.
+ *
+ * The sheet's ink is 104 wide and about 74 tall, while the fire in the supplied
+ * `main_menu_campfire.png` is 139 by 96: at the sheet's own size the fire read as a spark
+ * beside the seated figure rather than the fire it is meant to be. This is the factor that
+ * takes one onto the other, taken on width and cross-checked on height -- 104 * 1.32 = 137
+ * against 139, and 74 * 1.32 = 98 against 96. It is uniform, so the flame keeps its
+ * proportions, and it is drawn nearest-neighbour so the scaled pixel art keeps hard edges.
+ */
+export const CAMPFIRE_FLAME_SCALE = 1.32
+
+/**
+ * Where the cell goes, anchored on the fire's centre column and its base row rather than its
+ * top left, so scaling the flame up grows it out of the same spot on the ground instead of
+ * sliding it up and to the left. Both come from the supplied canvas, which is the artwork's
+ * own answer to where the fire belongs.
+ */
+export const CAMPFIRE_FLAME_CELL_X =
+  CAMPFIRE_SUPPLIED_FIRE.centreX - CAMPFIRE_CELL_INK.centreX * CAMPFIRE_FLAME_SCALE
+export const CAMPFIRE_FLAME_CELL_Y =
+  CAMPFIRE_SUPPLIED_FIRE.baseY - CAMPFIRE_CELL_INK.baseY * CAMPFIRE_FLAME_SCALE
+
 /** A control should never be smaller than this to hit, in real pixels on screen. */
 const MIN_TOUCH_PX = 44
 
 /** How close to the viewport edge the credits control is allowed to come. */
 const MARGIN_PX = 8
+
+/**
+ * Wraps a frame counter into 0..length-1, always forwards.
+ *
+ * A plain `%` keeps the sign, and a negative frame number indexes off the front of the
+ * array instead of wrapping. It really happens: the first `requestAnimationFrame` after
+ * setup can be handed the timestamp of the frame already in progress, which is earlier than
+ * the `performance.now()` the clock was started from, so the very first tick can be
+ * negative. That reads as `frames[-1]` being undefined, which threw once per page load
+ * roughly four times in ten.
+ */
+function wrapFrame(frame: number, length: number): number {
+  return ((frame % length) + length) % length
+}
 
 /**
  * The slack every hit area is given over its plate, in canvas pixels.
@@ -134,8 +216,6 @@ const PLATE_OUTSET_PX = 4
 
 /** Where the cell's top-left goes on the 1280x720 canvas. See the note above. */
 /** Where the cell goes so the flame lands on the fire `main_menu_campfire.png` drew. */
-export const CAMPFIRE_FLAME_CELL_X = 685.5
-export const CAMPFIRE_FLAME_CELL_Y = 453
 
 /**
  * The supplied button artwork.
@@ -305,8 +385,10 @@ export class MainMenu {
     flameWindow.dataset.testid = 'main_menu_fire_flame'
     flameWindow.style.left = `${(CAMPFIRE_FLAME_CELL_X / CANVAS_WIDTH) * 100}%`
     flameWindow.style.top = `${(CAMPFIRE_FLAME_CELL_Y / CANVAS_HEIGHT) * 100}%`
-    flameWindow.style.width = `${(CAMPFIRE_FLAME_CELL / CANVAS_WIDTH) * 100}%`
-    flameWindow.style.height = `${(CAMPFIRE_FLAME_CELL / CANVAS_HEIGHT) * 100}%`
+    // The window is one whole cell at the drawing scale. The strip behind it is eight cells
+    // wide off the back of this width, so scaling the flame needs no change to the strip.
+    flameWindow.style.width = `${((CAMPFIRE_FLAME_CELL * CAMPFIRE_FLAME_SCALE) / CANVAS_WIDTH) * 100}%`
+    flameWindow.style.height = `${((CAMPFIRE_FLAME_CELL * CAMPFIRE_FLAME_SCALE) / CANVAS_HEIGHT) * 100}%`
     flameWindow.append(this.fireStrip)
 
     // The canvas box the two live in, so their percentages are percentages of the
@@ -756,19 +838,17 @@ export class MainMenu {
     const startedAt = performance.now()
     const step = (now: number): void => {
       const seconds = (now - startedAt) / 1000
-      const frame = Math.floor(seconds * CAMPFIRE_FLAME_FPS) % CAMPFIRE_FLAME_FRAMES
+      const frame = wrapFrame(Math.floor(seconds * CAMPFIRE_FLAME_FPS), CAMPFIRE_FLAME_FRAMES)
       this.fireStrip.style.setProperty('--campfire-frame', String(frame))
       // A slow breath rather than a strobe, and shallow on purpose: the light should
       // read as the fire glowing, not as a lamp being switched.
       const breath = 0.5 + 0.5 * Math.sin(seconds * 2.2)
       this.fireGlow.style.opacity = (0.62 + 0.38 * breath).toFixed(3)
 
-      // The two character sheets play in turn and then repeat, so the loop is the sheets
-      // back to back rather than either one alone.
-      const total = CHARACTER_FRAMES * this.characterStrips.length
-      const cursor = Math.floor(seconds * CHARACTER_FPS) % total
-      const sheet = Math.floor(cursor / CHARACTER_FRAMES)
-      const localFrame = cursor - sheet * CHARACTER_FRAMES
+      // The sheets play in the order CHARACTER_SEQUENCE lays down: the first straight
+      // through, the last one forward and then in reverse.
+      const cursor = wrapFrame(Math.floor(seconds * CHARACTER_FPS), CHARACTER_SEQUENCE.length)
+      const [sheet, localFrame] = CHARACTER_SEQUENCE[cursor]
       for (let i = 0; i < this.characterStrips.length; i++) {
         const strip = this.characterStrips[i]
         if (i === sheet) {
