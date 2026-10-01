@@ -109,6 +109,20 @@ export const CAMPFIRE_FLAME_CELL = 128
  */
 export const CAMPFIRE_FLAME_FPS = 8
 
+/** A control should never be smaller than this to hit, in real pixels on screen. */
+const MIN_TOUCH_PX = 44
+
+/** How close to the viewport edge the credits control is allowed to come. */
+const MARGIN_PX = 8
+
+/**
+ * The slack every hit area is given over its plate, in canvas pixels.
+ *
+ * The plates are drawn with their edges hard against the button glyphs, so without this a
+ * target would be exactly the plate and a tap that clipped its edge would miss.
+ */
+const PLATE_OUTSET_PX = 4
+
 /** Where the cell's top-left goes on the 1280x720 canvas. See the note above. */
 export const CAMPFIRE_FLAME_CELL_X = 686
 export const CAMPFIRE_FLAME_CELL_Y = 455
@@ -168,23 +182,6 @@ function boxToPercent(box: { x: number; y: number; w: number; h: number }): stri
   ].join(';')
 }
 
-/**
- * The same box, anchored to the right edge instead of the left.
- *
- * The credits control lives in the top-right corner, and it is the control that needs its
- * hit area grown to stay tappable. A minimum size on a left-anchored box grows to the
- * right, which runs the target off the side of the frame; on a phone viewport the plate is
- * only about ten pixels from that edge. Anchoring the right edge makes the growth go
- * inward, so the control stays on screen and stays under the finger at every viewport.
- */
-function boxToPercentFromRight(box: { x: number; y: number; w: number; h: number }): string {
-  return [
-    `right:${100 - ((box.x + box.w) / CANVAS_WIDTH) * 100}%`,
-    `top:${(box.y / CANVAS_HEIGHT) * 100}%`,
-    `width:${(box.w / CANVAS_WIDTH) * 100}%`,
-    `height:${(box.h / CANVAS_HEIGHT) * 100}%`,
-  ].join(';')
-}
 
 /**
  * Entries that were considered and explicitly ruled out. Never add these.
@@ -234,8 +231,12 @@ export class MainMenu {
   private readonly ui: HTMLDivElement
   /** The pending fire-animation frame, so `dispose` can cancel it. */
   private fireFrame = 0
-  /** Boxes sized to the backdrop's own contain rect. See `syncCanvasBoxes`. */
+  /** Boxes sized to the composition rect. See `syncCanvasBoxes`. */
   private readonly canvasBoxes: HTMLElement[] = []
+  /** The credits control, positioned in script because it is also clamped. */
+  private creditsButton!: HTMLButtonElement
+  /** The credits plate's box, in canvas pixels, for that positioning. */
+  private creditsBox = { x: 0, y: 0, w: 0, h: 0 }
   /** Watches the menu for resizes, so those boxes follow it. */
   private resizeObserver: ResizeObserver | null = null
 
@@ -327,7 +328,14 @@ export class MainMenu {
     // demand. Each screen is a fixed piece of markup, so there is nothing to save by
     // deferring it -- and having them all present means switching screens cannot fail
     // halfway and leave the menu with no way back.
-    for (const screen of this.screens.values()) this.ui.append(screen)
+    for (const [name, screen] of this.screens) {
+      // The title is positioned in canvas percentages, the same as the plates, so it has
+      // to live in the same cover box as them. Left in the root it would drift off the
+      // artwork on any viewport where the picture is cropped.
+      if (name !== 'main') this.ui.append(screen)
+    }
+    const title = this.screens.get('main')
+    if (title) this.artButtons.prepend(title)
     // The plates belong to the title screen only: a sub-screen is a panel of text, and
     // leaving four plates showing underneath it would be two overlapping UIs.
     this.ui.append(this.artButtons)
@@ -337,7 +345,7 @@ export class MainMenu {
     // The stack, back to front: background, fire, character, buttons. Appended in exactly
     // this order so paint order follows from document order and nothing has to be kept in
     // sync by hand-tuned z-index values.
-    this.root.append(this.backdrop, this.fire, this.character, this.ui)
+    this.root.append(this.backdrop, this.character, this.fire, this.ui)
 
     this.show('main')
     this.syncFullscreenLabel()
@@ -384,32 +392,56 @@ export class MainMenu {
     container.dataset.testid = 'main_menu_art_buttons'
 
     for (const [index, art] of MENU_BUTTON_ART.entries()) {
-      const image = new Image()
-      image.className = 'menu-art-button'
-      image.alt = ''
-      image.decoding = 'async'
-      image.draggable = false
-      image.dataset.testid = `main_menu_art_${art.id}`
-      image.src = assetUrl(`bg/menu_buttons/${art.file}`)
-      this.artImages.push(image)
-      // Deliberately NOT sized to the plate. The image spans the whole canvas, the same
-      // as the character and campfire, and the plate lands where the artwork puts it.
-      // Sizing the element to the plate would shrink the canvas and move the plate.
-
       const button = el('button', 'menu-art-hit')
       button.type = 'button'
       button.dataset.testid = `main_menu_${art.id}`
       button.dataset.index = String(index)
       button.setAttribute('aria-label', art.label)
-      const outset = 4
+      const outset = PLATE_OUTSET_PX
       const outsetBox = {
         x: art.box.x - outset,
         y: art.box.y - outset,
         w: art.box.w + outset * 2,
         h: art.box.h + outset * 2,
       }
-      button.style.cssText =
-        art.id === 'credits' ? boxToPercentFromRight(outsetBox) : boxToPercent(outsetBox)
+
+      if (art.id === 'credits') {
+        // The credits file is a standalone icon, not a composed 1280x720 canvas like the
+        // four entry plates, so it is used as the button itself rather than as artwork
+        // with a transparent target floating over it. The icon is sized to the plate and
+        // centred in the target, so growing the target to make it tappable never distorts
+        // the icon or shifts it off the plate. The target's own position is set in
+        // `syncCanvasBoxes`, which also keeps it on screen -- the plate is hard against the
+        // right edge of the artwork, and a viewport that crops that edge would otherwise
+        // take the control with it.
+        button.classList.add('menu-credits-hit')
+        this.creditsBox = { x: art.box.x, y: art.box.y, w: art.box.w, h: art.box.h }
+        const icon = new Image()
+        icon.className = 'menu-credits-icon'
+        icon.alt = ''
+        icon.decoding = 'async'
+        icon.draggable = false
+        icon.dataset.testid = 'main_menu_art_credits'
+        icon.src = assetUrl(`bg/menu_buttons/${art.file}`)
+        this.artImages.push(icon)
+        button.append(icon)
+        this.creditsButton = button
+      } else {
+        const image = new Image()
+        image.className = 'menu-art-button'
+        image.alt = ''
+        image.decoding = 'async'
+        image.draggable = false
+        image.dataset.testid = `main_menu_art_${art.id}`
+        image.src = assetUrl(`bg/menu_buttons/${art.file}`)
+        this.artImages.push(image)
+        // Deliberately NOT sized to the plate. The image spans the whole canvas, the same
+        // as the character and campfire, and the plate lands where the artwork puts it.
+        // Sizing the element to the plate would shrink the canvas and move the plate.
+        button.style.cssText = boxToPercent(outsetBox)
+        container.append(image)
+      }
+
       button.addEventListener('click', () => {
         if (art.id === 'start_game') {
           // Leave before starting: the world is about to own the screen, and a menu
@@ -421,7 +453,7 @@ export class MainMenu {
         this.show(art.id === 'load_game' ? 'load' : art.id === 'quit' ? 'quit' : (art.id as MenuScreen))
       })
 
-      container.append(image, button)
+      container.append(button)
     }
     return container
   }
@@ -634,6 +666,13 @@ export class MainMenu {
   private syncCanvasBoxes(): void {
     const rect = this.root.getBoundingClientRect()
     if (rect.width <= 0 || rect.height <= 0) return
+    // The backdrop is drawn with `cover` so the picture fills the frame edge to edge and
+    // no bars show. This box is deliberately `contain`, not `cover`: the artwork is a
+    // composed image with the controls painted into its own left and right thirds, so under
+    // `cover` a tall or narrow viewport would crop the four entries off-screen entirely.
+    // Keeping the box at `contain` means every control stays inside the frame and tappable
+    // at any viewport shape, which matters more than the picture lining up behind them on
+    // the aspect ratios where the two differ.
     const scale = Math.min(rect.width / CANVAS_WIDTH, rect.height / CANVAS_HEIGHT)
     const width = CANVAS_WIDTH * scale
     const height = CANVAS_HEIGHT * scale
@@ -644,6 +683,56 @@ export class MainMenu {
       box.style.top = `${top}px`
       box.style.width = `${width}px`
       box.style.height = `${height}px`
+    }
+    this.placeCredits(rect.width, rect.height, scale, left, top)
+  }
+
+  /**
+   * Positions the credits control, and keeps it on screen.
+   *
+   * The plate is hard against the right edge of the artwork, so in a portrait viewport it
+   * ends up within a finger's width of the side of the frame, and the 44px target needed
+   * to stay tappable would hang off it. The control is placed on its plate and then clamped
+   * inside the viewport, moving only as far as it must and only when it would otherwise be
+   * cut off.
+   */
+  private placeCredits(
+    viewportWidth: number,
+    viewportHeight: number,
+    scale: number,
+    coverLeft: number,
+    coverTop: number,
+  ): void {
+    const box = this.creditsBox
+    // The target has to clear the plate *and* the outset every other hit area is given --
+    // sizing it to the plate alone would leave the tap zone a sliver narrower than the
+    // others -- and it grows further to stay comfortable. The icon keeps the plate's own
+    // size and stays centred, so a bigger target never stretches or shifts the artwork.
+    const targetW = Math.max((box.w + PLATE_OUTSET_PX * 2) * scale, MIN_TOUCH_PX)
+    const targetH = Math.max((box.h + PLATE_OUTSET_PX * 2) * scale, MIN_TOUCH_PX)
+    const centreX = coverLeft + (box.x + box.w / 2) * scale
+    const centreY = coverTop + (box.y + box.h / 2) * scale
+    const clampX = (v: number, max: number): number => Math.min(Math.max(v, MARGIN_PX), max)
+    const left = clampX(centreX - targetW / 2, viewportWidth - targetW - MARGIN_PX)
+    const top = clampX(centreY - targetH / 2, viewportHeight - targetH - MARGIN_PX)
+    const style = this.creditsButton.style
+    style.left = `${left - coverLeft}px`
+    style.top = `${top - coverTop}px`
+    style.width = `${targetW}px`
+    style.height = `${targetH}px`
+    const icon = this.creditsButton.firstElementChild as HTMLElement | null
+    if (icon) {
+      // The supplied credits file is a full 1280x720 canvas like the entry plates, with the
+      // control drawn into its corner. So it is drawn at the canvas scale and slid behind a
+      // clipped button, the same one-cell-window trick the character and the flame use. That
+      // keeps the artwork at exactly one canvas pixel per artwork pixel -- sizing the image
+      // to the plate instead would crush a 1280-wide sheet into a 52px box.
+      icon.style.width = `${CANVAS_WIDTH * scale}px`
+      icon.style.height = `${CANVAS_HEIGHT * scale}px`
+      // Line the plate's centre up with the button's centre, on both axes, so growing the
+      // target never shifts the artwork off the plate.
+      icon.style.left = `${targetW / 2 - (box.x + box.w / 2) * scale}px`
+      icon.style.top = `${targetH / 2 - (box.y + box.h / 2) * scale}px`
     }
   }
 

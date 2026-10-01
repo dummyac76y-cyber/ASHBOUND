@@ -265,7 +265,7 @@ console.log('\n2. the menu is what the page shows, and the artwork decodes untou
   if (res) {
     check('the browser decodes it at its original size, so nothing was resampled on the way in', res.natural.width === 1280 && res.natural.height === 720, `${res.natural.width}x${res.natural.height}`)
     check('the menu is actually visible once the artwork is ready', !(await page.evaluate(() => getComputedStyle(document.querySelector('.main-menu')).visibility === 'hidden')), 'not left hidden behind the pre-load state')
-    check('it is displayed with `contain`, which scales by one factor and so cannot crop or stretch it', res.objectFit === 'contain', `object-fit: ${res.objectFit}`)
+    check('it is displayed with `cover`, which scales by one factor and so fills the frame without ever stretching it', res.objectFit === 'cover', `object-fit: ${res.objectFit}`)
     check('it is not rotated, scaled or moved by a transform', res.transform === 'none' || res.transform === 'matrix(1, 0, 0, 1, 0, 0)', `transform: ${res.transform}`)
     check('it is not recoloured by a filter', res.filter === 'none', `filter: ${res.filter}`)
     check('it is not dimmed by opacity', res.opacity === '1', `opacity ${res.opacity}`)
@@ -385,9 +385,9 @@ console.log('\n2. the menu is what the page shows, and the artwork decodes untou
     // elementsFromPoint returns front-to-back, so a smaller index is nearer the viewer and
     // the required order appears as ui < character < campfire < backdrop.
     check(
-      'the stack is background, then the fire, then the character, then the buttons',
-      order.ui < order.character && order.character < order.campfire && order.campfire < order.backdrop,
-      `front-to-back: ui ${order.ui}, character ${order.character}, fire ${order.campfire}, backdrop ${order.backdrop}`,
+      'the stack is background, then the character, then the fire, then the buttons',
+      order.ui < order.campfire && order.campfire < order.character && order.character < order.backdrop,
+      `front-to-back: ui ${order.ui}, fire ${order.campfire}, character ${order.character}, backdrop ${order.backdrop}`,
     )
     check(
       'that order comes from document order rather than from a hand-tuned z-index',
@@ -526,7 +526,9 @@ console.log('\n3. the four menu entries, and what each one does')
           return n ? `${s}:${getComputedStyle(n).position}` : `${s}:MISSING`
         }).join(' ')
       })(),
-      platesPresent: document.querySelectorAll('.menu-art-button').length,
+      platesPresent:
+        document.querySelectorAll('.menu-art-button').length +
+        document.querySelectorAll('.menu-credits-icon').length,
       allButtons: [...document.querySelectorAll('.main-menu-ui button')].map(
         (n) => (n.getAttribute('aria-label') ?? n.textContent).trim().toUpperCase(),
       ),
@@ -608,6 +610,8 @@ console.log('\n3. the four menu entries, and what each one does')
         natural: { w: c.width, h: c.height },
         visibleRatio: visible / (c.width * c.height),
         ink: { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 },
+        // The credits image is the whole canvas slid behind its clipped button, so its own
+        // rect is already the canvas box -- no offset to undo.
         artBox: { left: ir.left, top: ir.top, width: ir.width, height: ir.height },
         backdrop: { left: bb.left, top: bb.top, width: bb.width, height: bb.height },
         hit: { left: hr.left, top: hr.top, width: hr.width, height: hr.height },
@@ -847,18 +851,35 @@ console.log('\n4. the menu shows only the menu')
     `${furniture.renders} frames drawn`,
   )
 
-  // Gating the simulation is not the same as gating the drawing: a still scene is still
-  // visible through the bands a `contain` backdrop leaves on a non-16:9 viewport.
+  // Gating the simulation is not the same as gating the drawing. This also proves the
+  // letterbox is gone: the backdrop element now spans the whole frame and is drawn with
+  // `cover`, so the picture fills it and there is nothing left for bars to show through.
   await page.setViewportSize({ width: 1100, height: 900 })
   await page.waitForTimeout(150)
   const bands = await page.evaluate(() => {
     const m = document.querySelector('.main-menu')
     const cs = getComputedStyle(m)
-    const r = m.getBoundingClientRect()
-    return { background: cs.backgroundColor, height: r.height, viewport: window.innerHeight, renders: window.__game.worldRenderCount() }
+    const backdrop = document.querySelector('.main-menu-backdrop')
+    const b = backdrop.getBoundingClientRect()
+    return {
+      background: cs.backgroundColor,
+      fit: getComputedStyle(backdrop).objectFit,
+      backdrop: { w: b.width, h: b.height, left: b.left, top: b.top },
+      viewport: { w: window.innerWidth, h: window.innerHeight },
+      renders: window.__game.worldRenderCount(),
+    }
   })
   check(
-    'the menu paints an opaque background, so its letterbox bands are its own',
+    'the backdrop element spans the whole frame, and `cover` fills it',
+    bands.backdrop.w >= bands.viewport.w - 0.5 &&
+      bands.backdrop.h >= bands.viewport.h - 0.5 &&
+      bands.backdrop.left <= 0.5 &&
+      bands.backdrop.top <= 0.5 &&
+      bands.fit === 'cover',
+    `${bands.backdrop.w.toFixed(0)}x${bands.backdrop.h.toFixed(0)} against ${bands.viewport.w}x${bands.viewport.h}, object-fit ${bands.fit}`,
+  )
+  check(
+    'so there are no letterbox bars left to show the world through',
     bands.background !== 'rgba(0, 0, 0, 0)',
     `background ${bands.background}`,
   )
@@ -887,9 +908,11 @@ console.log('\n4. the menu shows only the menu')
 console.log('\n5. the composition scales as one piece, at ordinary viewports')
 // ---------------------------------------------------------------------------------
 {
-  // A `contain` backdrop on a viewport of another shape letterboxes. The plates are
-  // canvases registered to that backdrop, so they have to letterbox with it -- and stay
-  // inside the frame and undistorted -- without needing fullscreen.
+  // The backdrop is `cover` so the picture fills the frame, while the composition box the
+  // plates are registered to stays `contain` so no control is ever cropped away. The two
+  // diverge on every viewport that is not 16:9, which is exactly what these shapes check:
+  // the controls have to stay inside the frame, on their own artwork, undistorted, without
+  // needing fullscreen.
   // The phone shapes matter most here. A 1280x720 composition in a portrait phone shrinks
   // to roughly a quarter of its intended size, which is what made the controls too small
   // to tap; desktop-only viewports could never have caught it.
@@ -930,6 +953,57 @@ console.log('\n5. the composition scales as one piece, at ordinary viewports')
         const hr = hit ? hit.getBoundingClientRect() : null
         if (hr) out.fit.push(hr.left >= -0.5 && hr.top >= -0.5 && hr.right <= window.innerWidth + 0.5 && hr.bottom <= window.innerHeight + 0.5)
       }
+      // The credits control is its own image button, not a full-canvas plate, so it is
+      // measured here rather than in the plate loop above.
+      const credits = document.querySelector('[data-testid="main_menu_credits"]')
+      const icon = document.querySelector('.menu-credits-icon')
+      if (credits && icon) {
+        const cb = credits.getBoundingClientRect()
+        const ib = icon.getBoundingClientRect()
+        const scale = Math.min(br.width / 1280, br.height / 720)
+        const box = { x: 1196, y: 33, w: 52, h: 58 }
+        out.fit.push(
+          cb.left >= -0.5 && cb.top >= -0.5 &&
+            cb.right <= window.innerWidth + 0.5 && cb.bottom <= window.innerHeight + 0.5,
+        )
+        // The plate's place on the canvas, and the window's place on screen. Measured in
+        // screen pixels on purpose: the control is deliberately nudged when the viewport
+        // would otherwise take it off the frame, so "where it sits on the canvas" is only
+        // meaningful while it is unclamped. What has to hold either way is that the plate
+        // itself is completely inside the window.
+        const plate = { x: 1196, y: 33, w: 52, h: 58 }
+        const px = artLeft + plate.x * scale
+        const py = artTop + plate.y * scale
+        const pw = plate.w * scale
+        const ph = plate.h * scale
+        out.credits = {
+          x: (ib.left - artLeft) / scale,
+          y: (ib.top - artTop) / scale,
+          w: ib.width / scale,
+          h: ib.height / scale,
+          // Whether the window is still sitting exactly on the plate, or has been nudged
+          // inwards because the viewport would otherwise have taken part of it off screen.
+          // Whether the plate had to move because a target this big would otherwise hang
+          // off the frame. Only then is a nudge allowed, and then only this far.
+          needsNudge:
+            px + pw / 2 + cb.width / 2 > window.innerWidth - 8 ||
+            px - pw / 2 - cb.width / 2 < 8 ||
+            py + ph / 2 + cb.height / 2 > window.innerHeight - 8 ||
+            py - ph / 2 - cb.height / 2 < 8,
+          centred:
+            Math.abs((cb.left + cb.right) / 2 - (px + pw / 2)) < 0.5 &&
+            Math.abs((cb.top + cb.bottom) / 2 - (py + ph / 2)) < 0.5,
+          coversPlate:
+            Math.min(px + pw, cb.right) - Math.max(px, cb.left) >= pw - 1 &&
+            Math.min(py + ph, cb.bottom) - Math.max(py, cb.top) >= ph - 1,
+          slack: {
+            w: Math.min(px + pw, cb.right) - Math.max(px, cb.left) - pw,
+            h: Math.min(py + ph, cb.bottom) - Math.max(py, cb.top) - ph,
+          },
+          natural: { w: icon.naturalWidth, h: icon.naturalHeight },
+        }
+      }
+
       // The four entries, by id. Selecting them positionally instead would miscount: the
       // credits control also sits in the upper half of the canvas.
       const ids = ['start_game', 'load_game', 'settings', 'quit']
@@ -983,13 +1057,41 @@ console.log('\n5. the composition scales as one piece, at ordinary viewports')
     })
     check(
       `at ${w}x${h} every plate lands on the backdrop's artwork`,
-      r.art.length === 5 && r.art.every((a) => a.sameBox),
+      r.art.length === 4 && r.art.every((a) => a.sameBox),
       `${r.art.filter((a) => a.sameBox).length}/${r.art.length} plates`,
     )
     check(
       `at ${w}x${h} every button stays inside the frame, no fullscreen needed`,
       r.fit.length === 5 && r.fit.every(Boolean),
       `${r.fit.filter(Boolean).length}/${r.fit.length} inside`,
+    )
+    // The credits control has to be the artwork, not an invisible target sitting over it:
+    // an image the user cannot see is a button they do not know is there.
+    // The credits control has to *be* the supplied artwork, shown at the canvas scale and
+    // clipped to its plate -- not a stretched copy sized to the plate, and not a blank
+    // target with the artwork somewhere else.
+    const creditsBox = { x: 1196, y: 33, w: 52, h: 58 }
+    check(
+      `at ${w}x${h} the credits control is the artwork itself, at canvas scale`,
+      r.credits !== undefined &&
+        r.credits.natural.w === 1280 &&
+        Math.abs(r.credits.w - 1280) < 1.5 &&
+        Math.abs(r.credits.h - 720) < 1.5 &&
+        // Registered to the composition box, exactly -- unless the control has been nudged
+        // inward to stay on screen, which the next check accounts for.
+        (r.credits.centred
+          ? Math.abs(r.credits.x) < 1.5 && Math.abs(r.credits.y) < 1.5
+          : r.credits.needsNudge),
+      r.credits
+        ? `${r.credits.w.toFixed(0)}x${r.credits.h.toFixed(0)} at ${r.credits.x.toFixed(1)},${r.credits.y.toFixed(1)} (from ${r.credits.natural.w}x${r.credits.natural.h})`
+        : 'no credits icon',
+    )
+    check(
+      `and it is clipped to the plate, so the whole control is inside its own window`,
+      r.credits !== undefined && r.credits.coversPlate,
+      r.credits
+        ? `slack ${r.credits.slack.w.toFixed(1)}x${r.credits.slack.h.toFixed(1)}px around the ${creditsBox.w}x${creditsBox.h} plate`
+        : 'no credits icon',
     )
     check(
       `at ${w}x${h} the four entries stack in order without overlapping`,
@@ -1010,13 +1112,14 @@ console.log('\n6. every hit area sits on its own plate, at any viewport shape')
 // ---------------------------------------------------------------------------------
 // This is the check that was missing when the credits control was reported broken.
 //
-// The plates are <img> with `object-fit: contain`, so they letterbox themselves. The hit
-// areas are absolutely positioned divs, which have no such behaviour: sized as a
-// percentage of the full root they are percentages of the letterbox bands instead of the
-// artwork, so they drift off their plates by however far the viewport departs from 16:9.
-// At exactly 16:9 the two coincide, which is why only fullscreen ever looked right --
-// and why the plate-shape checks above all passed while every control was unclickable in
-// an ordinary browser window.
+// The plates are <img> registered to a box sized from script, and the hit areas are
+// absolutely positioned divs that have no such behaviour: sized as a percentage of the
+// full root they are percentages of the viewport instead of the artwork, so they drift off
+// their plates by however far the viewport departs from 16:9. At exactly 16:9 the two
+// coincide, which is why only fullscreen ever looked right -- and why the plate-shape
+// checks above all passed while every control was unclickable in an ordinary browser
+// window. Note this is now the opposite situation from the backdrop: the backdrop covers,
+// and the composition box contains, so the two genuinely diverge on a non-16:9 viewport.
 //
 // Deliberately includes viewports wider than 16:9 (an ordinary window) as well as taller
 // ones, because a contain box written in CSS is correct in only one of those directions.
@@ -1404,7 +1507,12 @@ console.log('\n10. Android mirrors the same menu')
   const overlaySupplied = existsSync(ANDROID_OVERLAY) && existsSync(ANDROID_CAMPFIRE)
 
   check('both engines load the background by the same synced filename', menuTs.includes('main_menu.jpg') && ktMenu.includes('"main_menu.jpg"'), `bg/main_menu.jpg`)
-  check('web draws it with contain, never crop', /object-fit:\s*contain/.test(css))
+  check('web fills the frame with it, proportionally and without stretching', /object-fit:\s*cover/.test(css))
+  check(
+    'and Android crops the same way, since Compose has no object-fit',
+    /contentScale = ContentScale\.Crop/.test(codeOnly(ktMenu)),
+    'ContentScale.Crop on the backdrop',
+  )
   check(
     'the web stylesheet puts no transition or animation on the static art layers',
     !/\.main-menu-(backdrop|overlay)[^{]*\{[^}]*(transition|animation)/.test(css),
@@ -1418,7 +1526,11 @@ console.log('\n10. Android mirrors the same menu')
     /@keyframes/.test(css) === false && !/\.main-menu-fire[^{]*\{[^}]*animation/.test(css),
     'no keyframes, no animation on .main-menu-fire*',
   )
-  check('Android scales the artwork to fit, never cropping it', /ContentScale\.Fit/.test(ktMenu), 'ContentScale.Fit')
+  check(
+    'Android keeps the composition canvases fitted, so nothing placed inside them is ever cropped',
+    /ContentScale\.Fit/.test(ktMenu),
+    'ContentScale.Fit',
+  )
   check('Android does not tint the artwork', !/ColorFilter|colorFilter/.test(ktMenu), 'no colour filter on the image')
 
   if (overlaySupplied) {
@@ -1437,21 +1549,50 @@ console.log('\n10. Android mirrors the same menu')
     // The backdrop is the only full-canvas layer left: the fire and the character are
     // sprite strips drawn a cell at a time rather than fitted to the canvas.
     const fits = (ktMenu.match(/ContentScale\.Fit/g) || []).length
-    check('the backdrop is still fitted to the canvas', fits >= 1, `${fits} uses of ContentScale.Fit`)
+    check('the plate canvases are still fitted to the canvas', fits >= 1, `${fits} uses of ContentScale.Fit`)
+    // Only the backdrop crops. If the composition box cropped as well, the credits control
+    // hard against the right edge would be taken off screen on a portrait phone -- which is
+    // the whole reason the box stays `Fit` while the picture becomes `Crop`.
+    check(
+      'the only cropping layer is the backdrop itself',
+      (codeOnly(ktMenu).match(/ContentScale\.Crop/g) || []).length === 1 &&
+        !/canvasBox[\s\S]{0,400}ContentScale\.Crop/.test(codeOnly(ktMenu)),
+      `${(codeOnly(ktMenu).match(/ContentScale\.Crop/g) || []).length} uses of ContentScale.Crop, none on the canvas box`,
+    )
   } else {
     pending('Android art layer parity is not checked yet', 'the art canvases have not been supplied')
   }
 
   check(
-    'Android keeps the backdrop, the fire, the character and the UI as four layers',
+    'Android keeps the backdrop, the character, the fire and the UI as four layers',
     /main_menu"/.test(ktMenu) && /main_menu_fire/.test(ktMenu) && /main_menu_character/.test(ktMenu) && /main_menu_ui/.test(ktMenu),
     'main_menu / main_menu_fire / main_menu_character / main_menu_ui',
+  )
+  // In document order, which is how Compose decides what covers what: background, then the
+  // seated character, then the fire and its light in front of it, then the readable UI.
+  check(
+    'and they are declared in that order, so the fire draws over the character',
+    (() => {
+      // Inside the MainMenu composable: the backdrop, then the two art layers, then the
+      // readable UI. The fire and character carry their own tags on their own composables,
+      // so what orders the layers here is where each is called from.
+      const c = codeOnly(ktMenu).slice(codeOnly(ktMenu).indexOf('fun MainMenu('))
+      const order = ['testTag("main_menu")', 'MenuCharacter(', 'MenuFire(', 'testTag("main_menu_ui")']
+        .map((t) => c.indexOf(t))
+      return order.every((v, i) => v >= 0 && (i === 0 || v > order[i - 1]))
+    })(),
+    'backdrop < character < fire < ui',
   )
   // The Android side of the fire. It cannot be compiled in this environment, so the claims
   // that matter are asserted against the source: the same cell, the same placement, the
   // same frame rate, and no rescaling of the supplied strip.
   const ktFire = codeOnly(ktMenu)
-  check('Android plays the same eight frames at the same rate', /CAMPFIRE_FLAME_FRAMES = 8/.test(ktFire) && /CAMPFIRE_FLAME_FPS = 12/.test(ktFire), '8 frames at 12 fps')
+  check(
+    'Android plays the same eight frames at the same slowed rate',
+    /CAMPFIRE_FLAME_FRAMES = 8/.test(ktFire) && /CAMPFIRE_FLAME_FPS = 8/.test(ktFire) &&
+      /CAMPFIRE_FLAME_FPS = 8/.test(codeOnly(readFileSync(MENU_TS, 'utf8'))),
+    '8 frames at 8 fps, both engines',
+  )
   check('Android places the cell where the web does', /CAMPFIRE_FLAME_CELL_X = 686/.test(ktFire) && /CAMPFIRE_FLAME_CELL_Y = 455/.test(ktFire), 'cell at (686, 455)')
   check('Android draws the flame inside the shared canvas box, so it scales with the backdrop', /MenuFire\(\s*Modifier\s*\.offset\(x = fireCanvas\.offsetX, y = fireCanvas\.offsetY\)/.test(ktFire), 'MenuFire on the canvas surface')
   check('Android clips to one cell and slides the strip behind it', /clipToBounds\(\)/.test(ktFire) && /offset\(x = \(-frame \* CAMPFIRE_FLAME_CELL\)\.dp\)/.test(ktFire), 'clipToBounds + per-frame offset')
@@ -1481,6 +1622,19 @@ console.log('\n10. Android mirrors the same menu')
   check('Android scales the canvas box itself, since Compose has no object-fit', /min\(w \/ CANVAS_WIDTH\.toFloat\(\), h \/ CANVAS_HEIGHT\.toFloat\(\)\)/.test(ktMenu), 'canvasBox() computes the letterbox')
   check('and gives every control an accessible name, the baked-in label being invisible to one', /contentDescription = art\.label/.test(ktMenu), 'semantics on each hit area')
   check('Android wires the supplied credits control rather than leaving it decorative', ktMenu.includes('"credits"') && ktMenu.includes('MenuScreen.CREDITS'), 'credits -> CREDITS screen')
+  const ktCredits = codeOnly(ktMenu.slice(ktMenu.indexOf('private fun CreditsControl')))
+  check(
+    'Android draws the credits control as a window onto its own plate, not as a full-canvas sheet',
+    /private fun CreditsControl/.test(ktMenu) &&
+      /if \(art\.id == CREDITS_ID\) continue/.test(ktMenu) &&
+      /clipToBounds\(\)/.test(ktCredits),
+    'credits drawn as a clipped window',
+  )
+  check(
+    'and lines the plate up with the window centre, so the artwork never leaves its plate',
+    /width \/ 2f - \(art\.x \+ art\.w \/ 2f\) \* canvas\.scale\.dp/.test(ktCredits),
+    'plate centred in the window',
+  )
   check('and Android has that credits screen', /MenuScreen\.CREDITS -> MenuPanel\("CREDITS"/.test(ktMenu), 'credits panel')
 
   const ktCode = codeOnly(ktMenu)
@@ -1508,11 +1662,23 @@ console.log('\n10. Android mirrors the same menu')
     /\.menu-art-hit[\s\S]{0,2000}min-width: 44px/.test(css) && /\.menu-art-hit[\s\S]{0,2000}min-height: 40px/.test(css),
     'min-width 44px, min-height 40px',
   )
+  const menuCode = codeOnly(menuTs)
   check(
-    'and the web anchors the credits control by its right edge, so the growth goes inward',
-    /function boxToPercentFromRight/.test(codeOnly(menuTs)) &&
-      /art\.id === 'credits' \? boxToPercentFromRight/.test(codeOnly(menuTs)),
-    'credits uses the right-anchored box',
+    'and the web draws the credits control as a visible image inside its own target, not a blank one',
+    /menu-credits-icon/.test(menuCode) && /menu-credits-hit/.test(menuCode),
+    'credits icon inside the credits hit area',
+  )
+  check(
+    'sized to the plate rather than the canvas, so the icon is not one invisible sliver of a 1280x720 sheet',
+    !/if \(art\.id === 'credits'\)[\s\S]{0,600}className = 'menu-art-button'/.test(menuCode),
+    'credits does not reuse the full-canvas plate image',
+  )
+  check(
+    'with the target centred on the icon and clamped inside the viewport, so it cannot drift off or hang off the frame',
+    /placeCredits/.test(menuCode) &&
+      /MIN_TOUCH_PX/.test(menuCode) &&
+      /viewportWidth - targetW - MARGIN_PX/.test(menuCode),
+    'placeCredits() grows and clamps',
   )
 
   const forbidden = ['DUEL ONLINE', 'PRACTICE', 'CHARACTERS'].filter((f) => ktMenu.includes(f))

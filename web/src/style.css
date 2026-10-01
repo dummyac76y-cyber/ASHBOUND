@@ -595,9 +595,11 @@ body {
   inset: 0;
   width: 100%;
   height: 100%;
-  /* `contain` scales by one factor, so it can neither crop nor stretch. `cover` would
-     crop, `100% 100%` would squash. */
-  object-fit: contain;
+  /* `cover` scales by one factor until the picture fills the viewport in both directions,
+     so it can neither stretch nor leave bars, and the overflow is cropped by the menu's
+     own `overflow: hidden`. `contain` was the letterbox: on any viewport wider than 16:9 it
+     left the black side bars this replaces. */
+  object-fit: cover;
   user-select: none;
   -webkit-user-drag: none;
   pointer-events: none;
@@ -863,7 +865,12 @@ button.menu-setting:hover {
    viewport. That works only when the viewport is taller than 16:9 and is wrong in the
    other direction. `syncCanvasBoxes` measures the real contain rect instead and writes
    these boxes in pixels, which is exact on both axes. */
+/* One box, sized from script to the artwork's own composition rect, so every canvas
+   percentage in it is a percentage of the artwork. The backdrop is drawn with `cover` while
+   this box stays `contain`: that is what removes the bars without cropping the controls,
+   which are painted into the artwork's own left and right thirds. */
 .main-menu-fire-canvas,
+.main-menu-character,
 .menu-art-buttons {
   position: absolute;
   pointer-events: none;
@@ -889,6 +896,36 @@ button.menu-setting:hover {
     rgba(180, 70, 10, 0) 100%
   );
   mix-blend-mode: screen;
+  pointer-events: none;
+}
+
+/* The credits control: the supplied icon is the button, not artwork behind a transparent
+   target. The target grows to stay tappable and the icon keeps the plate's own size and
+   stays centred in it, so the icon is never stretched or shifted. Both are positioned from
+   script, which also keeps the control inside the viewport when the crop reaches the right
+   edge of the picture. */
+.menu-credits-hit {
+  position: absolute;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  pointer-events: auto;
+  outline: none;
+  /* The window. The supplied file is a full 1280x720 canvas with the control in its
+     corner, exactly like the entry plates, so what shows through is the plate's own
+     pixels at the canvas scale -- nothing is rescaled, and nothing outside the plate is
+     ever visible. */
+  overflow: hidden;
+}
+
+.menu-credits-icon {
+  position: absolute;
+  top: 0;
+  /* Left, width and height are set from script, in step with the canvas box. */
+  max-width: none;
+  user-select: none;
+  -webkit-user-drag: none;
   pointer-events: none;
 }
 

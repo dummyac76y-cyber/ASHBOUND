@@ -61,18 +61,28 @@ import kotlin.math.sin
  *
  * Four layers, back to front, which is the required stack:
  *
- *   1. `main_menu`         the supplied background artwork, untouched
- *   2. `main_menu_fire`     the animated campfire and its warm light
- *   3. `main_menu_character`  the animated character
- *   4. `main_menu_ui`       the title, the supplied button plates, and the sub-screens
+ *   1. `main_menu`           the supplied background artwork, untouched
+ *   2. `main_menu_character`  the animated character
+ *   3. `main_menu_fire`       the animated campfire and its warm light, over the character
+ *   4. `main_menu_ui`         the title, the supplied button plates, and the sub-screens
+ *
+ * The fire is in front of the character because the character is seated beside the fire and
+ * the light it throws falls on it.
  *
  * Every piece of supplied artwork is a full 1280x720 canvas already composed against the
  * background, so nothing is positioned by hand: each canvas is drawn across the same box
- * with `ContentScale.Fit` and the artwork lands where it was drawn. Mirrors
- * web/src/ui/MainMenu.ts.
+ * with `ContentScale.Fit` and the artwork lands where it was drawn.
+ *
+ * The backdrop is the exception: it is drawn with `ContentScale.Crop` so it fills the frame
+ * with no letterbox bars. `Fit` there is what left the black bands on any screen that is
+ * not 16:9. The composition box itself stays `Fit`, so cropping the picture can never take
+ * a control off screen. Mirrors web/src/ui/MainMenu.ts.
  */
 
 /** The backdrop artwork. Kept in step with the web engine's copy. */
+/** The corner icon that is a control in its own right, rather than a menu entry. */
+private const val CREDITS_ID = "credits"
+
 const val MAIN_MENU_BACKGROUND_FILE = "main_menu.jpg"
 
 /**
@@ -154,7 +164,7 @@ private const val CAMPFIRE_FLAME_CELL_Y = 455
  * Frames per second, matching the web. Slow on purpose: at twelve the eight-frame loop
  * repeats every two thirds of a second, which reads as a fire breathing.
  */
-private const val CAMPFIRE_FLAME_FPS = 12
+private const val CAMPFIRE_FLAME_FPS = 8
 
 /** The warm light, centred on the fire's ink. Same numbers as the web engine's glow. */
 private const val CAMPFIRE_GLOW_CX = 749.5f
@@ -470,32 +480,17 @@ fun MainMenu(modifier: Modifier = Modifier, onAction: (MainMenuAction) -> Unit) 
                     bitmap = image,
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
-                    // Fit, never Crop: a crop would silently cut off the composition the
-                    // artwork was drawn for.
-                    contentScale = ContentScale.Fit,
+                    // Crop, so the picture fills the frame and no bars show. This scales by
+                    // one factor in both directions, so it crops rather than stretches.
+                    contentScale = ContentScale.Crop,
                 )
             }
         }
 
-        // --- Layer 2: the campfire and its light -----------------------------
-        // Under the character, as the required stack asks: background, fire, character.
+        // --- Layer 2: the animated character ---------------------------------
         // Drawn in the shared canvas box so it scales by one factor with the backdrop.
-        Box(Modifier.fillMaxSize()) {
-            BoxWithConstraints(Modifier.fillMaxSize()) {
-                val fireCanvas = canvasBox()
-                MenuFire(
-                    Modifier
-                        .offset(x = fireCanvas.offsetX, y = fireCanvas.offsetY)
-                        .size(fireCanvas.width, fireCanvas.height),
-                    rememberMenuCampfireFlame(),
-                )
-            }
-        }
-
-        // --- Layer 3: the animated character ---------------------------------
-        // Drawn in the shared canvas box so it scales by one factor with the backdrop, the
-        // same argument as the fire. It replaces the static overlay canvas, which stays in
-        // the asset tree unaltered and is simply no longer drawn.
+        // It replaces the static overlay canvas, which stays in the asset tree unaltered
+        // and is simply no longer drawn.
         Box(Modifier.fillMaxSize()) {
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 val characterCanvas = canvasBox()
@@ -504,6 +499,22 @@ fun MainMenu(modifier: Modifier = Modifier, onAction: (MainMenuAction) -> Unit) 
                         .offset(x = characterCanvas.offsetX, y = characterCanvas.offsetY)
                         .size(characterCanvas.width, characterCanvas.height),
                     MAIN_MENU_CHARACTER_FILES.map { rememberMenuCharacterSheet(it) },
+                )
+            }
+        }
+
+        // --- Layer 3: the campfire and its light -----------------------------
+        // In front of the character: the figure is seated beside the fire and the warm
+        // light it throws falls across it. Drawn in the shared canvas box like the
+        // character, so all three scale by one factor together.
+        Box(Modifier.fillMaxSize()) {
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val fireCanvas = canvasBox()
+                MenuFire(
+                    Modifier
+                        .offset(x = fireCanvas.offsetX, y = fireCanvas.offsetY)
+                        .size(fireCanvas.width, fireCanvas.height),
+                    rememberMenuCampfireFlame(),
                 )
             }
         }
@@ -678,6 +689,8 @@ private fun ArtButtons(surface: Modifier, canvas: CanvasBox, onPick: (String) ->
 
     Box(surface.testTag("main_menu_art_buttons")) {
         for (art in MENU_BUTTON_ART) {
+            // The credits control is drawn on its own below, as a window onto its own plate.
+            if (art.id == CREDITS_ID) continue
             rememberMenuButtonArt(art.file)?.let { image ->
                 Image(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
             }
@@ -714,6 +727,65 @@ private fun ArtButtons(surface: Modifier, canvas: CanvasBox, onPick: (String) ->
                     .semantics { contentDescription = art.label }
                     .clickable { onPick(art.id) }
                     .testTag("main_menu_${art.id}"),
+            )
+        }
+
+        CreditsControl(surface, canvas, scaled, onPick)
+    }
+}
+
+/**
+ * The credits control: the supplied artwork *is* the control.
+ *
+ * Every other plate is a full 1280x720 canvas whose ink is a band on the left of the
+ * picture, which is fine for a control the size of a menu entry. The credits control is a
+ * small icon hard against the top-right corner, and drawn the same way it is a 1280x720
+ * sheet of which about fifty pixels are ever visible -- a hit area covering all of it, with
+ * the button somewhere inside. So it is drawn the way the character and the flame already
+ * are: the button is a window, the canvas is slid behind it, and the clip is what leaves
+ * only the plate showing. The artwork therefore arrives at the canvas scale, untouched.
+ *
+ * The window grows to the same 48dp minimum as every other control and is clamped inside
+ * the canvas, because a 48dp target centred on a plate that close to the corner would
+ * otherwise hang off the top and the right.
+ */
+@Composable
+private fun CreditsControl(
+    surface: Modifier,
+    canvas: CanvasBox,
+    scaled: List<HitTarget>,
+    onPick: (String) -> Unit,
+) {
+    val art = MENU_BUTTON_ART.first { it.id == CREDITS_ID }
+    val target = scaled.first { it.art.id == CREDITS_ID }
+    val minTouch = 48.dp
+    val width = minOf(maxOf(target.width, minTouch), canvas.width)
+    val height = minOf(maxOf(target.height, minTouch), canvas.height)
+    val left = (target.left + target.width / 2f - width / 2f).coerceIn(0.dp, canvas.width - width)
+    val top = (target.top + target.height / 2f - height / 2f).coerceIn(0.dp, canvas.height - height)
+
+    Box(
+        modifier = surface
+            .offset(x = left, y = top)
+            .size(width, height)
+            .clipToBounds()
+            .semantics { contentDescription = art.label }
+            .clickable { onPick(art.id) }
+            .testTag("main_menu_$CREDITS_ID"),
+    ) {
+        rememberMenuButtonArt(art.file)?.let { image ->
+            // Placed so the plate's own centre lands on the window's centre, which keeps the
+            // artwork on the plate however far the window had to grow or be clamped.
+            Image(
+                bitmap = image,
+                contentDescription = null,
+                modifier = Modifier
+                    .offset(
+                        x = width / 2f - (art.x + art.w / 2f) * canvas.scale.dp,
+                        y = height / 2f - (art.y + art.h / 2f) * canvas.scale.dp,
+                    )
+                    .size(canvas.width, canvas.height),
+                contentScale = ContentScale.Fit,
             )
         }
     }
