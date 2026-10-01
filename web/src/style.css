@@ -47,6 +47,35 @@ body {
   height: 100%;
 }
 
+/* ---------- Game stage ----------
+   The one coordinate space for the whole gameplay experience.
+
+   The world is a fixed 640x360 scene. Before this element existed, the canvas filled the
+   viewport and the world was letterboxed *inside* it by a transform in main.ts, while the
+   HUD, joystick, action buttons and key hints were absolutely positioned against the canvas
+   element. Those are different rectangles: on a viewport wider than 16:9 the drawn world
+   occupied a centred 16:9 band and the UI was free to sit out in the black bars on either
+   side of it, so the HUD and the joystick could hang off the edge of the game entirely.
+
+   The stage is that 16:9 box, centred, and everything that belongs to the game is a child
+   of it. The canvas fills it exactly, so the letterbox transform collapses to a uniform
+   scale with no offset at all, and every UI element anchored to a stage corner is anchored
+   to a corner of the game rather than a corner of the browser. The bars stay outside,
+   black, and inert.
+*/
+.game-stage {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  /* Fit the 16:9 box inside the viewport without ever exceeding it. `min` on both axes
+     rather than `aspect-ratio`, because the box is the authority on its own size here: the
+     canvas is told to fill whatever this ends up being. */
+  width: min(100%, calc(100vh * 16 / 9));
+  height: min(100%, calc(100vw * 9 / 16));
+  overflow: hidden;
+}
+
 /* ---------- Game surface ---------- */
 
 .game-canvas {

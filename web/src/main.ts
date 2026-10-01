@@ -71,7 +71,17 @@ async function boot(): Promise<void> {
   loading.className = 'loading'
   loading.textContent = 'Loading sprites…'
 
-  app.append(canvas, loading)
+  // The game stage: the 16:9 box that is the game's single coordinate space.
+  //
+  // The world is a fixed 640x360 scene, so it is this element -- not the viewport, and not
+  // the canvas -- that defines where the game actually is. The canvas and every piece of
+  // gameplay UI are children of it, which means the world and its UI cannot disagree about
+  // where the game is. The bars outside it are left alone: black, and not part of the game.
+  const stage = document.createElement('div')
+  stage.className = 'game-stage'
+  stage.dataset.testid = 'game_stage'
+  stage.append(canvas, loading)
+  app.append(stage)
 
   const ctxOrNull = canvas.getContext('2d', { alpha: false })
   if (!ctxOrNull) throw new Error('2D canvas context is unavailable in this browser')
@@ -177,7 +187,7 @@ async function boot(): Promise<void> {
   function openInspector(): void {
     if (inspector) return
     inspector = new AnimationInspectorDialog(animations, closeInspector)
-    app.append(inspector.root)
+    stage.append(inspector.root)
   }
   function closeInspector(): void {
     inspector?.dispose()
@@ -185,7 +195,7 @@ async function boot(): Promise<void> {
   }
 
   const keyHintsEl = keyHints()
-  app.append(hud.root, controls.root, keyHintsEl)
+  stage.append(hud.root, controls.root, keyHintsEl)
   loading.remove()
 
   // --- The main menu gates the world ---
@@ -246,7 +256,11 @@ async function boot(): Promise<void> {
     void menu.whenReady().then(() => menu.reveal())
   }
 
-  // --- Sizing: letterbox the 640x360 logical viewport into the canvas ---
+  // --- Sizing: the stage is already the 16:9 box, so this is just backing-store density ---
+  //
+  // The letterbox used to live here, as a transform computed from the canvas's own size. The
+  // stage now does it with CSS, which means the canvas backing store matches the stage
+  // aspect exactly and the render transform below reduces to a plain uniform scale.
   let dpr = 1
   function resize(): void {
     dpr = Math.min(window.devicePixelRatio || 1, 3)
@@ -256,7 +270,9 @@ async function boot(): Promise<void> {
     // Strictly disable bilinear interpolation to keep pixel-art crisp.
     ctx.imageSmoothingEnabled = false
   }
-  new ResizeObserver(resize).observe(canvas)
+  // Observed on the stage rather than the canvas, so the backing store is rebuilt when the
+  // stage resizes even if the canvas box somehow has not moved yet.
+  new ResizeObserver(resize).observe(stage)
   resize()
 
   /** How many frames of the world have been drawn. The menu harness asserts this. */
@@ -282,6 +298,10 @@ async function boot(): Promise<void> {
         lastFpsCalc = now
       }
 
+      // A uniform scale with no offset, because the stage is the aspect box and the canvas
+      // fills it exactly. The `min` is kept as a floor against sub-pixel rounding: it can
+      // only ever equal the other axis, and a scale that cropped the world by a fraction of
+      // a pixel would be worse than the half-pixel of letterbox it would avoid.
       const scale = Math.min(canvas.width / GameWorld.LOGICAL_WIDTH, canvas.height / GameWorld.LOGICAL_HEIGHT)
       const offsetX = (canvas.width - GameWorld.LOGICAL_WIDTH * scale) / 2
       const offsetY = (canvas.height - GameWorld.LOGICAL_HEIGHT * scale) / 2

@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -16,6 +18,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -129,83 +132,113 @@ fun GameScreen(modifier: Modifier = Modifier) {
         // Read gameTick to trigger recomposition each frame
         val currentTick = gameTick
 
-        // Render Game World on Canvas with nearest-neighbor pixel-art scaling
-        Canvas(
+        // The game stage: the 16:9 box that is the game's single coordinate space.
+        //
+        // The world is a fixed 640x360 scene, so this element -- not the window, and not the
+        // canvas -- defines where the game actually is. The canvas and every piece of
+        // gameplay UI live inside it, so the world and its UI cannot disagree about where
+        // the game is. Before this, the canvas filled the window and the world was
+        // letterboxed *inside* it while the HUD and touch controls were laid out against the
+        // full window, which put the joystick and the action buttons out in the black bars
+        // beside the game on any screen that was not 16:9.
+        //
+        // Sized from the available space rather than measured in the shader, so the Canvas
+        // below fills it exactly and the render transform reduces to a uniform scale.
+        //
+        // Both axes are clamped independently against the *other* axis, which is what makes
+        // the result exactly 16:9 rather than only approximately so. On a screen wider than
+        // 16:9 the width is limited by the height; on a taller one the height is limited by
+        // the width. The same rule as the CSS in web/src/style.css, and both fit the box.
+        val stageWidth = min(maxWidth, maxHeight * 16f / 9f)
+        val stageHeight = min(maxHeight, maxWidth * 9f / 16f)
+
+        Box(
             modifier = Modifier
-                .fillMaxSize()
-                .testTag("game_canvas")
+                .align(Alignment.Center)
+                .width(stageWidth)
+                .height(stageHeight)
+                .testTag("game_stage"),
+            contentAlignment = Alignment.Center,
         ) {
-            // The world is not drawn while the menu is up, not merely left un-updated. The
-            // menu's backdrop is ContentScale.Fit, so on a screen that is not 16:9 it
-            // letterboxes, and a scene that is merely paused is still visible through the
-            // bands. Gating update() alone is not enough.
-            if (started && currentTick >= 0) { // Ensures recomposition on each tick
-                drawIntoCanvas { composeCanvas ->
-                    val nativeCanvas = composeCanvas.nativeCanvas
+            // Render Game World on Canvas with nearest-neighbor pixel-art scaling
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag("game_canvas")
+            ) {
+                // The world is not drawn while the menu is up, not merely left un-updated. The
+                // menu's backdrop is ContentScale.Fit, so on a screen that is not 16:9 it
+                // letterboxes, and a scene that is merely paused is still visible through the
+                // bands. Gating update() alone is not enough.
+                if (started && currentTick >= 0) { // Ensures recomposition on each tick
+                    drawIntoCanvas { composeCanvas ->
+                        val nativeCanvas = composeCanvas.nativeCanvas
 
-                    val scaleX = size.width / GameWorld.LOGICAL_WIDTH
-                    val scaleY = size.height / GameWorld.LOGICAL_HEIGHT
-                    val scale = min(scaleX, scaleY)
+                        val scaleX = size.width / GameWorld.LOGICAL_WIDTH
+                        val scaleY = size.height / GameWorld.LOGICAL_HEIGHT
+                        val scale = min(scaleX, scaleY)
 
-                    // Center within screen (letterbox / pillarbox)
-                    val offsetX = (size.width - GameWorld.LOGICAL_WIDTH * scale) / 2f
-                    val offsetY = (size.height - GameWorld.LOGICAL_HEIGHT * scale) / 2f
+                        // Center within screen (letterbox / pillarbox)
+                        val offsetX = (size.width - GameWorld.LOGICAL_WIDTH * scale) / 2f
+                        val offsetY = (size.height - GameWorld.LOGICAL_HEIGHT * scale) / 2f
 
-                    nativeCanvas.save()
-                    nativeCanvas.translate(offsetX, offsetY)
-                    nativeCanvas.scale(scale, scale)
+                        nativeCanvas.save()
+                        nativeCanvas.translate(offsetX, offsetY)
+                        nativeCanvas.scale(scale, scale)
 
-                    // Clip to logical resolution boundaries
-                    nativeCanvas.clipRect(0f, 0f, GameWorld.LOGICAL_WIDTH, GameWorld.LOGICAL_HEIGHT)
+                        // Clip to logical resolution boundaries
+                        nativeCanvas.clipRect(0f, 0f, GameWorld.LOGICAL_WIDTH, GameWorld.LOGICAL_HEIGHT)
 
-                    // Render game world (arena, background, character, effects)
-                    gameWorld.render(nativeCanvas)
+                        // Render game world (arena, background, character, effects)
+                        gameWorld.render(nativeCanvas)
 
-                    nativeCanvas.restore()
+                        nativeCanvas.restore()
+                    }
                 }
             }
-        }
 
-        // --- Heads-up display and touch controls, only once play has begun ---
-        // They belong to the world, so they appear and disappear with it rather than
-        // sitting on top of the menu.
-        if (started) {
-            GameHud(
-                player = gameWorld.player,
-                animationSystem = gameWorld.animationSystem,
-                fps = fps,
-                onOpenInspector = { showInspector = true },
-                onResetPosition = {
-                    gameWorld.respawn()
-                }
-            )
+            // --- Heads-up display and touch controls, only once play has begun ---
+            // They belong to the world, so they appear and disappear with it rather than
+            // sitting on top of the menu. They are laid out against the stage, not the window,
+            // so the HUD hugs the game's own top edge and the controls its bottom corners.
+            if (started) {
+                GameHud(
+                    player = gameWorld.player,
+                    animationSystem = gameWorld.animationSystem,
+                    fps = fps,
+                    onOpenInspector = { showInspector = true },
+                    onResetPosition = {
+                        gameWorld.respawn()
+                    }
+                )
 
-            // Decoupled touch controls on top
-            VirtualControls(
-                onMove = { horizontal ->
-                    gameWorld.player.setMovementInput(horizontal)
-                },
-                // Sound is played from the same `boolean` the action returns, so an input
-                // the state machine refuses -- a dash with no stamina left, an attack
-                // mid-swing -- stays silent instead of playing a sound for something that
-                // did not happen.
-                onAttack = {
-                    if (gameWorld.player.onAttack()) audio.play("sword_attack")
-                },
-                onHeavyAttack = {
-                    if (gameWorld.player.onHeavyAttack()) audio.play("heavy_attack")
-                },
-                onBlockChange = { isBlocking ->
-                    gameWorld.player.setBlockActive(isBlocking)
-                },
-                onDash = {
-                    if (gameWorld.player.onDash()) audio.play("dash")
-                },
-                onJump = {
-                    if (gameWorld.player.onJump()) audio.play("jump")
-                }
-            )
-        }
+                // Decoupled touch controls on top
+                VirtualControls(
+                    onMove = { horizontal ->
+                        gameWorld.player.setMovementInput(horizontal)
+                    },
+                    // Sound is played from the same `boolean` the action returns, so an input
+                    // the state machine refuses -- a dash with no stamina left, an attack
+                    // mid-swing -- stays silent instead of playing a sound for something that
+                    // did not happen.
+                    onAttack = {
+                        if (gameWorld.player.onAttack()) audio.play("sword_attack")
+                    },
+                    onHeavyAttack = {
+                        if (gameWorld.player.onHeavyAttack()) audio.play("heavy_attack")
+                    },
+                    onBlockChange = { isBlocking ->
+                        gameWorld.player.setBlockActive(isBlocking)
+                    },
+                    onDash = {
+                        if (gameWorld.player.onDash()) audio.play("dash")
+                    },
+                    onJump = {
+                        if (gameWorld.player.onJump()) audio.play("jump")
+                    }
+                )
+            }
+        } // end game stage
 
         // --- The main menu ---
         if (!started) {

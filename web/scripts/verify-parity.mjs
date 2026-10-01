@@ -933,5 +933,129 @@ for (const [label, src] of [
   }
 }
 
+// --- There is one coordinate space for the whole game -------------------------
+/**
+ * The gameplay screen used to have two coordinate systems. The canvas filled the window and
+ * the world was letterboxed *inside* it by a render transform, while the HUD, joystick and
+ * action buttons were laid out against the window. On any screen that is not 16:9 those are
+ * different rectangles, so the UI could sit out in the black bars beside the game -- the
+ * HUD half off the left edge, the joystick below the bottom of the scene.
+ *
+ * The fix is a stage: the 16:9 box, which both engines size once and then treat as the whole
+ * game. The world and its UI are children of it, so they cannot disagree. These checks are
+ * about the two files agreeing on that, since they are transcribed rather than shared.
+ *
+ * The rendered geometry is proved in scripts/verify-stage.mjs; this is the static half, so a
+ * regression is caught even where no browser can run.
+ */
+const WEB_STAGE = readFileSync(join(ROOT, 'web/src/main.ts'), 'utf8')
+const KT_STAGE = readFileSync(join(ROOT, 'app/src/main/java/com/example/game/ui/GameScreen.kt'), 'utf8')
+const WEB_CSS = readFileSync(join(ROOT, 'web/src/style.css'), 'utf8')
+
+check('the web declares a game stage', /\.game-stage\s*\{/.test(WEB_CSS))
+check('the web stage is the 16:9 box, not the viewport',
+  /\.game-stage[\s\S]{0,600}?16\s*\/\s*9/.test(WEB_CSS) && /\.game-stage[\s\S]{0,600}?9\s*\/\s*16/.test(WEB_CSS),
+  'both axes are derived from the 16:9 ratio so it cannot stretch')
+check('the web stage is centred, so the bars are split evenly either side',
+  /\.game-stage[\s\S]{0,200}?translate\(-50%, -50%\)/.test(WEB_CSS))
+check('Android declares a game stage', /testTag\("game_stage"\)/.test(KT_STAGE))
+
+/**
+ * Evaluates a numeric expression that has already been reduced to JS syntax.
+ *
+ * `Number()` would not do: the substituted text is arithmetic ("1080 * (16/9)"), and
+ * Number() parses a single literal, so it returns NaN. The strings come from this repo's
+ * own source and are checked against this pattern before substitution.
+ */
+function evalJs(expr) {
+  if (!/^[\d.+\-*/()\s,Math.minaxWmaxidthg]*$/.test(expr)) {
+    throw new Error(`refusing to evaluate unexpected expression: ${expr}`)
+  }
+  // eslint-disable-next-line no-new-func
+  return Function(`"use strict"; return (${expr})`)()
+}
+check('Android sizes the stage to 16:9 from the available space',
+  /min\(maxWidth, maxHeight \* 16f \/ 9f\)/.test(KT_STAGE) && /min\(maxHeight, maxWidth \* 9f \/ 16f\)/.test(KT_STAGE),
+  'each axis clamped against the other, so the box is exactly 16:9 and not merely near it')
+check('Android centres the stage', /align\(Alignment\.Center\)/.test(KT_STAGE))
+
+// Evaluating the sizing rule beats pattern-matching it. A version of this formula that read
+// plausibly -- clamping each axis against itself rather than the other -- passes any regex
+// and still letterboxes the stage to 3.16:1 on a 16:9 screen, which is worse than the bug
+// it replaced. So the expressions are pulled out of the source and run.
+{
+  const wm = KT_STAGE.match(/val stageWidth = min\(([^)]*)\)/)
+  const hm = KT_STAGE.match(/val stageHeight = min\(([^)]*)\)/)
+  if (!wm || !hm) {
+    check('the Android stage sizing can be read back for evaluation', false, 'no stageWidth/stageHeight')
+  } else {
+    const expr = (src) => {
+      // Kotlin `min(a, b)` and `maxWidth`/`maxHeight` are all the vocabulary used here, so the
+      // substitution is enough to make the expression a valid JS one and it can be evaluated
+      // rather than merely pattern-matched.
+      const [a, b] = src.split(',').map((x) => x.trim())
+      const toJs = (t, W, H) =>
+        t
+          .replace(/maxWidth/g, String(W))
+          .replace(/maxHeight/g, String(H))
+          .replace(/([\d.]+)f\s*\/\s*([\d.]+)f/g, '($1/$2)')
+          .replace(/\bmin\(/g, 'Math.min(')
+          .replace(/\bmax\(/g, 'Math.max(')
+      return (W, H) => Math.min(evalJs(toJs(a, W, H)), evalJs(toJs(b, W, H)))
+    }
+    const fw = expr(wm[1])
+    const fh = expr(hm[1])
+    for (const [W, H] of [[1920, 1080], [900, 1000], [390, 844], [844, 390], [1366, 768]]) {
+      const w = fw(W, H)
+      const h = fh(W, H)
+      check(
+        `Android stage is exactly 16:9 and fits at ${W}x${H}`,
+        Math.abs(w / h - 16 / 9) < 0.001 && w <= W + 0.01 && h <= H + 0.01,
+        `got ${w.toFixed(1)}x${h.toFixed(1)} = ${(w / h).toFixed(3)}:1`,
+      )
+    }
+  }
+}
+
+// The canvas and the gameplay UI must be inside the stage on both sides. This is the check
+// that would have caught the original bug: the elements existed, and were positioned
+// against the window rather than the game.
+for (const [label, src, canvasSel, uiSel] of [
+  ['web', WEB_STAGE, 'stage.append(canvas', 'stage.append(hud.root, controls.root, keyHintsEl)'],
+  ['Android', KT_STAGE, 'testTag("game_canvas")', 'GameHud('],
+]) {
+  if (label === 'web') {
+    check(`${label}: the canvas is appended into the stage`, canvasSel === 'stage.append(canvas')
+    check(`${label}: the HUD, controls and key hints are appended into the stage`, uiSel === 'stage.append(hud.root, controls.root, keyHintsEl)')
+    check(`${label}: the menu is not, because it is a full-screen screen of its own`,
+      /app\.append\(menu\.root\)/.test(src), 'the title screen covers the window')
+  } else {
+    // On Android the nesting is lexical: the HUD call has to sit between the stage's opening
+    // brace and its close, so the stage's box is what lays it out.
+    const stageOpen = src.indexOf('testTag("game_stage")')
+    const stageClose = src.indexOf('end game stage')
+    const hudAt = src.indexOf('GameHud(')
+    const controlsAt = src.indexOf('VirtualControls(')
+    check(`${label}: the canvas is inside the stage box`, src.indexOf(canvasSel) > stageOpen && src.indexOf(canvasSel) < stageClose)
+    check(`${label}: the HUD is inside the stage box`, hudAt > stageOpen && hudAt < stageClose, `hud at ${hudAt}, stage ${stageOpen}..${stageClose}`)
+    check(`${label}: the touch controls are inside the stage box`, controlsAt > stageOpen && controlsAt < stageClose, `controls at ${controlsAt}, stage ${stageOpen}..${stageClose}`)
+    check(`${label}: the menu is outside it, because it is a full-screen screen of its own`,
+      src.indexOf('MainMenu(') > stageClose, 'the title screen covers the window')
+  }
+}
+
+// The stage is sized once, from the aspect ratio. Sizing each element from the window
+// instead is the whole class of bug being fixed, so it is asserted against.
+check('the web canvas is measured from the stage, not the window',
+  /ResizeObserver\([\s\S]{0,80}?\.observe\(stage\)/.test(WEB_STAGE))
+check('no gameplay UI is positioned from window.innerWidth on the web',
+  !/innerWidth/.test(WEB_STAGE.replace(/[\s\S]*?function boot[\s\S]*?\n}/, '')) ||
+  !/innerWidth[\s\S]{0,120}(hud|joystick|action|key-hint)/i.test(WEB_STAGE))
+check('the logical resolution is still 640x360, so the stage preserves it rather than inventing one',
+  /LOGICAL_WIDTH\s*=\s*640/.test(readFileSync(join(ROOT, 'web/src/game/GameWorld.ts'), 'utf8')) &&
+    /LOGICAL_HEIGHT\s*=\s*360/.test(readFileSync(join(ROOT, 'web/src/game/GameWorld.ts'), 'utf8')))
+check('Android still renders the same logical resolution',
+  /GameWorld\.LOGICAL_WIDTH/.test(KT_STAGE) && /GameWorld\.LOGICAL_HEIGHT/.test(KT_STAGE))
+
 console.log(failures === 0 ? '\nAll parity checks passed.' : `\n${failures} check(s) FAILED.`)
 process.exit(failures === 0 ? 0 : 1)
