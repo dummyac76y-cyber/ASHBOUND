@@ -1,5 +1,5 @@
 import { assetUrl } from '../assetUrl'
-import { AUDIO_CLIPS, type AudioSystem } from '../game/AudioSystem'
+import type { AudioSystem } from '../game/AudioSystem'
 
 /**
  * The Ashbound main menu.
@@ -647,23 +647,17 @@ export class MainMenu {
     screen.append(el('h2', 'menu-heading', 'SETTINGS'))
 
     const rows = el('div', 'menu-rows')
-    // Real switches, not placeholders. They are live with no audio files present: a player
-    // who turns sound off before the assets are added should find it still off afterwards,
-    // and a switch that cannot be pressed is worse than one that changes nothing yet.
+    // Real switches, not placeholders. A player who turns sound off before the assets are
+    // added should find it still off afterwards, and a switch that cannot be pressed is worse
+    // than one that changes nothing yet.
+    //
+    // Two switches, not three. MUSIC is the menu music alone. FX owns the effects *and* the
+    // ambience bed -- the fire and the menu wind are part of the scene, not the soundtrack, so
+    // a player reaching for "no sound effects" means a silent campfire too. Splitting ambience
+    // onto its own third switch put the fire under the music toggle, which is the confusion
+    // this replaces.
     rows.append(this.audioToggle('MUSIC', () => this.audio.isMusicEnabled(), (on) => this.audio.setMusicEnabled(on)))
-    rows.append(this.audioToggle('SOUND EFFECTS', () => this.audio.isSfxEnabled(), (on) => this.audio.setSfxEnabled(on)))
-    // Said plainly, because a switch reading ON while nothing can be heard is a small lie
-    // and the whole screen would otherwise look finished.
-    const found = this.audio.inventory()
-    if (found.loaded.length < AUDIO_CLIPS.length) {
-      rows.append(
-        this.settingRow(
-          'AUDIO FILES',
-          found.loaded.length === 0 ? 'NONE INSTALLED YET' : `${found.loaded.length} OF ${AUDIO_CLIPS.length} PRESENT`,
-          true,
-        ),
-      )
-    }
+    rows.append(this.audioToggle('FX', () => this.audio.isSfxEnabled(), (on) => this.audio.setSfxEnabled(on)))
 
     const fullscreen = el('button', 'menu-setting')
     fullscreen.type = 'button'
@@ -730,12 +724,6 @@ export class MainMenu {
       setOn(!isOn())
       paint()
     })
-    return row
-  }
-
-  private settingRow(label: string, value: string, disabled: boolean): HTMLElement {
-    const row = el('div', `menu-setting${disabled ? ' menu-setting-disabled' : ''}`)
-    row.append(el('span', 'menu-setting-label', label), el('span', 'menu-setting-value', value))
     return row
   }
 

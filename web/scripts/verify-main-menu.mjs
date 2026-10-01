@@ -732,26 +732,26 @@ console.log('\n3. the four menu entries, and what each one does')
   if (settings) {
     check('it has settings rows', settings.rows.length >= 2, settings.names.join(', '))
     const disabled = settings.rows.filter((r) => r.disabled).map((r) => r.label)
-    // The audio rows are real switches, so the invariant is no longer "two rows are dimmed":
-    // it is that nothing is presented as a working toggle while having nothing behind it,
-    // and that what is missing is said out loud. FULLSCREEN is still a disabled row, because
-    // the web build is already edge-to-edge and a switch there could change nothing.
-    const audioRows = settings.rows.filter((r) => r.label === 'MUSIC' || r.label === 'SOUND EFFECTS')
+    // MUSIC and FX are the two live switches. The row that used to report how many audio
+    // files were installed is gone: it was never a control, it could not be pressed, and a
+    // dimmed row that looks like a switch is worse than no row at all. The invariant is now
+    // that nothing is presented as a working toggle while having nothing behind it.
+    // FULLSCREEN stays a disabled row, because the web build is already edge-to-edge and a
+    // switch there could change nothing.
+    const audioRows = settings.rows.filter((r) => r.label === 'MUSIC' || r.label === 'FX')
     check(
       'the audio rows are live switches rather than disabled decoration',
       audioRows.length === 2 && audioRows.every((r) => r.isButton && !r.disabled),
       settings.names.join(', '),
     )
     check(
-      'what is missing is stated rather than left implied',
-      settings.names.some((n) => /AUDIO FILES/.test(n)),
+      'the removed audio-files row is gone',
+      !settings.names.some((n) => /AUDIO FILES|SOUND EFFECTS/.test(n)),
       settings.names.join(', '),
     )
-    check(
-      'the informational row is disabled rather than clickable',
-      disabled.includes('AUDIO FILES'),
-      disabled.join(', ') || 'none',
-    )
+    // On the web every row is live, fullscreen included, so the expectation is simply that
+    // nothing is dimmed. Android is the side with a dead row, and it is checked there.
+    check('no dimmed rows are left over on the web', disabled.length === 0, disabled.join(', ') || 'none')
     check('fullscreen is offered as a live control', settings.fullscreenLive, 'fullscreen enabled')
 
     // The switches have to actually reach the bank, not just look live.
@@ -762,7 +762,7 @@ console.log('\n3. the four menu entries, and what each one does')
         )
         return row?.querySelector('.menu-setting-value')?.textContent.trim() ?? null
       }
-      return { musicBefore: read('MUSIC'), sfxBefore: read('SOUND EFFECTS') }
+      return { musicBefore: read('MUSIC'), sfxBefore: read('FX') }
     })
     await page.click('[data-testid="main_menu_music"]')
     const musicAfter = await page.evaluate(
@@ -787,6 +787,32 @@ console.log('\n3. the four menu entries, and what each one does')
           ?.textContent.trim() ?? null,
     )
     check('the music switch toggles back', musicRestored === 'ON', String(musicRestored))
+
+    // The FX switch is the one that owns the ambience bed, so it gets the same round trip.
+    // Without it the label could be wired to a dead row and every other check would still pass.
+    await page.click('[data-testid="main_menu_fx"]')
+    const fxCycle = await page.evaluate(() => {
+      const read = (label) =>
+        [...document.querySelectorAll('[data-testid="main_menu_screen_settings"] .menu-setting')]
+          .find((n) => n.querySelector('.menu-setting-label')?.textContent.trim() === label)
+          ?.querySelector('.menu-setting-value')
+          ?.textContent.trim() ?? null
+      return { off: read('FX'), music: read('MUSIC') }
+    })
+    check(
+      'the FX switch flips and leaves music alone',
+      fxCycle.off === 'OFF' && fxCycle.music === 'ON',
+      `fx ${fxCycle.off}, music ${fxCycle.music}`,
+    )
+    await page.click('[data-testid="main_menu_fx"]')
+    const fxRestored = await page.evaluate(
+      () =>
+        [...document.querySelectorAll('[data-testid="main_menu_screen_settings"] .menu-setting')]
+          .find((n) => n.querySelector('.menu-setting-label')?.textContent.trim() === 'FX')
+          ?.querySelector('.menu-setting-value')
+          ?.textContent.trim() ?? null,
+    )
+    check('the FX switch toggles back', fxRestored === 'ON', String(fxRestored))
   }
   await page.click('.menu-panel:not([hidden]) [data-testid="main_menu_back"]')
 

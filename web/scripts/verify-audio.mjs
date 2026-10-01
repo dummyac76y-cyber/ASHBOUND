@@ -50,12 +50,15 @@ function section(title) {
 function parseWebClips(src) {
   const out = []
   const table = src.slice(src.indexOf('export const AUDIO_CLIPS'))
-  for (const m of table.matchAll(/clip\(\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*'([^']+)'(.*?)\)\s*(?:,|\n)/g)) {
+  // `[^]` rather than `.` so an entry wrapped over several lines still parses: the flag that
+  // needs explaining is exactly the one worth explaining, so it is the one that goes multi-line.
+  for (const m of table.matchAll(/clip\(\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*'([^']+)'([^]*?)\)\s*(?:,|\n)/g)) {
     const [, id, category, file, rest] = m
     const num = (key) => {
       const hit = rest.match(new RegExp(`${key}:\\s*([0-9.]+)`))
       return hit ? Number(hit[1]) : 0
     }
+    const range = rest.match(/every:\s*\[\s*([0-9.]+)\s*,\s*([0-9.]+)\s*\]/)
     out.push({
       id,
       category,
@@ -63,6 +66,7 @@ function parseWebClips(src) {
       loop: /loop:\s*true/.test(rest),
       volume: num('volume'),
       minInterval: num('minInterval'),
+      every: range ? [Number(range[1]), Number(range[2])] : null,
     })
   }
   return out
@@ -72,13 +76,14 @@ function parseKotlinClips(src) {
   const out = []
   const table = src.slice(src.indexOf('val AUDIO_CLIPS'))
   for (const m of table.matchAll(
-    /clip\(\s*"([^"]+)"\s*,\s*AudioCategory\.(\w+)\s*,\s*"([^"]+)"(.*?)\)(?:,|\n)/g,
+    /clip\(\s*"([^"]+)"\s*,\s*AudioCategory\.(\w+)\s*,\s*"([^"]+)"([^]*?)\)(?:,|\n)/g,
   )) {
     const [, id, category, file, rest] = m
     const num = (key) => {
       const hit = rest.match(new RegExp(`${key}\\s*=\\s*([0-9.]+)f?`))
       return hit ? Number(hit[1]) : 0
     }
+    const range = rest.match(/every\s*=\s*([0-9.]+)f?\s+to\s+([0-9.]+)f?/)
     out.push({
       id,
       category: category.toLowerCase(),
@@ -86,9 +91,20 @@ function parseKotlinClips(src) {
       loop: /loop\s*=\s*true/.test(rest),
       volume: num('volume'),
       minInterval: num('minInterval'),
+      every: range ? [Number(range[1]), Number(range[2])] : null,
     })
   }
   return out
+}
+
+/**
+ * Two nulls agree; two ranges agree only if both ends do. The ambience clips carry the one
+ * number that has to match exactly on both platforms, because a web fire that pops every 9s
+ * against an Android fire that pops every 30s is the sort of thing nobody notices in review.
+ */
+function sameEvery(a, b) {
+  if (a === null || b === null) return a === b
+  return Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6
 }
 
 const web = parseWebClips(WEB_SYSTEM)
@@ -114,7 +130,8 @@ for (const clip of web) {
       clip.category === other.category &&
       clip.loop === other.loop &&
       Math.abs(clip.volume - other.volume) < 1e-6 &&
-      Math.abs(clip.minInterval - other.minInterval) < 1e-6,
+      Math.abs(clip.minInterval - other.minInterval) < 1e-6 &&
+      sameEvery(clip.every, other.every),
     `web ${JSON.stringify(clip)} vs kotlin ${JSON.stringify(other)}`,
   )
 }
@@ -270,14 +287,95 @@ check('the menu music id matches on both', /MAIN_MENU_MUSIC\s*=\s*'main_menu_mus
 // --- Settings toggles -------------------------------------------------------
 section('Settings')
 check('the web settings screen has a MUSIC switch', /audioToggle\('MUSIC'/.test(WEB_MENU))
-check('the web settings screen has a SOUND EFFECTS switch', /audioToggle\('SOUND EFFECTS'/.test(WEB_MENU))
+check('the web settings screen has an FX switch', /audioToggle\('FX'/.test(WEB_MENU))
 check('the web switches are bound to the bank', /audio\.setMusicEnabled\(on\)/.test(WEB_MENU) && /audio\.setSfxEnabled\(on\)/.test(WEB_MENU))
-check('the web settings screen admits what is missing', /AUDIO FILES/.test(WEB_MENU))
+check('the removed AUDIO FILES row is gone on the web', !/AUDIO FILES/.test(WEB_MENU))
 check('Android settings has a MUSIC switch', /AudioToggleRow\("MUSIC"/.test(KT_MENU))
-check('Android settings has a SOUND EFFECTS switch', /AudioToggleRow\("SOUND EFFECTS"/.test(KT_MENU))
+check('Android settings has an FX switch', /AudioToggleRow\("FX"/.test(KT_MENU))
 check('the Android switches are bound to the bank', /audio\.setMusicEnabled\(it\)/.test(KT_MENU) && /audio\.setSfxEnabled\(it\)/.test(KT_MENU))
-check('Android settings admits what is missing', /AUDIO FILES/.test(KT_MENU))
+check('the removed AUDIO FILES row is gone on Android', !/AUDIO FILES/.test(KT_MENU))
 check('neither platform claims audio is finished', !/AWAITING AUDIO ASSETS/.test(WEB_MENU) && !/AWAITING AUDIO ASSETS/.test(KT_MENU))
+
+// --- Ambience belongs to FX, not to music ------------------------------------
+section('Ambience rides the FX switch')
+/**
+ * The grouping is the bug this file exists to prevent, so it is asserted rather than assumed.
+ * Both ambience clips used to be gated on the music flag, which meant the two switches read as
+ * "music" and "everything else" while the fire kept crackling after effects were switched off,
+ * and switching music off killed a fire that had nothing to do with it.
+ *
+ * The fire is the sharp end of this: it is the one clip the player can hear at all times on
+ * the menu, so it is the one they notice surviving a mute.
+ */
+for (const [label, system] of [['web', WEB_SYSTEM], ['Android', KT_ENGINE]]) {
+  check(
+    `${label}: the ambience mixer is scaled by the FX flag, not the music one`,
+    /gains\.ambience\.gain\.value = this\.sfxEnabled/.test(system) ||
+      /entry\.category == AudioCategory\.AMBIENCE\) sfxEnabled/.test(system),
+  )
+  check(
+    `${label}: ambience one-shots are gated on FX`,
+    /!this\.sfxEnabled\) return false/.test(system) || /!sfxEnabled\) return false/.test(system),
+  )
+  check(
+    `${label}: the repeating ambience schedule is gated on FX`,
+    /!this\.sfxEnabled/.test(system) || /!sfxEnabled/.test(system),
+  )
+  check(
+    `${label}: the mute rule is written down once rather than repeated per call site`,
+    /mutedFor\(/.test(system) || /AMBIENCE\) sfxEnabled/.test(system),
+    'so the two toggles cannot drift apart between the loop and the one-shot path',
+  )
+  // Matched to the end of the member, at the four-space indent Kotlin gives it. Stopping at
+  // the first `\n    }` would cut the function off at its first inner block and let a real
+  // regression hide past the cut.
+  const musicMute = system.match(/\n(\s+)(?:fun )?setMusicEnabled\(on: (?:boolean|Boolean)\)(:[^\n]*)?\s*\{([\s\S]*?)\n\1\}(?=\n|$)/)
+  check(
+    `${label}: switching music off does not touch the ambience`,
+    musicMute !== null && !/sfxEnabled|repeating|removeCallbacks|clearTimeout|\.stop\(/.test(musicMute[3]),
+    'music owns the music mixer and nothing else',
+  )
+  const fxMute = system.match(/\n(\s+)(?:fun )?setSfxEnabled\(on: (?:boolean|Boolean)\)(:[^\n]*)?\s*\{([\s\S]*?)\n\1\}(?=\n|$)/)
+  check(
+    `${label}: switching FX off parks the repeating clips, and back on restores them`,
+    fxMute !== null && /clearTimeout|removeCallbacks/.test(fxMute[3]) && /applyVolumes|applyGains/.test(fxMute[3]),
+    'otherwise a gated one-shot would keep firing behind the mute',
+  )
+  check(
+    `${label}: unmuting replays whatever was asked for while muted`,
+    fxMute !== null && /wanted/.test(fxMute[3]) && /start\(/.test(fxMute[3]),
+    'a menu entered with FX off must get its fire when FX comes back on',
+  )
+  const musicMuteBody = musicMute === null ? '' : musicMute[3]
+  // Both mute paths, not just one: a muted loop and a muted repeating clip each have to
+  // leave the intent behind, and a menu entered with FX off is silent for the whole visit if
+  // either one forgets. Matching the branch to its own `return false` keeps a stray
+  // `wanted.add` elsewhere in the file from satisfying this.
+  check(
+    `${label}: a muted start still records its intent, so unmuting has something to replay`,
+    /mutedFor\(entry\)\)\s*\{\s*this\.wanted\.add\(id\)\s*return false\s*\}/.test(system) ||
+      /mutedFor\(entry\)\)\s*\{\s*wanted\.add\(id\)\s*return false\s*\}/.test(system),
+  )
+  check(
+    `${label}: a muted repeating clip records its intent too`,
+    /!this\.sfxEnabled\)\s*\{\s*this\.wanted\.add\(id\)\s*return false\s*\}/.test(system) ||
+      /!sfxEnabled\)\s*\{\s*wanted\.add\(id\)\s*return false\s*\}/.test(system),
+    'the ambience is a repeating clip, so this is the one that actually matters for the fire',
+  )
+  check(
+    `${label}: muting music cannot be undone by the FX switch and vice versa`,
+    musicMuteBody !== '' && !/setSfxEnabled/.test(musicMuteBody),
+  )
+}
+check(
+  'the web muting path never calls stop(), which is what killed the ambience',
+  !/setMusicEnabled\(on: boolean\)[\s\S]{0,400}?this\.stop\(\)/.test(WEB_SYSTEM),
+)
+check(
+  'Android applies the volumes on an FX change, not only on a music change',
+  /fun setSfxEnabled\(on: Boolean\) \{\s*sfxEnabled = on\s*applyVolumes\(\)/.test(KT_ENGINE),
+  'otherwise the campfire keeps playing at full volume with FX off',
+)
 
 // --- Missing assets are not fatal ------------------------------------------
 section('Missing assets are survivable')
@@ -314,8 +412,8 @@ check('loadAll replays whatever was asked for too early', /for \(const id of \[\
 check('stop() clears that intent, so a stopped cue cannot resurrect', /this\.wanted\.clear\(\)|this\.wanted\.delete\(id\)/.test(WEB_SYSTEM))
 check(
   'muting music does not stop the sources, which is what killed the ambience',
-  /setMusicEnabled\(on: boolean\)[\s\S]{0,400}?this\.applyGains\(\)\s*\}/.test(WEB_SYSTEM) &&
-    !/setMusicEnabled\(on: boolean\)[\s\S]{0,400}?this\.stop\(\)/.test(WEB_SYSTEM),
+  /setMusicEnabled\(on: boolean\)[\s\S]{0,300}?this\.applyGains\(\)/.test(WEB_SYSTEM) &&
+    !/setMusicEnabled\(on: boolean\)[\s\S]{0,300}?this\.stop\(\)/.test(WEB_SYSTEM),
   'sets the gain and nothing else',
 )
 for (const clip of installed) {

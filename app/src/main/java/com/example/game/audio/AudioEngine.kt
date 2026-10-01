@@ -274,8 +274,7 @@ class AudioEngine(private val context: Context) {
         if (entry.loop || entry.category == AudioCategory.MUSIC) return false
         val isRepeating = entry.every != null && entry.category == AudioCategory.AMBIENCE
         if (!isRepeating && entry.category != AudioCategory.SFX) return false
-        if (!sfxEnabled && entry.category == AudioCategory.SFX) return false
-        if (!musicEnabled && entry.category == AudioCategory.AMBIENCE) return false
+        if (!sfxEnabled) return false
         if (suspended) return false
         val soundId = loadedSfx[id] ?: return false
 
@@ -291,13 +290,10 @@ class AudioEngine(private val context: Context) {
     }
 
     /**
-     * Starts a looping clip, or does nothing if it is already playing.
+     * Starts a music or ambience clip, looping or not.
      *
      * Restarting a loop in progress is not idempotent -- two copies a fraction of a second
      * apart beat against each other -- so this is a no-op when the id is already sounding.
-     */
-    /**
-     * Starts a music or ambience clip, looping or not.
      *
      * A looping clip opens a player and holds it. A clip with an `every` range is scheduled
      * instead: it fires once as a one-shot and rearms itself, which is what makes the menu
@@ -308,7 +304,18 @@ class AudioEngine(private val context: Context) {
         if (entry.category == AudioCategory.SFX) return false
         if (entry.every != null && !entry.loop) return scheduleRepeating(id)
         if (!entry.loop) return false
-        if (entry.category == AudioCategory.MUSIC && !musicEnabled) return false
+        // A loop for a muted category is not opened at all, which is what stops the fire
+        // being started behind an FX switch that is off. The intent is still recorded, so
+        // unmuting can open it: a menu entered with FX already off has to get its fire when
+        // the player switches FX on, not stay silent until they leave and come back.
+        //
+        // A clip muted *later* is a different path -- the player is already open and
+        // [applyVolumes] takes it to zero, so unmuting brings the same player back rather
+        // than restarting the clip from the top.
+        if (mutedFor(entry)) {
+            wanted.add(id)
+            return false
+        }
         if (suspended) return false
         if (loops.containsKey(id)) return true
         if (!fileExists(entry.file)) {
@@ -347,6 +354,16 @@ class AudioEngine(private val context: Context) {
     }
 
     /**
+     * Whether a clip's category is currently muted.
+     *
+     * Ambience answers to the FX switch and music to the music switch, so the two toggles are
+     * not two halves of one "sound" setting: turning music off leaves the fire burning, and
+     * turning FX off leaves the music playing.
+     */
+    private fun mutedFor(entry: AudioClip): Boolean =
+        if (entry.category == AudioCategory.MUSIC) !musicEnabled else !sfxEnabled
+
+    /**
      * Arms a repeating clip, and rearms it after each firing.
      *
      * The gap is drawn from the clip's range rather than fixed, because a fixed gap is audible
@@ -357,7 +374,13 @@ class AudioEngine(private val context: Context) {
     private fun scheduleRepeating(id: String): Boolean {
         val entry = byId[id] ?: return false
         if (entry.every == null) return false
-        if (suspended || !musicEnabled) return false
+        // Recorded for the same reason as a muted loop: FX off, then on, must bring the
+        // ambience back rather than losing it for the rest of the visit.
+        if (!sfxEnabled) {
+            wanted.add(id)
+            return false
+        }
+        if (suspended) return false
         if (repeating.containsKey(id)) return true
         val h = handler() ?: return false
         // Immediate first firing, then the random gaps. Posting rather than playing inline so
@@ -427,7 +450,7 @@ class AudioEngine(private val context: Context) {
     fun playing(): List<String> = loops.keys.toList()
 
     /**
-     * Turns the music and ambience mixers on or off.
+     * Turns the music mixer on or off, which is the menu music and nothing else.
      *
      * The volume alone is enough for the looping clips, and doing it that way rather than
      * stopping the players is the whole point: `stop()` takes every loop with it, the fire
@@ -435,13 +458,30 @@ class AudioEngine(private val context: Context) {
      * good. Taking the volume to zero mutes what is already playing and unmuting brings the
      * very same players back, still in phase.
      *
-     * A repeating clip has to be handled separately, because each firing is a fresh one-shot
-     * off the sound pool and the mixer volume does not gate it. Those are parked behind the
-     * mute and restarted on the way back, so turning music off and on does not shorten the
-     * loop or lose the ambience for good.
+     * The fire and the menu ambience are not touched here. They belong to the FX switch, which
+     * is what a player reaches for when they want a silent campfire.
      */
     fun setMusicEnabled(on: Boolean) {
         musicEnabled = on
+        applyVolumes()
+        if (on && !suspended) {
+            // A menu entered with music already off has to pick its music up when the player
+            // switches it on.
+            for (id in wanted.toList()) start(id)
+        }
+    }
+
+    /**
+     * Turns the effects on or off: sound effects and the ambience bed together.
+     *
+     * The repeating clips are the awkward part. A looping clip is scaled by [applyVolumes],
+     * but a repeating clip fires a fresh one-shot off the sound pool each time, and the pool
+     * volume is sampled at play -- so the flag in [play] is the only thing that gates it, and
+     * without parking the timers the ambience would keep firing. Parked here, and restarted
+     * on the way back from [wanted], so FX off and on again does not shorten the loop.
+     */
+    fun setSfxEnabled(on: Boolean) {
+        sfxEnabled = on
         applyVolumes()
         val h = handler()
         if (!on) {
@@ -453,15 +493,10 @@ class AudioEngine(private val context: Context) {
                 wanted.add(key)
             }
         } else if (!suspended) {
-            for (key in wanted) {
-                val entry = byId[key]
-                if (entry?.every != null && !repeating.containsKey(key)) arm(key, entry)
-            }
+            // Replay through start(), which already knows the difference between a loop and a
+            // repeating clip, rather than re-deciding it here.
+            for (id in wanted.toList()) start(id)
         }
-    }
-
-    fun setSfxEnabled(on: Boolean) {
-        sfxEnabled = on
     }
 
     fun isMusicEnabled(): Boolean = musicEnabled
@@ -486,16 +521,26 @@ class AudioEngine(private val context: Context) {
 
     fun isSuspended(): Boolean = suspended
 
-    /** The music/ambience bus, separate from effects so a mute can leave the fire audible. */
+    /**
+     * The music bus. Applies live, so a volume change reaches what is already sounding.
+     */
     var musicVolume: Float = 1f
         set(value) {
             field = value.coerceIn(0f, 1f)
             applyVolumes()
         }
 
+    /**
+     * The effects bus, which the ambience bed now shares.
+     *
+     * The apply call is what makes this match the web: without it a volume change on this bus
+     * only affected one-shots fired after it, leaving the campfire and any loop on the old
+     * level until they were restarted.
+     */
     var sfxVolume: Float = 1f
         set(value) {
             field = value.coerceIn(0f, 1f)
+            applyVolumes()
         }
 
     /** Releases the native players. Safe to call more than once. */
@@ -509,7 +554,11 @@ class AudioEngine(private val context: Context) {
     private fun applyVolumes() {
         for ((id, player) in loops) {
             val entry = byId[id] ?: continue
-            val volume = (musicVolume * entry.volume).coerceIn(0f, 1f)
+            // Ambience takes the FX switch and music takes the music switch, so turning
+            // effects off actually silences the fire and turning music off leaves it burning.
+            val mixer = if (entry.category == AudioCategory.AMBIENCE) sfxVolume else musicVolume
+            val on = if (entry.category == AudioCategory.AMBIENCE) sfxEnabled else musicEnabled
+            val volume = ((if (on) mixer else 0f) * entry.volume).coerceIn(0f, 1f)
             try {
                 player.setVolume(volume, volume)
             } catch (_: IllegalStateException) {

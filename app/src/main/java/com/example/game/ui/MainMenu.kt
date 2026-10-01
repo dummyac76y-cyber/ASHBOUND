@@ -45,7 +45,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
-import com.example.game.audio.AUDIO_CLIPS
 import com.example.game.audio.CAMPFIRE
 import com.example.game.audio.AudioEngine
 import com.example.game.audio.MAIN_MENU_AMBIENCE
@@ -707,29 +706,23 @@ fun MainMenu(
                 }
 
                 MenuScreen.SETTINGS -> MenuPanel("SETTINGS") {
+                    // Real switches, not placeholders. A player who turns sound off before
+                    // the assets are added should find it still off afterwards, and a switch
+                    // that cannot be pressed is worse than one that changes nothing yet.
+                    //
+                    // Two switches, not three. MUSIC is the menu music alone. FX owns the
+                    // effects *and* the ambience bed -- the fire and the menu wind are part of
+                    // the scene, not the soundtrack, so a player reaching for "no sound
+                    // effects" means a silent campfire too. Splitting ambience onto its own
+                    // third switch put the fire under the music toggle, which is the confusion
+                    // this replaces.
+                    AudioToggleRow("MUSIC", audio.isMusicEnabled, { audio.setMusicEnabled(it) })
+                    Spacer(Modifier.height(8.dp))
+                    AudioToggleRow("FX", audio.isSfxEnabled, { audio.setSfxEnabled(it) })
+                    Spacer(Modifier.height(8.dp))
                     // Not a toggle: MainActivity already runs the app edge-to-edge with the
                     // system bars hidden, so a switch here could not change anything. Shown
                     // disabled and truthful rather than wired to nothing.
-                    // Real switches, not placeholders. They are live with no audio files
-                    // present: a player who turns sound off before the assets are added
-                    // should find it still off afterwards, and a switch that cannot be
-                    // pressed is worse than one that changes nothing yet.
-                    AudioToggleRow("MUSIC", audio.isMusicEnabled, { audio.setMusicEnabled(it) })
-                    Spacer(Modifier.height(8.dp))
-                    AudioToggleRow("SOUND EFFECTS", audio.isSfxEnabled, { audio.setSfxEnabled(it) })
-                    Spacer(Modifier.height(8.dp))
-                    // Said plainly, because a switch reading ON while nothing can be heard
-                    // is a small lie and the screen would otherwise look finished.
-                    val found = audio.inventory()
-                    if (found.loaded.size < AUDIO_CLIPS.size) {
-                        SettingRow(
-                            "AUDIO FILES",
-                            if (found.loaded.isEmpty()) "NONE INSTALLED YET"
-                            else "${found.loaded.size} OF ${AUDIO_CLIPS.size} PRESENT",
-                            enabled = false,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                    }
                     SettingRow("FULLSCREEN", "ALWAYS ON (IMMERSIVE)", enabled = false)
                     Spacer(Modifier.height(18.dp))
                     BackButton("BACK") { screen = MenuScreen.MAIN }

@@ -227,8 +227,7 @@ export class AudioSystem {
     if (!entry || entry.loop || entry.category === 'music') return false
     const isRepeating = entry.every !== null && entry.category === 'ambience'
     if (!isRepeating && entry.category !== 'sfx') return false
-    if (!this.sfxEnabled && entry.category === 'sfx') return false
-    if (!this.musicEnabled && entry.category === 'ambience') return false
+    if (!this.sfxEnabled) return false
     if (this.suspended) return false
     const buffer = this.buffers.get(id)
     const context = this.context
@@ -251,6 +250,17 @@ export class AudioSystem {
   }
 
   /**
+   * Whether a clip's category is currently muted.
+   *
+   * Ambience answers to the FX switch and music to the music switch, so the two toggles are
+   * not two halves of one "sound" setting: turning music off leaves the fire burning, and
+   * turning FX off leaves the music playing.
+   */
+  private mutedFor(entry: AudioClip): boolean {
+    return entry.category === 'music' ? !this.musicEnabled : !this.sfxEnabled
+  }
+
+  /**
    * Arms a repeating clip, and rearms it after each firing.
    *
    * The gap is drawn from the clip's range rather than fixed, because a fixed gap is audible
@@ -261,7 +271,13 @@ export class AudioSystem {
   private scheduleRepeating(id: string): boolean {
     const entry = this.byId.get(id)
     if (!entry?.every) return false
-    if (this.suspended || !this.musicEnabled) return false
+    // Recorded for the same reason as a muted loop: FX off, then on, must bring the ambience
+    // back rather than losing it for the rest of the visit.
+    if (!this.sfxEnabled) {
+      this.wanted.add(id)
+      return false
+    }
+    if (this.suspended) return false
     if (this.repeating.has(id)) return true
 
     // Immediate first firing, then the random gaps. `setTimeout(…, 0)` rather than calling
@@ -308,7 +324,18 @@ export class AudioSystem {
     if (!entry || entry.category === 'sfx') return false
     if (entry.every && !entry.loop) return this.scheduleRepeating(id)
     if (!entry.loop) return false
-    if (entry.category === 'music' && !this.musicEnabled) return false
+    // A loop for a muted category is not opened at all, which is what stops the fire being
+    // started behind an FX switch that is off. The intent is still recorded, so unmuting can
+    // open it: a menu that was entered with FX already off has to get its fire when the
+    // player switches FX on, not stay silent until they leave and come back.
+    //
+    // A clip that is muted *later* is a different path -- the source is already open and the
+    // mixer takes it to zero, so unmuting brings the same source back rather than restarting
+    // the clip from the top.
+    if (this.mutedFor(entry)) {
+      this.wanted.add(id)
+      return false
+    }
     if (this.suspended || this.loops.has(id)) return this.loops.has(id)
 
     const buffer = this.buffers.get(id)
@@ -369,44 +396,53 @@ export class AudioSystem {
   }
 
   /**
-   * Turns the music and ambience mixers on or off.
+   * Turns the music mixer on or off, which is the menu music and nothing else.
    *
    * The gain alone is enough, and doing it that way rather than stopping the sources is the
-   * whole point: `stop()` takes every loop with it, ambience included, so muting music used
-   * to silence the fire as well, and turning it back on left both silent for good. Taking
-   * the mixer to zero mutes what is already playing and unmuting brings the very same
-   * sources back, still in phase and still where they were.
+   * whole point: `stop()` takes every loop with it, so muting used to silence the fire as
+   * well, and turning it back on left both silent for good. Taking the mixer to zero mutes
+   * what is already playing and unmuting brings the very same sources back, still in phase
+   * and still where they were.
    *
-   * That is also why the two mixers share one flag -- turning music off is meant to take the
-   * menu ambience with it, which the gain does without touching a single source.
+   * The fire and the menu ambience are not touched here. They belong to the FX switch, which
+   * is what a player reaches for when they want a silent campfire.
    */
   setMusicEnabled(on: boolean): void {
     this.musicEnabled = on
     this.applyGains()
-    // A repeating clip is not affected by the mixer, because each firing is a fresh one-shot
-    // and the mixer only scales what is already connected -- so with the gate on `play` alone
-    // the ambience would keep firing silently forever. Park the timers instead, and restart
-    // them on the way back so turning music off and on does not shorten the loop.
-    if (!on) {
-      for (const [key, timer] of [...this.repeating]) {
-        clearTimeout(timer)
-        this.repeating.delete(key)
-        // Remembered rather than dropped: `wanted` is what the game asked for, and it is the
-        // only place that survives the mute. Losing it here would mean unmuting could not
-        // bring the ambience back.
-        this.wanted.add(key)
-      }
-    } else {
-      for (const key of this.wanted) {
-        const entry = this.byId.get(key)
-        if (entry?.every && !this.repeating.has(key)) this.arm(key, entry)
-      }
+    if (on && !this.suspended) {
+      // Same reason as the FX switch: a menu entered with music already off has to pick its
+      // music up when the player switches it on.
+      for (const id of [...this.wanted]) this.start(id)
     }
   }
 
+  /**
+   * Turns the effects on or off: sound effects and the ambience bed together.
+   *
+   * The repeating clips are the awkward part. A looping clip is scaled by the mixer, but a
+   * repeating clip fires a fresh one-shot each time, and the mixer only scales what is
+   * already connected -- so the gate in `play` alone would leave it firing silently, forever,
+   * at a steady rate. Their timers are parked instead, and restarted on the way back from
+   * `wanted`, so FX off and on again does not shorten the loop or lose the ambience for good.
+   */
   setSfxEnabled(on: boolean): void {
     this.sfxEnabled = on
     this.applyGains()
+    if (!on) {
+      // A repeating clip's one-shots are unaffected by the mixer, since the mixer only scales
+      // what is already connected. Park their timers rather than leaving them firing silently
+      // at a steady rate forever.
+      for (const [key, timer] of [...this.repeating]) {
+        clearTimeout(timer)
+        this.repeating.delete(key)
+        this.wanted.add(key)
+      }
+    } else if (!this.suspended) {
+      // Replay through start(), which already knows the difference between a loop and a
+      // repeating clip, rather than re-deciding it here.
+      for (const id of [...this.wanted]) this.start(id)
+    }
   }
 
   isMusicEnabled(): boolean { return this.musicEnabled }
@@ -441,7 +477,11 @@ export class AudioSystem {
   private applyGains(): void {
     if (!this.gains) return
     this.gains.music.gain.value = this.musicEnabled ? 1 : 0
-    this.gains.ambience.gain.value = this.musicEnabled ? 1 : 0
+    // Ambience rides the FX switch, not the music one. The fire and the menu ambience are
+    // effects on the scene, and a player who turns effects off does not expect to still be
+    // listening to a crackling fire. Keeping this a separate node rather than routing
+    // ambience into the sfx node is what lets it carry its own per-category volume.
+    this.gains.ambience.gain.value = this.sfxEnabled ? 1 : 0
     this.gains.sfx.gain.value = this.sfxEnabled ? 1 : 0
   }
 
