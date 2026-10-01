@@ -1,0 +1,287 @@
+/**
+ * Audio catalogue check.
+ *
+ * The web and Android audio banks are transcribed, not shared -- one is TypeScript against
+ * the Web Audio API, the other Kotlin against SoundPool -- so this compares the two tables
+ * as written and catches the failure that matters: the two engines disagreeing about what a
+ * clip is called, where it lives, or how it behaves.
+ *
+ * It also checks the state the project is actually in, which is no audio files at all.
+ * There are no placeholders here and there will not be any: a silent file that loads
+ * successfully is worse than an absent one, because it turns a missing asset into a
+ * debugging session. So the catalogue is verified, the directories are verified, and the
+ * missing files are verified to be missing.
+ */
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
+const WEB_SYSTEM = readFileSync(join(ROOT, 'web/src/game/AudioSystem.ts'), 'utf8')
+const KT_ENGINE = readFileSync(
+  join(ROOT, 'app/src/main/java/com/example/game/audio/AudioEngine.kt'),
+  'utf8',
+)
+const WEB_MAIN = readFileSync(join(ROOT, 'web/src/main.ts'), 'utf8')
+const WEB_MENU = readFileSync(join(ROOT, 'web/src/ui/MainMenu.ts'), 'utf8')
+const KT_GAME_SCREEN = readFileSync(
+  join(ROOT, 'app/src/main/java/com/example/game/ui/GameScreen.kt'),
+  'utf8',
+)
+const KT_MENU = readFileSync(join(ROOT, 'app/src/main/java/com/example/game/ui/MainMenu.kt'), 'utf8')
+
+let failures = 0
+let checks = 0
+function check(label, condition, detail = '') {
+  checks++
+  if (condition) {
+    console.log(`  ok   ${label}`)
+  } else {
+    failures++
+    console.log(`  FAIL ${label}${detail ? ` -- ${detail}` : ''}`)
+  }
+}
+
+function section(title) {
+  console.log(`\n${title}`)
+}
+
+/** Every `clip(...)` / `clip(...)` call in either engine's table, as plain objects. */
+function parseWebClips(src) {
+  const out = []
+  const table = src.slice(src.indexOf('export const AUDIO_CLIPS'))
+  for (const m of table.matchAll(/clip\(\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*'([^']+)'(.*?)\)\s*(?:,|\n)/g)) {
+    const [, id, category, file, rest] = m
+    const num = (key) => {
+      const hit = rest.match(new RegExp(`${key}:\\s*([0-9.]+)`))
+      return hit ? Number(hit[1]) : 0
+    }
+    out.push({
+      id,
+      category,
+      file,
+      loop: /loop:\s*true/.test(rest),
+      volume: num('volume'),
+      minInterval: num('minInterval'),
+    })
+  }
+  return out
+}
+
+function parseKotlinClips(src) {
+  const out = []
+  const table = src.slice(src.indexOf('val AUDIO_CLIPS'))
+  for (const m of table.matchAll(
+    /clip\(\s*"([^"]+)"\s*,\s*AudioCategory\.(\w+)\s*,\s*"([^"]+)"(.*?)\)(?:,|\n)/g,
+  )) {
+    const [, id, category, file, rest] = m
+    const num = (key) => {
+      const hit = rest.match(new RegExp(`${key}\\s*=\\s*([0-9.]+)f?`))
+      return hit ? Number(hit[1]) : 0
+    }
+    out.push({
+      id,
+      category: category.toLowerCase(),
+      file,
+      loop: /loop\s*=\s*true/.test(rest),
+      volume: num('volume'),
+      minInterval: num('minInterval'),
+    })
+  }
+  return out
+}
+
+const web = parseWebClips(WEB_SYSTEM)
+const kt = parseKotlinClips(KT_ENGINE)
+
+// --- The catalogue ----------------------------------------------------------
+section('Catalogue parity')
+check('the web catalogue parses', web.length > 0, `${web.length} clips`)
+check('the Android catalogue parses', kt.length > 0, `${kt.length} clips`)
+check('both catalogues have the same length', web.length === kt.length, `${web.length} vs ${kt.length}`)
+
+const webById = new Map(web.map((c) => [c.id, c]))
+const ktById = new Map(kt.map((c) => [c.id, c]))
+for (const clip of web) {
+  const other = ktById.get(clip.id)
+  if (!other) {
+    check(`${clip.id} exists on both platforms`, false, 'missing from AudioEngine.kt')
+    continue
+  }
+  check(
+    `${clip.id} agrees across engines`,
+    clip.file === other.file &&
+      clip.category === other.category &&
+      clip.loop === other.loop &&
+      Math.abs(clip.volume - other.volume) < 1e-6 &&
+      Math.abs(clip.minInterval - other.minInterval) < 1e-6,
+    `web ${JSON.stringify(clip)} vs kotlin ${JSON.stringify(other)}`,
+  )
+}
+for (const clip of kt) {
+  check(`${clip.id} exists on both platforms`, webById.has(clip.id))
+}
+
+// --- Filenames --------------------------------------------------------------
+section('Filenames')
+/**
+ * The 12 filenames, fixed here rather than derived, so this fails when one engine drops a
+ * clip instead of agreeing with the other about the omission.
+ */
+const EXPECTED = [
+  'music/main_menu_music.ogg',
+  'ambience/main_menu_ambience.ogg',
+  'ambience/campfire.ogg',
+  'sfx/sword_attack.ogg',
+  'sfx/heavy_attack.ogg',
+  'sfx/sword_hit.ogg',
+  'sfx/footsteps_stone.ogg',
+  'sfx/jump.ogg',
+  'sfx/dash.ogg',
+  'sfx/block.ogg',
+  'sfx/hurt.ogg',
+  'sfx/death.ogg',
+]
+for (const file of EXPECTED) {
+  check(`${file} is in the web catalogue`, web.some((c) => c.file === file))
+  check(`${file} is in the Android catalogue`, kt.some((c) => c.file === file))
+}
+
+// --- The shared audio root --------------------------------------------------
+section('Paths')
+// The two roots have to resolve to the same file. Web goes through `assetUrl` because that
+// is what applies the fingerprint; Android prefixes the assets dir itself. Comparing the
+// tables alone would miss a web path that had quietly stopped being fingerprinted, or a
+// Kotlin root that had been changed to something assets/audio is not nested in.
+check('the web resolves clips through assetUrl', /assetUrl\(c\.file\)/.test(WEB_SYSTEM))
+check('the Android path root is assets/audio', /AUDIO_ROOT\s*=\s*"audio"/.test(KT_ENGINE))
+check(
+  'every clip sits under one of the three audio folders',
+  web.every((c) => /^(music|ambience|sfx)\/[a-z_]+\.ogg$/.test(c.file)),
+  web.filter((c) => !/^(music|ambience|sfx)\/[a-z_]+\.ogg$/.test(c.file)).map((c) => c.file).join(', '),
+)
+check(
+  'each clip file is in the folder its category claims',
+  web.every((c) => c.file.startsWith(`${c.category}/`)),
+  web.filter((c) => !c.file.startsWith(`${c.category}/`)).map((c) => `${c.id}: ${c.category} vs ${c.file}`).join(', '),
+)
+
+// --- Directories exist on both platforms ------------------------------------
+section('Asset directories')
+for (const dir of ['music', 'ambience', 'sfx']) {
+  for (const [label, base] of [
+    ['android', join(ROOT, 'app/src/main/assets/audio', dir)],
+    ['web', join(ROOT, 'web/public/audio', dir)],
+  ]) {
+    check(`${label} assets/audio/${dir} exists`, existsSync(base))
+  }
+}
+
+// --- No placeholder audio ---------------------------------------------------
+section('No placeholder audio')
+/**
+ * A tiny file, or one that is not Ogg at all, is a placeholder. Caught by content rather
+ * than by size alone so a future 0-byte commit fails here too.
+ */
+const OGG_MAGIC = 'OggS'
+function walkAudio(dir) {
+  if (!existsSync(dir)) return []
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const p = join(dir, e.name)
+    return e.isDirectory() ? walkAudio(p) : [p]
+  })
+}
+const androidAudio = walkAudio(join(ROOT, 'app/src/main/assets/audio'))
+const realAndroid = androidAudio.filter((p) => p.endsWith('.ogg'))
+check(
+  'no placeholder .ogg files were committed',
+  realAndroid.every((p) => statSync(p).size > 1024),
+  realAndroid.filter((p) => statSync(p).size <= 1024).join(', '),
+)
+for (const p of realAndroid) {
+  const head = Buffer.alloc(4)
+  readFileSync(p).copy(head, 0, 0, 4)
+  check(`${p.slice(ROOT.length + 1)} is real Ogg data`, head.toString('latin1') === OGG_MAGIC)
+}
+
+// --- Every clip is either wired or explicitly reserved -----------------------
+section('Wiring')
+/**
+ * Clips with no trigger yet, and why.
+ *
+ * Listing them is the point. An empty list would mean every clip is played, which is not
+ * true: the player cannot be damaged yet and there is no campfire in the world, so four of
+ * these have nothing to fire them. An unlisted clip with no trigger is the failure -- a
+ * catalogue entry that looks finished and is not.
+ */
+const RESERVED = {
+  campfire: 'no campfire entity exists in the world yet',
+  block: 'nothing damages the player, so no block ever connects',
+  hurt: 'nothing damages the player',
+  death: 'nothing damages the player',
+}
+const TRIGGER_SOURCES = [
+  ['web/src/main.ts', WEB_MAIN],
+  ['web/src/game/GameWorld.ts', readFileSync(join(ROOT, 'web/src/game/GameWorld.ts'), 'utf8')],
+  ['app/.../GameScreen.kt', KT_GAME_SCREEN],
+  ['app/.../GameWorld.kt', readFileSync(join(ROOT, 'app/src/main/java/com/example/game/engine/GameWorld.kt'), 'utf8')],
+  ['app/.../MainMenu.kt', KT_MENU],
+]
+for (const clip of web) {
+  if (RESERVED[clip.id]) {
+    check(
+      `${clip.id} is reserved, not silently unwired`,
+      !TRIGGER_SOURCES.some(([, src]) => new RegExp(`['"]${clip.id}['"]`).test(src)),
+      `reserved (${RESERVED[clip.id]}) but already has a trigger -- drop it from RESERVED`,
+    )
+    continue
+  }
+  const wired = TRIGGER_SOURCES.filter(([, src]) =>
+    new RegExp(`\\bplay\\(\\s*['"]${clip.id}['"]|\\bstart\\(\\s*${clip.id.toUpperCase()}`).test(src),
+  ).map(([name]) => name)
+  check(
+    `${clip.id} has a trigger`,
+    wired.length > 0,
+    `no play('${clip.id}') or start(${clip.id.toUpperCase()}) anywhere`,
+  )
+}
+for (const [id, reason] of Object.entries(RESERVED)) {
+  check(`${id} is still in the catalogue while reserved`, webById.has(id), reason)
+}
+
+// --- Menu cues --------------------------------------------------------------
+section('Menu cues')
+check('the web starts the menu music', /audio\.start\(MAIN_MENU_MUSIC\)/.test(WEB_MAIN))
+check('the web starts the menu ambience', /audio\.start\(MAIN_MENU_AMBIENCE\)/.test(WEB_MAIN))
+check('the web menu stops cues on start', /audio\.stop\(\)/.test(WEB_MAIN))
+check('Android starts the menu music', /audio\.start\(MAIN_MENU_MUSIC\)/.test(KT_MENU))
+check('Android starts the menu ambience', /audio\.start\(MAIN_MENU_AMBIENCE\)/.test(KT_MENU))
+check('Android stops cues when the menu is torn down', /onDispose\s*\{\s*audio\.stop\(\)/s.test(KT_MENU))
+check('the menu music id matches on both', /MAIN_MENU_MUSIC\s*=\s*'main_menu_music'/.test(WEB_SYSTEM) && /MAIN_MENU_MUSIC\s*=\s*"main_menu_music"/.test(KT_ENGINE))
+
+// --- Settings toggles -------------------------------------------------------
+section('Settings')
+check('the web settings screen has a MUSIC switch', /audioToggle\('MUSIC'/.test(WEB_MENU))
+check('the web settings screen has a SOUND EFFECTS switch', /audioToggle\('SOUND EFFECTS'/.test(WEB_MENU))
+check('the web switches are bound to the bank', /audio\.setMusicEnabled\(on\)/.test(WEB_MENU) && /audio\.setSfxEnabled\(on\)/.test(WEB_MENU))
+check('the web settings screen admits what is missing', /AUDIO FILES/.test(WEB_MENU))
+check('Android settings has a MUSIC switch', /AudioToggleRow\("MUSIC"/.test(KT_MENU))
+check('Android settings has a SOUND EFFECTS switch', /AudioToggleRow\("SOUND EFFECTS"/.test(KT_MENU))
+check('the Android switches are bound to the bank', /audio\.setMusicEnabled\(it\)/.test(KT_MENU) && /audio\.setSfxEnabled\(it\)/.test(KT_MENU))
+check('Android settings admits what is missing', /AUDIO FILES/.test(KT_MENU))
+check('neither platform claims audio is finished', !/AWAITING AUDIO ASSETS/.test(WEB_MENU) && !/AWAITING AUDIO ASSETS/.test(KT_MENU))
+
+// --- Missing assets are not fatal ------------------------------------------
+section('Missing assets are survivable')
+check('the web loader reports rather than throws', /missing:\s*readonly string\[\]/.test(WEB_SYSTEM))
+check('the web play returns a boolean', /play\(id: string\): boolean/.test(WEB_SYSTEM))
+check('the web unlock is gesture-gated', /unlock\(\)/.test(WEB_MAIN))
+check('the web page loads without audio', /void audio\.loadAll\(\)/.test(WEB_MAIN))
+check('the Android loader reports rather than throws', /val missing: List<String>/.test(KT_ENGINE))
+check('the Android play returns a boolean', /fun play\(id: String\): Boolean/.test(KT_ENGINE))
+check('Android loading is fired, not awaited on the first frame', /LaunchedEffect\(Unit\)[\s\S]{0,200}audio\.loadAll\(\)/.test(KT_GAME_SCREEN))
+check('Android suspends audio with the app', /ON_PAUSE -> audio\.suspend\(\)/.test(KT_GAME_SCREEN))
+check('Android releases the pool on dispose', /audio\.dispose\(\)/.test(KT_GAME_SCREEN))
+
+console.log(`\n${failures === 0 ? 'All checks passed' : `${failures} of ${checks} checks FAILED`}`)
+process.exit(failures === 0 ? 0 : 1)

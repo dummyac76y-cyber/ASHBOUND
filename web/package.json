@@ -22,6 +22,7 @@
     "verify:attack": "node scripts/verify-attack.mjs",
     "verify:parity": "node scripts/verify-parity.mjs",
     "verify:main-menu": "node scripts/verify-main-menu.mjs",
+    "verify:audio": "node scripts/verify-audio.mjs",
     "test": "esbuild src/game/logic.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/logic.test.mjs --log-level=error && node node_modules/.cache/logic.test.mjs"
   },
   "devDependencies": {

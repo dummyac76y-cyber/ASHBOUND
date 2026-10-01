@@ -1,4 +1,5 @@
 import { assetUrl } from '../assetUrl'
+import { AUDIO_CLIPS, type AudioSystem } from '../game/AudioSystem'
 
 /**
  * The Ashbound main menu.
@@ -286,6 +287,8 @@ export const FORBIDDEN_ENTRIES: readonly string[] = ['DUEL ONLINE', 'PRACTICE', 
 export interface MainMenuHandlers {
   /** START GAME. Called once; the caller is expected to tear the menu down. */
   onStart: () => void
+  /** The audio bank, so SETTINGS can offer real switches rather than placeholders. */
+  audio: AudioSystem
   /**
    * QUIT.
    *
@@ -338,7 +341,11 @@ export class MainMenu {
   private readonly fullscreenValue: HTMLSpanElement
   private screen: MenuScreen = 'main'
 
+  /** The audio bank, kept so the settings screen can bind to it. See `audioToggle`. */
+  private readonly audio: AudioSystem
+
   constructor(handlers: MainMenuHandlers) {
+    this.audio = handlers.audio
     this.backdrop = new Image()
     this.backdrop.className = 'main-menu-backdrop'
     this.backdrop.alt = ''
@@ -602,10 +609,23 @@ export class MainMenu {
     screen.append(el('h2', 'menu-heading', 'SETTINGS'))
 
     const rows = el('div', 'menu-rows')
-    // Music and sound are disabled rather than absent, so the screen reads as a
-    // settings screen that is not finished yet instead of an empty box.
-    rows.append(this.settingRow('MUSIC', 'AWAITING AUDIO ASSETS', true))
-    rows.append(this.settingRow('SOUND EFFECTS', 'AWAITING AUDIO ASSETS', true))
+    // Real switches, not placeholders. They are live with no audio files present: a player
+    // who turns sound off before the assets are added should find it still off afterwards,
+    // and a switch that cannot be pressed is worse than one that changes nothing yet.
+    rows.append(this.audioToggle('MUSIC', () => this.audio.isMusicEnabled(), (on) => this.audio.setMusicEnabled(on)))
+    rows.append(this.audioToggle('SOUND EFFECTS', () => this.audio.isSfxEnabled(), (on) => this.audio.setSfxEnabled(on)))
+    // Said plainly, because a switch reading ON while nothing can be heard is a small lie
+    // and the whole screen would otherwise look finished.
+    const found = this.audio.inventory()
+    if (found.loaded.length < AUDIO_CLIPS.length) {
+      rows.append(
+        this.settingRow(
+          'AUDIO FILES',
+          found.loaded.length === 0 ? 'NONE INSTALLED YET' : `${found.loaded.length} OF ${AUDIO_CLIPS.length} PRESENT`,
+          true,
+        ),
+      )
+    }
 
     const fullscreen = el('button', 'menu-setting')
     fullscreen.type = 'button'
@@ -645,6 +665,34 @@ export class MainMenu {
     button.dataset.testid = 'main_menu_back'
     button.addEventListener('click', () => this.show('main'))
     return button
+  }
+
+  /**
+   * An on/off switch bound to a piece of the audio bank.
+   *
+   * Painted from the system's own state on every click rather than from a local boolean, so
+   * the label cannot drift from what the mixer is actually doing -- including if something
+   * else changed it.
+   */
+  private audioToggle(
+    label: string,
+    isOn: () => boolean,
+    setOn: (on: boolean) => void,
+  ): HTMLElement {
+    const row = el('button', 'menu-setting')
+    row.type = 'button'
+    row.dataset.testid = `main_menu_${label.toLowerCase().replace(/\s+/g, '_')}`
+    const value = el('span', 'menu-setting-value')
+    const paint = (): void => {
+      value.textContent = isOn() ? 'ON' : 'OFF'
+    }
+    paint()
+    row.append(el('span', 'menu-setting-label', label), value)
+    row.addEventListener('click', () => {
+      setOn(!isOn())
+      paint()
+    })
+    return row
   }
 
   private settingRow(label: string, value: string, disabled: boolean): HTMLElement {

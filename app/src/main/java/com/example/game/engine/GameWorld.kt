@@ -18,6 +18,7 @@ import com.example.game.controller.PlayerController
 import com.example.game.model.DamageText
 import com.example.game.model.SparkParticle
 import com.example.game.model.Npc
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.random.Random
@@ -311,6 +312,29 @@ class GameWorld(val context: Context) {
         cameraX = cameraXForPlayerX(player.x)
     }
 
+    /**
+     * Things that happened, for anything that is not the simulation -- sound, above all.
+     *
+     * A callback list rather than an audio dependency on purpose. The world is the only thing
+     * that knows when an attack actually connected, and reaching for an [AudioEngine] in here
+     * would make the simulation depend on a file that may not exist. Both fields are nullable
+     * and the world fires unconditionally, so with nothing listening the cost is a compare.
+     *
+     * Only what the game currently produces. `onHurt` and `onDeath` are deliberately absent:
+     * the player cannot be damaged yet, and inventing a hook for damage that does not exist
+     * would be a way to forget that it does not.
+     */
+
+    /** An attack connected with an NPC. */
+    var onSwordHit: ((isHeavy: Boolean) -> Unit)? = null
+
+    /** The player has walked far enough for another step. */
+    var onFootstep: (() -> Unit)? = null
+
+    /** Distance walked between footstep cues. Tuned to roughly one step per stride. */
+    private val footstepDistance = 26f
+    private var footstepAccumulator = 0f
+
     fun update(dt: Float) {
         val clampedDt = dt.coerceIn(0.001f, 0.05f)
 
@@ -336,6 +360,8 @@ class GameWorld(val context: Context) {
         if (player.shouldCheckHeavyAttackHit()) {
             performAttackHitCheck(damage = 45, isHeavy = true)
         }
+
+        advanceFootsteps(clampedDt)
 
         // Update the scene's NPCs
         for (npc in npcs) {
@@ -427,11 +453,36 @@ class GameWorld(val context: Context) {
         SceneTransitionPhase.IDLE -> 0f
     }
 
+    /**
+     * Fires a footstep every so far walked.
+     *
+     * Distance-based rather than time-based, so the cadence follows the player instead of the
+     * frame rate: a time-based timer drifts with the simulation clamp and sounds wrong the
+     * moment the app is throttled. Only on the ground and only while actually walking, so a
+     * jump or a mid-air dash is silent.
+     */
+    private fun advanceFootsteps(dt: Float) {
+        val walking = player.isGrounded && player.movementInput != 0f && !player.isDashing
+        if (!walking) {
+            // Reset rather than accumulate: a player who stops mid-stride starts the next
+            // one clean.
+            footstepAccumulator = 0f
+            return
+        }
+        footstepAccumulator += abs(player.vx) * dt
+        if (footstepAccumulator < footstepDistance) return
+        footstepAccumulator = 0f
+        onFootstep?.invoke()
+    }
+
     private fun performAttackHitCheck(damage: Int, isHeavy: Boolean) {
         val atkBox = player.attackHitbox
         for (npc in npcs) {
             if (RectF.intersects(atkBox, npc.hitbox)) {
-                npc.takeDamage(damage)
+                // The sound is fired only for an attack that connected, not for every swing:
+                // the audio bank already rate-limits repeats, but that is a safety net, not
+                // a plan.
+                if (npc.takeDamage(damage)) onSwordHit?.invoke(isHeavy)
 
                 // Spawn floating damage text
                 val dColor = if (isHeavy) Color.rgb(255, 180, 50) else Color.rgb(240, 240, 255)

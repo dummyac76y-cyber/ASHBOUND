@@ -1,4 +1,10 @@
 import { assetUrl } from './assetUrl'
+import {
+  AUDIO_CLIPS,
+  AudioSystem,
+  MAIN_MENU_AMBIENCE,
+  MAIN_MENU_MUSIC,
+} from './game/AudioSystem'
 import { GameWorld } from './game/GameWorld'
 import { NPC_IDLE_WALK_SHEET } from './game/npcAssets'
 import type { PlayerAction } from './game/PlayerAction'
@@ -71,6 +77,30 @@ async function boot(): Promise<void> {
 
   const animations = new SpriteAnimationSystem(SPRITE_BASE)
 
+  // --- Audio -----------------------------------------------------------------
+  //
+  // Optional in the strongest sense: the game starts, plays and is perfectly playable with
+  // no audio file present at all, which is the state the project is in right now. Every clip
+  // 404s, every call into the bank is a no-op that reports false, and nothing above this
+  // line has to know whether sound came out.
+  const audio = new AudioSystem()
+  //
+  // A browser will not let an AudioContext make noise until the page has been interacted
+  // with, and it refuses silently. `unlock` is wired to the first gesture of any kind and
+  // is safe to call on every gesture until the context reports itself running, so a player
+  // who never clicks anything but uses the keyboard still gets sound.
+  for (const event of ['pointerdown', 'keydown', 'touchstart'] as const) {
+    window.addEventListener(event, () => audio.unlock(), { passive: true })
+  }
+  // Loaded, not awaited before the menu is built: decoding is fast but the menu is not
+  // blocked on it, and an absent file resolves rather than rejects.
+  void audio.loadAll().then((found) => {
+    console.info(
+      `[AudioSystem] ${found.loaded.length}/${AUDIO_CLIPS.length} clips loaded` +
+        (found.missing.length ? `, waiting on ${found.missing.length} missing file(s)` : ''),
+    )
+  })
+
   // Every scene's backdrop is decoded up front so a handover never has to wait on
   // the network: the fade covers the swap, and a missing plate would otherwise show
   // as a flash of the fallback fill.
@@ -86,6 +116,14 @@ async function boot(): Promise<void> {
   }
 
   const world = new GameWorld(animations, backdrops)
+  // The world reports what happened; the audio bank decides what that sounds like. Wiring it
+  // here rather than inside GameWorld keeps the simulation free of a dependency on sound --
+  // which matters, because sound is the one part of this that is allowed to be absent.
+  // One clip for both a light and a heavy connect: a near-duplicate pair differing by a few
+  // percent is not worth an asset, and the bank's replay interval stops a heavy from cutting
+  // off the light hit that landed a moment before it.
+  world.events.onSwordHit = () => audio.play('sword_hit')
+  world.events.onFootstep = () => audio.play('footsteps_stone')
 
   // Sheets must be decoded before the first update(), otherwise frame 0 is skipped.
   await animations.reloadAll()
@@ -103,13 +141,24 @@ async function boot(): Promise<void> {
     () => world.respawn(),
   )
 
+  // Sound is played from the same `boolean` the action returns, so an input that the state
+  // machine refuses -- a dash with no stamina left, an attack mid-swing -- stays silent
+  // instead of playing a sound for something that did not happen.
   const controls = new VirtualControls({
     onMove: (h) => world.player.setMovementInput(h),
-    onAttack: () => void world.player.onAttack(),
-    onHeavyAttack: () => void world.player.onHeavyAttack(),
+    onAttack: () => {
+      if (world.player.onAttack()) audio.play('sword_attack')
+    },
+    onHeavyAttack: () => {
+      if (world.player.onHeavyAttack()) audio.play('heavy_attack')
+    },
     onBlockChange: (b) => world.player.setBlockActive(b),
-    onDash: () => void world.player.onDash(),
-    onJump: () => void world.player.onJump(),
+    onDash: () => {
+      if (world.player.onDash()) audio.play('dash')
+    },
+    onJump: () => {
+      if (world.player.onJump()) audio.play('jump')
+    },
   })
 
   let inspector: AnimationInspectorDialog | null = null
@@ -153,6 +202,14 @@ async function boot(): Promise<void> {
     hud.root.hidden = !started
     controls.root.hidden = !started
     keyHintsEl.hidden = !started
+    // The menu has its own cues and they are mutually exclusive with the game's: leaving a
+    // title track playing under the first walk of a new game is worse than no music at all.
+    audio.unlock()
+    if (next) audio.stop()
+    else {
+      audio.start(MAIN_MENU_MUSIC)
+      audio.start(MAIN_MENU_AMBIENCE)
+    }
   }
   setStarted(started)
 
@@ -162,6 +219,7 @@ async function boot(): Promise<void> {
   if (showMenu) {
     const menu = new MainMenu({
       onStart: () => setStarted(true),
+      audio,
       // A browser tab cannot close itself: `window.close` is ignored on a page that did
       // not open it. So web QUIT returns to the title rather than offering a button that
       // silently does nothing. Android really does exit, in GameScreen.
@@ -241,9 +299,21 @@ async function boot(): Promise<void> {
   requestAnimationFrame(tick)
 
   // Pause the simulation when the tab is hidden so returning does not
-  // fast-forward the player across the arena.
+  // fast-forward the player across the arena. Audio is suspended with it: a looping track
+  // left running behind another tab is the sort of thing that makes people close the window,
+  // and a cue that fires while hidden should be dropped rather than queued up to all go off
+  // at once the moment they come back.
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) lastFrameTime = 0
+    if (document.hidden) audio.suspend()
+    else {
+      audio.resume()
+      lastFrameTime = 0
+      // Re-assert whichever cues the current screen wants, since suspension drops them.
+      if (!started) {
+        audio.start(MAIN_MENU_MUSIC)
+        audio.start(MAIN_MENU_AMBIENCE)
+      }
+    }
   })
 
   // Test hook, opt-in via ?debug=1. It lets the headless verification harness put
@@ -255,6 +325,8 @@ async function boot(): Promise<void> {
       __game: {
         world,
         animations,
+        audio,
+        AudioSystem,
         GameWorld,
         /**
          * Freezes the simulation while still drawing. Needed because update() would

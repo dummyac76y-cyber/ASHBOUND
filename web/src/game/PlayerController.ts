@@ -51,6 +51,16 @@ export class PlayerController {
   private readonly dashDuration = 0.22
 
   // Internal state timers
+  /** True while a dash is in progress. Read by the footstep cue to keep a dash silent. */
+  get isDashing(): boolean {
+    return this.dashTimer > 0
+  }
+
+  /** The horizontal movement the player is asking for, -1..1. Read by the footstep cue. */
+  get movementInput(): number {
+    return this.inputMoveX
+  }
+
   private dashTimer = 0
   /** Attacks whose hit window has already fired, so one swing hits at most once. */
   private readonly hitWindowConsumed = new Set<PlayerAction>()

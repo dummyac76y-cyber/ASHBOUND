@@ -720,8 +720,61 @@ console.log('\n3. the four menu entries, and what each one does')
   if (settings) {
     check('it has settings rows', settings.rows.length >= 2, settings.names.join(', '))
     const disabled = settings.rows.filter((r) => r.disabled).map((r) => r.label)
-    check('controls with nothing behind them are shown disabled rather than pretending to work', disabled.length >= 2, disabled.join(', ') || 'none')
+    // The audio rows are real switches, so the invariant is no longer "two rows are dimmed":
+    // it is that nothing is presented as a working toggle while having nothing behind it,
+    // and that what is missing is said out loud. FULLSCREEN is still a disabled row, because
+    // the web build is already edge-to-edge and a switch there could change nothing.
+    const audioRows = settings.rows.filter((r) => r.label === 'MUSIC' || r.label === 'SOUND EFFECTS')
+    check(
+      'the audio rows are live switches rather than disabled decoration',
+      audioRows.length === 2 && audioRows.every((r) => r.isButton && !r.disabled),
+      settings.names.join(', '),
+    )
+    check(
+      'what is missing is stated rather than left implied',
+      settings.names.some((n) => /AUDIO FILES/.test(n)),
+      settings.names.join(', '),
+    )
+    check(
+      'the informational row is disabled rather than clickable',
+      disabled.includes('AUDIO FILES'),
+      disabled.join(', ') || 'none',
+    )
     check('fullscreen is offered as a live control', settings.fullscreenLive, 'fullscreen enabled')
+
+    // The switches have to actually reach the bank, not just look live.
+    const audioToggles = await page.evaluate(() => {
+      const read = (label) => {
+        const row = [...document.querySelectorAll('[data-testid="main_menu_screen_settings"] .menu-setting')].find(
+          (n) => n.querySelector('.menu-setting-label')?.textContent.trim() === label,
+        )
+        return row?.querySelector('.menu-setting-value')?.textContent.trim() ?? null
+      }
+      return { musicBefore: read('MUSIC'), sfxBefore: read('SOUND EFFECTS') }
+    })
+    await page.click('[data-testid="main_menu_music"]')
+    const musicAfter = await page.evaluate(
+      () =>
+        [...document.querySelectorAll('[data-testid="main_menu_screen_settings"] .menu-setting')]
+          .find((n) => n.querySelector('.menu-setting-label')?.textContent.trim() === 'MUSIC')
+          ?.querySelector('.menu-setting-value')
+          ?.textContent.trim() ?? null,
+    )
+    check(
+      'the music switch flips and the label follows it',
+      audioToggles.musicBefore === 'ON' && audioToggles.sfxBefore === 'ON' && musicAfter === 'OFF',
+      `${audioToggles.musicBefore}/${audioToggles.sfxBefore} -> ${musicAfter}`,
+    )
+    // Toggled back, so the switch is a toggle rather than a one-way trip.
+    await page.click('[data-testid="main_menu_music"]')
+    const musicRestored = await page.evaluate(
+      () =>
+        [...document.querySelectorAll('[data-testid="main_menu_screen_settings"] .menu-setting')]
+          .find((n) => n.querySelector('.menu-setting-label')?.textContent.trim() === 'MUSIC')
+          ?.querySelector('.menu-setting-value')
+          ?.textContent.trim() ?? null,
+    )
+    check('the music switch toggles back', musicRestored === 'ON', String(musicRestored))
   }
   await page.click('.menu-panel:not([hidden]) [data-testid="main_menu_back"]')
 

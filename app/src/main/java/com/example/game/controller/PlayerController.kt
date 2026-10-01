@@ -40,6 +40,14 @@ class PlayerController(
     private val dashDuration: Float = 0.22f
 
     // Internal state timers
+    /** True while a dash is in progress. Read by the footstep cue to keep a dash silent. */
+    val isDashing: Boolean
+        get() = dashTimer > 0f
+
+    /** The horizontal movement the player is asking for, -1..1. Read by the footstep cue. */
+    val movementInput: Float
+        get() = inputMoveX
+
     private var dashTimer: Float = 0f
 
     /** Attacks whose hit window has already fired, so one swing hits at most once. */

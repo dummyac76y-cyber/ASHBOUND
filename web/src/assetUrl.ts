@@ -27,3 +27,21 @@ export function assetUrl(path: string): string {
   const url = `${BASE}${rel}`
   return version ? `${url}?v=${version}` : url
 }
+
+/**
+ * Whether a public asset was actually installed, decided from the fingerprint manifest
+ * rather than by asking the server.
+ *
+ * The manifest is written by scripts/sync-assets.mjs from the files that exist, so a path
+ * absent from it is a path that would 404. That matters for anything optional: the audio
+ * bank is catalogued in full while most of its files are not present yet, and fetching each
+ * one to discover that turns twelve absent sounds into twelve 404s on every page load --
+ * noise in the console, and a hole in the verify-main-menu harness that asserts a clean
+ * request log.
+ *
+ * Only trustworthy for files that sync-assets.mjs copies, which is every asset in this
+ * project. Anything else should fall back to requesting it and handling the failure.
+ */
+export function hasAsset(path: string): boolean {
+  return Object.hasOwn(FINGERPRINTS, `./${path.replace(/^\//, '')}`)
+}

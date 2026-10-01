@@ -1,0 +1,1 @@
+Empty on purpose. The .ogg files for this folder are added by hand; see the audio catalogue in web/src/game/AudioSystem.ts and app/src/main/java/com/example/game/audio/AudioEngine.kt. Not an audio file, and nothing reads it.

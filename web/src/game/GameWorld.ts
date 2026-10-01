@@ -18,6 +18,20 @@ import { PlayerController, rectsIntersect } from './PlayerController'
 import type { SpriteAnimationSystem } from './SpriteAnimationSystem'
 import { DEFAULT_FOOT_ROW, footOffsetForRow } from './spriteMetrics'
 
+/**
+ * Callbacks for things the simulation saw happen.
+ *
+ * Only what the game currently produces. `onHurt` and `onDeath` are deliberately absent: the
+ * player cannot be damaged yet, and inventing a hook for damage that does not exist would be
+ * a way to forget that it does not.
+ */
+export interface GameEvents {
+  /** An attack connected with an NPC. */
+  onSwordHit?: (isHeavy: boolean) => void
+  /** The player has walked far enough for another step. */
+  onFootstep?: () => void
+}
+
 /** A decoded image plus its intrinsic size, needed for 9-argument drawImage. */
 export interface LoadedImage {
   image: CanvasImageSource
@@ -259,6 +273,21 @@ export class GameWorld {
     this.cameraX = this.cameraXForPlayerX(this.player.x)
   }
 
+  /**
+   * Things that happened, for anything that is not the simulation -- sound, above all.
+   *
+   * A callback list rather than an audio import on purpose. The world is the only thing that
+   * knows when an attack actually connected, and threading an `AudioSystem` in here to ask
+   * would make the simulation depend on a file that may not exist. Every field is optional
+   * and the world fires unconditionally, so with no listener attached the cost is a compare.
+   */
+  events: GameEvents = {}
+
+  /** Distance walked between footstep cues. Tuned to roughly one step per stride. */
+  private static readonly FOOTSTEP_DISTANCE = 26
+
+  private footstepAccumulator = 0
+
   update(dt: number): void {
     const clampedDt = Math.min(0.05, Math.max(0.001, dt))
 
@@ -285,6 +314,8 @@ export class GameWorld {
     if (this.player.shouldCheckHeavyAttackHit()) {
       this.performAttackHitCheck(45, true)
     }
+
+    this.advanceFootsteps(clampedDt)
 
     for (const npc of this.npcs) {
       npc.update(clampedDt)
@@ -372,12 +403,35 @@ export class GameWorld {
     }
   }
 
+  /**
+   * Fires a footstep every so far walked.
+   *
+   * Distance-based rather than time-based, so the cadence follows the player instead of the
+   * frame rate: a time-based timer drifts with the simulation clamp and sounds wrong the
+   * moment the tab is throttled. Only on the ground and only while actually walking, so a
+   * jump or a mid-air dash is silent.
+   */
+  private advanceFootsteps(dt: number): void {
+    const walking = this.player.isGrounded && this.player.movementInput !== 0 && !this.player.isDashing
+    if (!walking) {
+      // Reset rather than accumulate: a player who stops mid-stride starts the next one clean.
+      this.footstepAccumulator = 0
+      return
+    }
+    this.footstepAccumulator += Math.abs(this.player.vx) * dt
+    if (this.footstepAccumulator < GameWorld.FOOTSTEP_DISTANCE) return
+    this.footstepAccumulator = 0
+    this.events.onFootstep?.()
+  }
+
   private performAttackHitCheck(damage: number, isHeavy: boolean): void {
     const atkBox = this.player.attackHitbox
     for (const npc of this.npcs) {
       if (!rectsIntersect(atkBox, npc.hitbox)) continue
 
-      npc.takeDamage(damage)
+      // The sound is fired only for an attack that connected, not for every swing: the
+      // audio bank already rate-limits repeats, but that is a safety net, not a plan.
+      if (npc.takeDamage(damage)) this.events.onSwordHit?.(isHeavy)
 
       // Spawn floating damage text
       const dColor = isHeavy ? 'rgb(255, 180, 50)' : 'rgb(240, 240, 255)'

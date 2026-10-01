@@ -26,6 +26,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -43,6 +44,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import com.example.game.audio.AUDIO_CLIPS
+import com.example.game.audio.AudioEngine
+import com.example.game.audio.MAIN_MENU_AMBIENCE
+import com.example.game.audio.MAIN_MENU_MUSIC
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -546,8 +551,23 @@ private fun BoxWithConstraintsScope.canvasBox(): CanvasBox {
 }
 
 @Composable
-fun MainMenu(modifier: Modifier = Modifier, onAction: (MainMenuAction) -> Unit) {
+fun MainMenu(
+    modifier: Modifier = Modifier,
+    audio: AudioEngine,
+    onAction: (MainMenuAction) -> Unit,
+) {
     var screen by remember { mutableStateOf(MenuScreen.MAIN) }
+
+    // The menu owns its own cues and releases them on the way out, so a title track cannot
+    // end up playing under the first walk of a new game. Done here rather than at the call
+    // site so returning to the title from any route brings the music back with it.
+    LaunchedEffect(Unit) {
+        audio.start(MAIN_MENU_MUSIC)
+        audio.start(MAIN_MENU_AMBIENCE)
+    }
+    DisposableEffect(Unit) {
+        onDispose { audio.stop() }
+    }
 
     Box(modifier = modifier.fillMaxSize().background(Color(0xFF0C0E14))) {
         // --- Layer 1: the supplied artwork ------------------------------------
@@ -648,10 +668,26 @@ fun MainMenu(modifier: Modifier = Modifier, onAction: (MainMenuAction) -> Unit) 
                     // Not a toggle: MainActivity already runs the app edge-to-edge with the
                     // system bars hidden, so a switch here could not change anything. Shown
                     // disabled and truthful rather than wired to nothing.
-                    SettingRow("MUSIC", "AWAITING AUDIO ASSETS", enabled = false)
+                    // Real switches, not placeholders. They are live with no audio files
+                    // present: a player who turns sound off before the assets are added
+                    // should find it still off afterwards, and a switch that cannot be
+                    // pressed is worse than one that changes nothing yet.
+                    AudioToggleRow("MUSIC", audio.isMusicEnabled, { audio.setMusicEnabled(it) })
                     Spacer(Modifier.height(8.dp))
-                    SettingRow("SOUND EFFECTS", "AWAITING AUDIO ASSETS", enabled = false)
+                    AudioToggleRow("SOUND EFFECTS", audio.isSfxEnabled, { audio.setSfxEnabled(it) })
                     Spacer(Modifier.height(8.dp))
+                    // Said plainly, because a switch reading ON while nothing can be heard
+                    // is a small lie and the screen would otherwise look finished.
+                    val found = audio.inventory()
+                    if (found.loaded.size < AUDIO_CLIPS.size) {
+                        SettingRow(
+                            "AUDIO FILES",
+                            if (found.loaded.isEmpty()) "NONE INSTALLED YET"
+                            else "${found.loaded.size} OF ${AUDIO_CLIPS.size} PRESENT",
+                            enabled = false,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
                     SettingRow("FULLSCREEN", "ALWAYS ON (IMMERSIVE)", enabled = false)
                     Spacer(Modifier.height(18.dp))
                     BackButton("BACK") { screen = MenuScreen.MAIN }
@@ -922,6 +958,44 @@ private fun EmptyState(text: String) {
  * instead of an empty box -- and, more importantly, so a row that cannot be used does not
  * look identical to one that can.
  */
+/**
+ * An on/off switch bound to a piece of the audio bank.
+ *
+ * Painted from the engine's own state on every click rather than from a local boolean, so
+ * the label cannot drift from what the mixer is actually doing.
+ */
+@Composable
+private fun AudioToggleRow(label: String, isOn: () -> Boolean, setOn: (Boolean) -> Unit) {
+    var enabled by remember { mutableStateOf(isOn()) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xB33C2C1E))
+            .clickable {
+                setOn(!isOn())
+                enabled = isOn()
+            }
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .testTag("menu-setting"),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            color = Parchment,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.5.sp,
+        )
+        Text(
+            if (enabled) "ON" else "OFF",
+            color = ParchmentDim,
+            fontSize = 12.sp,
+            letterSpacing = 1.sp,
+        )
+    }
+}
+
 @Composable
 private fun SettingRow(label: String, value: String, enabled: Boolean) {
     Row(
