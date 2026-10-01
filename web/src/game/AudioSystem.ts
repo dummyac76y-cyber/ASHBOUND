@@ -8,6 +8,16 @@
  * because a missing file that nobody mentioned is invisible, and a file nobody plays is
  * just as broken -- a fixed table makes both show up in `missing` and `unplayed`.
  *
+ * Nothing here is required. Two of the twelve clips are installed so far and the rest are
+ * absent, and `loadAll` resolves with those ten in `missing` while the game runs exactly as
+ * it did before this file: silent where it should be, and loud where the assets are. That is
+ * the state this system is built for, not a fallback bolted on afterwards -- an audio layer
+ * that only works once every asset arrives is an audio layer nobody has tested.
+ *
+ * The installed files are Ogg Vorbis, verified from the container header rather than the
+ * extension: both engines decode Vorbis-in-Ogg and neither will decode a MP3 renamed to `.ogg`,
+ * so a file that merely claims to be Ogg is the failure this guards against.
+ *
  * Mirrors AudioEngine.kt.
  */
 
@@ -41,11 +51,10 @@ const clip = (
 })
 
 export const AUDIO_CLIPS: readonly AudioClip[] = [
-  // Main-menu music is intentionally MP3: this is the supplied source file.
-  clip('main_menu_music', 'music', 'music/main_menu_music.mp3', { loop: true, volume: 0.5 }),
+  clip('main_menu_music', 'music', 'music/main_menu_music.ogg', { loop: true, volume: 0.5 }),
 
-  clip('main_menu_ambience', 'ambience', 'ambience/main_menu_ambience.mp3', { loop: true, volume: 0.45 }),
-  clip('campfire', 'ambience', 'ambience/campfire.mp3', { loop: true, volume: 0.4 }),
+  clip('main_menu_ambience', 'ambience', 'ambience/main_menu_ambience.ogg', { loop: true, volume: 0.45 }),
+  clip('campfire', 'ambience', 'ambience/campfire.ogg', { loop: true, volume: 0.4 }),
 
   clip('sword_attack', 'sfx', 'sfx/sword_attack.ogg', { minInterval: 0.08 }),
   clip('heavy_attack', 'sfx', 'sfx/heavy_attack.ogg', { minInterval: 0.15 }),
@@ -61,6 +70,15 @@ export const AUDIO_CLIPS: readonly AudioClip[] = [
 export const MAIN_MENU_MUSIC = 'main_menu_music'
 export const MAIN_MENU_AMBIENCE = 'main_menu_ambience'
 
+/**
+ * The fire's own crackle.
+ *
+ * Started with the menu rather than by a world object: the loop lives where the visible fire
+ * is, and there is no campfire entity in the game yet. When one exists this becomes its loop
+ * instead, at the same id and the same path, so nothing else has to change.
+ */
+export const CAMPFIRE = 'campfire'
+
 export interface AudioInventory {
   readonly loaded: readonly string[]
   readonly missing: readonly string[]
@@ -73,6 +91,12 @@ export class AudioSystem {
   private readonly missing = new Set<string>()
   private readonly played = new Set<string>()
   private readonly loops = new Map<string, AudioBufferSourceNode>()
+
+  /**
+   * Loops something has asked for that are not running yet, because their file had not
+   * finished decoding. Replayed by `loadAll`; cleared by `stop`.
+   */
+  private readonly wanted = new Set<string>()
 
   private gains: Record<AudioCategory, GainNode> | null = null
   private context: AudioContext | null = null
@@ -136,6 +160,13 @@ export class AudioSystem {
         }
       }),
     )
+    // Anything asked for before its file finished decoding gets a second chance now. Done
+    // after the whole table rather than per clip, so a retry cannot race a decode still in
+    // flight, and skipped for clips known to be absent so nothing logs a warning twice.
+    for (const id of [...this.wanted]) {
+      if (this.missing.has(id)) continue
+      this.start(id)
+    }
     return this.inventory()
   }
 
@@ -181,7 +212,16 @@ export class AudioSystem {
 
     const buffer = this.buffers.get(id)
     const context = this.context
-    if (!buffer || !context || context.state !== 'running') return false
+    if (!buffer || !context || context.state !== 'running') {
+      // Remember the intent instead of dropping it. Decoding is asynchronous and the menu
+      // asks for its cues while the last clips are still in flight, so a cue asked for early
+      // used to return false and then never sound at all: the ambience won that race and the
+      // music simply never played. `loadAll` replays whatever was wanted once the table has
+      // finished, so the answer to "asked too soon" is "asked again", not "never".
+      this.wanted.add(id)
+      return false
+    }
+    this.wanted.delete(id)
 
     const source = context.createBufferSource()
     source.buffer = buffer
@@ -197,6 +237,10 @@ export class AudioSystem {
   }
 
   stop(id?: string): void {
+    // Forget the intent too, or a cue that was asked for early and then stopped would
+    // resurrect itself the next time the table finished loading.
+    if (id) this.wanted.delete(id)
+    else this.wanted.clear()
     const targets = id ? [id] : [...this.loops.keys()]
     for (const target of targets) {
       const source = this.loops.get(target)
@@ -211,9 +255,20 @@ export class AudioSystem {
     return [...this.loops.keys()]
   }
 
+  /**
+   * Turns the music and ambience mixers on or off.
+   *
+   * The gain alone is enough, and doing it that way rather than stopping the sources is the
+   * whole point: `stop()` takes every loop with it, ambience included, so muting music used
+   * to silence the fire as well, and turning it back on left both silent for good. Taking
+   * the mixer to zero mutes what is already playing and unmuting brings the very same
+   * sources back, still in phase and still where they were.
+   *
+   * That is also why the two mixers share one flag -- turning music off is meant to take the
+   * menu ambience with it, which the gain does without touching a single source.
+   */
   setMusicEnabled(on: boolean): void {
     this.musicEnabled = on
-    if (!on) this.stop()
     this.applyGains()
   }
 
@@ -233,6 +288,20 @@ export class AudioSystem {
   resume(): void {
     this.suspended = false
     this.unlock()
+  }
+
+  /** Loops something has asked for that are not running yet. Exposed so the harness can see them. */
+  get pending(): readonly string[] {
+    return [...this.wanted]
+  }
+
+  /**
+   * The decoded audio for a clip, or null. Exposed so a test can measure a real file's
+   * duration and peak level rather than trusting that a file which loaded is a file with
+   * sound in it -- a silent placeholder decodes perfectly.
+   */
+  bufferFor(id: string): AudioBuffer | null {
+    return this.buffers.get(id) ?? null
   }
 
   get isSuspended(): boolean { return this.suspended }

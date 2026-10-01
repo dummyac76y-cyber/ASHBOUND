@@ -291,5 +291,38 @@ check('Android loading is fired, not awaited on the first frame', /LaunchedEffec
 check('Android suspends audio with the app', /ON_PAUSE -> audio\.suspend\(\)/.test(KT_GAME_SCREEN))
 check('Android releases the pool on dispose', /audio\.dispose\(\)/.test(KT_GAME_SCREEN))
 
+// --- Installed files are actually playable ------------------------------------
+section('Installed files')
+/**
+ * Only the clips that are installed can be measured, so this is conditional by design: with
+ * nothing installed there is nothing to say, and the check above already covers that case.
+ *
+ * Two bugs lived here until real files arrived, which is why they get their own checks now.
+ * A cue asked for before its buffer finished decoding used to return false and never be
+ * retried, so the music silently never played while the ambience did. And muting music called
+ * `stop()`, which takes every loop with it, so turning music off killed the fire too and
+ * turning it back on left both silent. Neither was visible while the whole table was empty.
+ */
+const installed = web.filter((c) => existsSync(join(ROOT, 'app/src/main/assets', 'audio', c.file)))
+check(
+  'at least one clip is installed, or this section proves nothing',
+  installed.length > 0,
+  `${installed.length} of ${web.length} installed`,
+)
+check('an early start() records its intent for retry', /this\.wanted\.add\(id\)/.test(WEB_SYSTEM))
+check('loadAll replays whatever was asked for too early', /for \(const id of \[\.\.\.this\.wanted\]\)/.test(WEB_SYSTEM))
+check('stop() clears that intent, so a stopped cue cannot resurrect', /this\.wanted\.clear\(\)|this\.wanted\.delete\(id\)/.test(WEB_SYSTEM))
+check(
+  'muting music does not stop the sources, which is what killed the ambience',
+  /setMusicEnabled\(on: boolean\)[\s\S]{0,400}?this\.applyGains\(\)\s*\}/.test(WEB_SYSTEM) &&
+    !/setMusicEnabled\(on: boolean\)[\s\S]{0,400}?this\.stop\(\)/.test(WEB_SYSTEM),
+  'sets the gain and nothing else',
+)
+for (const clip of installed) {
+  const path = join(ROOT, 'app/src/main/assets', 'audio', clip.file)
+  check(`${clip.file} is present and not a stub`, statSync(path).size > 1024)
+  check(`${clip.file} is mirrored into web/public by sync-assets`, existsSync(join(ROOT, 'web/public', 'audio', clip.file)))
+}
+
 console.log(`\n${failures === 0 ? 'All checks passed' : `${failures} of ${checks} checks FAILED`}`)
 process.exit(failures === 0 ? 0 : 1)
