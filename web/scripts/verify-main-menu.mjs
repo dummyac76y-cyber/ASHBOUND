@@ -88,12 +88,14 @@ const CHARACTER_FRAMES = 16
 const CHARACTER_CELL = 96
 const CHARACTER_FPS = 8
 /**
- * How long the opening pose is held before the cycle starts.
+ * How many times sheet A's boomerang plays before sheet B's.
  *
- * Kept here as well as in both engines so the loop-length arithmetic below is checked against
- * a number this file owns, rather than read out of the source it is meant to verify.
+ * Kept here as well as in both engines so the ratio the player sees is checked against a
+ * number this file owns, rather than read out of the source it is meant to verify.
  */
-const CHARACTER_HOLD_FRAMES = 24
+const CHARACTER_SHEET_A_PASSES = 4
+/** Steps in one boomerang: 0..15 forward, then 14..1 back. Frame 15 is not doubled. */
+const CHARACTER_BOOMERANG_STEPS = CHARACTER_FRAMES * 2 - 2
 /** The sheets' ink box, and the static character's, so the scale is re-derived here. */
 const CHARACTER_SHEET_INK = { x0: 8, y0: 11, x1: 85, y1: 82 }
 /** How much smaller than the static figure the animation is drawn. */
@@ -1518,33 +1520,36 @@ console.log('\n9. the character is animated, and sits where the static one was')
     `${(h * scale).toFixed(1)} tall against the static ${CHARACTER_STATIC_INK.h}`,
   )
 
-  // Why the opening holds sheet A's *first* frame, measured rather than asserted. A held
-  // pose hands the cycle off to one particular frame of sheet B, so the hold is only as good
-  // as that join -- and it turns out not to be arbitrary. Counting differing pixels between
-  // each of sheet A's sixteen frames and sheet B's frame 0:
-  const cellPixels = (sheet, index) => {
+  // Why each sheet runs as a boomerang rather than playing straight through and wrapping,
+  // measured rather than asserted -- because it is the whole justification for the cycle
+  // closing on its own first frame instead of snapping.
+  const cellDiff = (s1, i1, s2, i2) => {
     let n = 0
     for (let y = 0; y < CHARACTER_CELL; y++) {
       for (let x = 0; x < CHARACTER_CELL; x++) {
-        const [r1, g1, b1, a1] = sheets[0].px(index * CHARACTER_CELL + x, y)
-        const [r2, g2, b2, a2] = sheets[1].px(x, y)
-        if (r1 !== r2 || g1 !== g2 || b1 !== b2 || a1 !== a2) n++
+        const a = s1.px(i1 * CHARACTER_CELL + x, y)
+        const b = s2.px(i2 * CHARACTER_CELL + x, y)
+        if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2] || a[3] !== b[3]) n++
       }
     }
     return n
   }
-  const joinCosts = Array.from({ length: CHARACTER_FRAMES }, (_, i) => cellPixels(sheets[0], i))
-  const cheapest = joinCosts.indexOf(Math.min(...joinCosts))
-  check(
-    'sheet A frame 0 is the closest of its sixteen frames to the frame the cycle starts on',
-    cheapest === 0,
-    `frame 0 is ${joinCosts[0]}px from sheet B frame 0, the nearest of ${Math.min(...joinCosts)}..${Math.max(...joinCosts)}px across all sixteen`,
-  )
-  check(
-    'and it is clearly the best of them, so holding it really is the quietest join',
-    joinCosts[0] < Math.min(...joinCosts.slice(1)) * 0.9,
-    `${joinCosts[0]}px against ${Math.min(...joinCosts.slice(1))}px for the next best`,
-  )
+  for (const [name, sheet] of [['A', sheets[0]], ['B', sheets[1]]]) {
+    const steps = []
+    for (let i = 1; i < CHARACTER_FRAMES; i++) steps.push(cellDiff(sheet, i - 1, sheet, i))
+    const wrap = cellDiff(sheet, CHARACTER_FRAMES - 1, sheet, 0)
+    check(
+      `sheet ${name} does not loop cleanly forwards, so it needs the boomerang`,
+      wrap > Math.min(...steps),
+      `frame ${CHARACTER_FRAMES - 1}->0 jumps ${wrap}px against a best internal step of ${Math.min(...steps)}px`,
+    )
+    const close = cellDiff(sheet, 1, sheet, 0)
+    check(
+      `and sheet ${name}'s boomerang closes more gently than that wrap`,
+      close < wrap,
+      `closing on frame 0 from frame 1 costs ${close}px against ${wrap}px to wrap forwards`,
+    )
+  }
 
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
   await page.goto(`${base}/`, { waitUntil: 'networkidle' })
@@ -1552,10 +1557,13 @@ console.log('\n9. the character is animated, and sits where the static one was')
 
   const aSeen = new Set()
   const bSeen = new Set()
-  // One whole loop plus slack. The sequence is 54 frames at eight a second, so six and
-  // three quarter seconds, and the sample has to outlast that or it cannot claim the cycle
-  // closes.
-  const samples = Math.ceil(((CHARACTER_HOLD_FRAMES + CHARACTER_FRAMES * 2 - 2) / CHARACTER_FPS) * 1000 / 25) + 24
+  // One whole loop plus slack, at fifty milliseconds a sample. The sequence is
+  // CHARACTER_SHEET_A_PASSES boomerangs plus one, and the sample has to outlast all of it or
+  // it cannot claim the loop closes. Fifty milliseconds still lands two or three samples on
+  // every step, since one step is 125ms at eight frames a second.
+  const loopSteps = (CHARACTER_SHEET_A_PASSES + 1) * CHARACTER_BOOMERANG_STEPS
+  const loopMs = (loopSteps / CHARACTER_FPS) * 1000
+  const samples = Math.ceil(loopMs / 50) + 40
   for (let i = 0; i < samples; i++) {
     const f = await page.evaluate(() => {
       const a = document.querySelector('[data-testid="main_menu_character_strip_0"]')
@@ -1567,24 +1575,28 @@ console.log('\n9. the character is animated, and sits where the static one was')
     })
     if (f.aVis === 'visible') aSeen.add(f.aF)
     if (f.bVis === 'visible') bSeen.add(f.bF)
-    await page.waitForTimeout(25)
+    await page.waitForTimeout(50)
   }
   const count = (set) => [...set].filter(Boolean).length
-  // The opening is a still, not an animation. Sheet A is deliberately not played: the point
-  // of the change was to leave the figure genuinely motionless before the cycle starts, and
-  // a harness that insisted all sixteen frames appeared would be insisting on the opposite.
-  check('sheet A is held on a single frame rather than played', count(aSeen) === 1, `${count(aSeen)} distinct frames: ${[...aSeen].join(', ')}`)
-  check('and the frame it holds is frame 0', aSeen.has('0'), [...aSeen].join(', '))
-  check('and sheet B plays all sixteen after it', count(bSeen) === CHARACTER_FRAMES, `${count(bSeen)} of ${CHARACTER_FRAMES}`)
+  // Both sheets must actually move. A held frame is the failure here, not a stylistic
+  // choice: the figure is supposed to be animated for the whole of the loop, so sampling has
+  // to catch every frame of both sheets going past.
+  check('sheet A is animated, not held', count(aSeen) === CHARACTER_FRAMES, `${count(aSeen)} of ${CHARACTER_FRAMES} distinct frames: ${[...aSeen].sort().join(', ')}`)
+  check('and sheet B is animated too', count(bSeen) === CHARACTER_FRAMES, `${count(bSeen)} of ${CHARACTER_FRAMES} distinct frames: ${[...bSeen].sort().join(', ')}`)
   check(
-    'the hold is long enough to read as the figure settling',
-    CHARACTER_HOLD_FRAMES / CHARACTER_FPS >= 2.5,
-    `${CHARACTER_HOLD_FRAMES} frames at ${CHARACTER_FPS} fps is ${(CHARACTER_HOLD_FRAMES / CHARACTER_FPS).toFixed(2)}s`,
+    'sheet A loops far longer than sheet B',
+    CHARACTER_SHEET_A_PASSES >= 4,
+    `sheet A ${(CHARACTER_SHEET_A_PASSES * CHARACTER_BOOMERANG_STEPS) / CHARACTER_FPS}s against sheet B ${CHARACTER_BOOMERANG_STEPS / CHARACTER_FPS}s, a ratio of ${CHARACTER_SHEET_A_PASSES}:1`,
   )
   check(
-    'the hold is longer than the animated pass it replaced',
-    CHARACTER_HOLD_FRAMES > CHARACTER_FRAMES,
-    `${CHARACTER_HOLD_FRAMES} frames held against ${CHARACTER_FRAMES} played`,
+    'so the settling movement dominates the loop rather than alternating with the other',
+    CHARACTER_SHEET_A_PASSES / (CHARACTER_SHEET_A_PASSES + 1) >= 0.75,
+    `${Math.round((CHARACTER_SHEET_A_PASSES / (CHARACTER_SHEET_A_PASSES + 1)) * 100)}% of the ${loopMs / 1000}s loop is sheet A`,
+  )
+  check(
+    'and the loop is a settled length rather than a fidget',
+    loopMs >= 8000,
+    `${loopSteps} steps at ${CHARACTER_FPS} fps is ${(loopMs / 1000).toFixed(2)}s`,
   )
 
   // Registration, including a viewport wider than 16:9 -- the direction a CSS-only
@@ -1645,10 +1657,24 @@ console.log('\n9. the character is animated, and sits where the static one was')
     'wrapFrame + coerceAtLeast(0)',
   )
   check(
-    'Android plays the same order, with the last sheet running in reverse',
+    'both engines build the same boomerang and the same sequence out of it',
+    /function boomerang/.test(codeOnly(readFileSync(MENU_TS, 'utf8'))) &&
+      /CHARACTER_SHEET_A_PASSES \}, \(\) => boomerang\(0\)\)\.flat\(\)/.test(codeOnly(readFileSync(MENU_TS, 'utf8'))) &&
+      /private fun boomerang\(sheet: Int\)/.test(ktFire) &&
+      /List\(CHARACTER_SHEET_A_PASSES\) \{ boomerang\(0\) \}\.flatten\(\) \+ boomerang\(1\)/.test(ktFire),
+    'sheet A repeated, then sheet B',
+  )
+  check(
+    'Android reads the cursor out of that sequence and wraps it forwards',
     /CHARACTER_SEQUENCE\[cursor\]/.test(ktFire) &&
-      /List\(CHARACTER_FRAMES - 2\) \{ 1 to \(CHARACTER_FRAMES - 2 - it\) \}/.test(ktFire),
-    'boomerang on the last sheet',
+      /coerceAtLeast\(0\)\) % CHARACTER_SEQUENCE\.size/.test(ktFire),
+    'CHARACTER_SEQUENCE[cursor]',
+  )
+  check(
+    'both engines give sheet A the same number of passes, so neither runs the longer loop',
+    new RegExp(`CHARACTER_SHEET_A_PASSES = ${CHARACTER_SHEET_A_PASSES}\\b`).test(codeOnly(readFileSync(MENU_TS, 'utf8'))) &&
+      new RegExp(`CHARACTER_SHEET_A_PASSES = ${CHARACTER_SHEET_A_PASSES}\\b`).test(ktFire),
+    `${CHARACTER_SHEET_A_PASSES} passes in each`,
   )
   check('Android clips to one cell and slides the sheet behind it', /clipToBounds\(\)/.test(ktFire) && /offset\(x = \(-frame \* CHARACTER_CELL \* CHARACTER_SCALE\)\.dp\)/.test(ktFire), 'clipToBounds + per-frame offset')
   check('Android keeps the character pixel art unsmoothed', /FilterQuality\.None/.test(ktFire), 'FilterQuality.None')

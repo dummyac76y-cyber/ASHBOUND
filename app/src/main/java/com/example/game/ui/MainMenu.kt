@@ -110,11 +110,9 @@ const val MAIN_MENU_OVERLAY_FILE = "main_menu_overlay.png"
  * body moves -- so the character cannot slide and nothing here has to correct for drift
  * the artwork does not have.
  *
- * Only sheet B plays. Sheet A is held on its first frame for three seconds and then the
- * cycle begins, which leaves the figure settled at rest rather than shifting continuously:
- * a knight waiting by a fire sits still, and the motion that reads as life comes from the
- * loop that follows. See CHARACTER_HOLD_FRAMES for why sheet A's first frame is the one
- * worth holding.
+ * Both are animated and both play for the whole loop. Sheet A takes four passes to sheet B's
+ * one, so the settling movement dominates and the sharper cycle comes round once at the end
+ * rather than the two alternating every few seconds -- see CHARACTER_SHEET_A_PASSES.
  *
  * They are drawn scaled. The sheets carry roughly a 78x72 figure against the static
  * character's 174x161, so drawing them one-to-one would make the character about half the
@@ -170,39 +168,42 @@ private const val CHARACTER_CELL_Y =
     CHARACTER_STATIC_Y + CHARACTER_STATIC_H - CHARACTER_SHEET_INK_Y1 * CHARACTER_SCALE
 
 /**
- * How long the opening pose is held, in frames at CHARACTER_FPS.
+ * How many times sheet A's cycle plays before sheet B takes over.
  *
- * Sheet A's first frame, not an arbitrary one. Measured off the supplied artwork rather than
- * chosen by eye: it is 1332 pixels from sheet B's frame 0, where the nearest of the other
- * fifteen sheet A frames is 1750 and the furthest is 2176. Holding it hands the cycle off at
- * its closest approach, so the transition into the loop is the least noticeable join in the
- * whole sequence -- and it is the pose the rest pose should be anyway, being the one the
- * sheet departs from. verify-main-menu.mjs re-derives this every run, so the choice cannot
- * quietly stop being the best one if the artwork is ever replaced.
+ * Sheet A is the settling movement and is meant to outlast sheet B by a wide margin, so it
+ * runs four times to sheet B's one. Both are thirty-step boomerangs, which makes the split
+ * exactly four to one: twenty-two and a half seconds of the settling movement against three
+ * and three quarters of the sharper cycle, in a loop of a shade under nineteen seconds.
  *
- * Twenty-four frames is three seconds at eight per second. The opening used to be given
- * sixteen steps of sheet A to play through, so the figure was never actually still; this
- * holds instead of stepping, for half a second longer than that pass took.
+ * This is the number to change to rebalance the two, and the web engine reads it from the
+ * same value.
  */
-private const val CHARACTER_HOLD_FRAMES = 24
+private const val CHARACTER_SHEET_A_PASSES = 4
 
 /**
- * The order the sheets play in, as [sheet, frame] pairs.
+ * One pass of a sheet: forward 0..15, then back the way it came, 14..1.
  *
- * The opening is sheet A's frame 0, repeated, so it is genuinely a still rather than sixteen
- * near-identical frames of fidgeting. Then sheet B plays forward and back the way it came --
- * 0..15 and then 14..1 -- which is a boomerang: it arrives back at the pose it started from,
- * so the loop can close without the figure snapping. Frame 15 is not repeated at the turn and
- * frame 1 steps into frame 0, so every step through the cycle is a single frame either way.
+ * The boomerang is not a flourish. Measured off the supplied artwork, playing either sheet
+ * straight through and wrapping is the worst step in the whole animation: sheet A jumps 2162
+ * pixels from frame 15 back to frame 0, against a best of 653 within it, and sheet B jumps
+ * 2731 against a best of 1003. Running the second half backwards means the cycle arrives
+ * back at the pose it started from and closes on its own first frame instead, which is what
+ * lets it repeat without the figure snapping.
+ *
+ * Frame 15 is not repeated at the turn and frame 1 steps into frame 0, so every step through
+ * the cycle is a single frame either way and nothing sits still for two counts.
  */
+private fun boomerang(sheet: Int): List<Pair<Int, Int>> =
+    List(CHARACTER_FRAMES) { sheet to it } +
+        List(CHARACTER_FRAMES - 2) { sheet to (CHARACTER_FRAMES - 2 - it) }
+
+/** Sheet A leads, and leads for a while. */
 private val CHARACTER_SEQUENCE: List<Pair<Int, Int>> =
-    List(CHARACTER_HOLD_FRAMES) { 0 to 0 } +
-        List(CHARACTER_FRAMES) { 1 to it } +
-        List(CHARACTER_FRAMES - 2) { 1 to (CHARACTER_FRAMES - 2 - it) }
+    List(CHARACTER_SHEET_A_PASSES) { boomerang(0) }.flatten() + boomerang(1)
 
 /**
- * Frames per second, matching the web. The sequence is 54 steps, so at eight the loop takes
- * nearly seven seconds: a settled breathing rather than a fidget.
+ * Frames per second, matching the web. The sequence is 150 steps, so at eight the loop takes
+ * a shade under nineteen seconds: a settled breathing rather than a fidget.
  */
 private const val CHARACTER_FPS = 8
 

@@ -39,11 +39,9 @@ const CHARACTER_STATIC_INK = { x: 826, y: 386, w: 174, h: 161 }
  * the same row (y=82) while only the upper body moves -- so the character cannot slide, and
  * nothing here has to correct for drift that the artwork does not have.
  *
- * Only sheet B plays. Sheet A is held on its first frame for three seconds and then the
- * cycle begins, which is what leaves the figure settled at rest rather than shifting
- * continuously: a knight waiting by a fire sits still, and the motion that reads as life
- * comes from the loop that follows. See CHARACTER_HOLD_FRAMES for why sheet A's first frame
- * is the one worth holding.
+ * Both are animated and both play for the whole loop. Sheet A takes four passes to sheet B's
+ * one, so the settling movement dominates and the sharper cycle comes round once at the end
+ * rather than the two alternating every few seconds -- see CHARACTER_SHEET_A_PASSES.
  *
  * They are drawn scaled. The sheets carry roughly a 78x72 figure against the static
  * character's 174x161, so drawing them one-to-one would make the character about half the
@@ -102,42 +100,50 @@ export const CHARACTER_CELL_Y =
   CHARACTER_STATIC_INK.y + CHARACTER_STATIC_INK.h - CHARACTER_SHEET_INK.y1 * CHARACTER_SCALE
 
 /**
- * How long the opening pose is held, in frames at CHARACTER_FPS.
+ * How many times sheet A's cycle plays before sheet B takes over.
  *
- * Sheet A's first frame, not an arbitrary one. Measured off the supplied artwork rather than
- * chosen by eye: it is 1332 pixels from sheet B's frame 0, where the nearest of the other
- * fifteen sheet A frames is 1750 and the furthest is 2176. So holding it hands the cycle off
- * at its closest approach and the transition into the loop is the least noticeable join in
- * the whole sequence -- and it is the pose the rest pose should be anyway, being the one the
- * sheet departs from. verify-main-menu.mjs re-derives this every run, so the choice cannot
- * quietly stop being the best one if the artwork is ever replaced.
+ * Sheet A is the settling movement and is meant to outlast sheet B by a wide margin, so it
+ * runs four times to sheet B's one. Both are thirty-step boomerangs, which makes the split
+ * exactly four to one: twenty-two and a half seconds of the settling movement against three
+ * and three quarters of the sharper cycle, in a loop of a shade under nineteen seconds.
  *
- * Twenty-four frames is three seconds at eight per second. The opening used to be given
- * sixteen steps of sheet A to play through, so the figure was never actually still; this
- * holds instead of stepping, for half a second longer than that pass took.
+ * This is the number to change to rebalance the two, and both engines read it from here.
  */
-export const CHARACTER_HOLD_FRAMES = 24
+export const CHARACTER_SHEET_A_PASSES = 4
 
 /**
- * The order the sheets play in, as [sheet, frame] pairs.
+ * One pass of a sheet: forward 0..15, then back the way it came, 14..1.
  *
- * The opening is sheet A's frame 0, repeated, so it is genuinely a still rather than sixteen
- * near-identical frames of fidgeting. Then sheet B plays forward and back the way it came --
- * 0..15 and then 14..1 -- which is a boomerang: it arrives back at the pose it started from,
- * so the loop can close without the figure snapping. Running it in reverse is what makes the
- * cycle read as one movement instead of two clips with a cut between them. Frame 15 is not
- * repeated at the turn and frame 1 steps into frame 0, so every step through the cycle is a
- * single frame either way and nothing sits still for two counts.
+ * The boomerang is not a flourish. Measured off the supplied artwork, playing either sheet
+ * straight through and wrapping is the worst step in the whole animation: sheet A jumps 2162
+ * pixels from frame 15 back to frame 0, against a best of 653 within it, and sheet B jumps
+ * 2731 against a best of 1003. Running the second half backwards means the cycle arrives
+ * back at the pose it started from and closes on its own first frame instead, which is what
+ * lets it repeat without the figure snapping.
+ *
+ * Frame 15 is not repeated at the turn and frame 1 steps into frame 0, so every step through
+ * the cycle is a single frame either way and nothing sits still for two counts.
  */
+function boomerang(sheet: number): (readonly [number, number])[] {
+  return [
+    ...Array.from({ length: CHARACTER_FRAMES }, (_, i): [number, number] => [sheet, i]),
+    ...Array.from({ length: CHARACTER_FRAMES - 2 }, (_, i): [number, number] => [sheet, CHARACTER_FRAMES - 2 - i]),
+  ]
+}
+
+/** The order the sheets play in, as [sheet, frame] pairs. Sheet A leads, and leads for a while. */
 export const CHARACTER_SEQUENCE: readonly (readonly [number, number])[] = [
-  ...Array.from({ length: CHARACTER_HOLD_FRAMES }, (): [number, number] => [0, 0]),
-  ...Array.from({ length: CHARACTER_FRAMES }, (_, i): [number, number] => [1, i]),
-  ...Array.from({ length: CHARACTER_FRAMES - 2 }, (_, i): [number, number] => [1, CHARACTER_FRAMES - 2 - i]),
+  ...Array.from({ length: CHARACTER_SHEET_A_PASSES }, () => boomerang(0)).flat(),
+  ...boomerang(1),
 ]
 
+/** How many steps of the sequence are sheet A, and how many are sheet B. */
+export const CHARACTER_SHEET_A_STEPS = CHARACTER_SHEET_A_PASSES * (CHARACTER_FRAMES * 2 - 2)
+export const CHARACTER_SHEET_B_STEPS = CHARACTER_FRAMES * 2 - 2
+
 /**
- * Frames per second. Slow on purpose: the sequence is 54 steps, so at eight the loop takes
- * nearly seven seconds, which is a settled breathing rather than a fidget.
+ * Frames per second. Slow on purpose: the sequence is 150 steps, so at eight the loop takes
+ * a shade under nineteen seconds, which is a settled breathing rather than a fidget.
  */
 export const CHARACTER_FPS = 8
 
