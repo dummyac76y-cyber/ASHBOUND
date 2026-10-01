@@ -37,9 +37,13 @@ const CHARACTER_STATIC_INK = { x: 826, y: 386, w: 174, h: 161 }
  *
  * Both are anchored the way a seated figure should be -- every frame's ink bottoms out on
  * the same row (y=82) while only the upper body moves -- so the character cannot slide, and
- * nothing here has to correct for drift that the artwork does not have. Sheet A holds seven
- * distinct poses, the last of them for nine frames; sheet B is a smooth fifteen-frame cycle.
- * They play one after the other and then repeat.
+ * nothing here has to correct for drift that the artwork does not have.
+ *
+ * Only sheet B plays. Sheet A is held on its first frame for three seconds and then the
+ * cycle begins, which is what leaves the figure settled at rest rather than shifting
+ * continuously: a knight waiting by a fire sits still, and the motion that reads as life
+ * comes from the loop that follows. See CHARACTER_HOLD_FRAMES for why sheet A's first frame
+ * is the one worth holding.
  *
  * They are drawn scaled. The sheets carry roughly a 78x72 figure against the static
  * character's 174x161, so drawing them one-to-one would make the character about half the
@@ -61,19 +65,25 @@ const CHARACTER_SHEET_INK = { x0: 8, y0: 11, x1: 86, y1: 83 }
  *
  * The figure was sitting at the full size of the static composition, which is too big for
  * the scene it stands in: the seated character read as looming over the fire rather than
- * sitting beside it. Ninety per cent puts it back in proportion while leaving every other
- * decision below derived from the artwork rather than from this number -- the size, the
- * ground contact row and the centre column all still come from measurements.
+ * sitting beside it. Eighty-two per cent leaves the knight clearly a bystander to the fire
+ * rather than the subject of the frame, and this is the last of the three size passes the
+ * scene has taken -- the artwork only has so far to go before the figure stops reading as
+ * detailed pixel art rather than a smudge.
+ *
+ * Every other decision below stays derived from the artwork rather than from this number:
+ * the scale, the ground contact row and the centre column are all computed from it, so
+ * changing this one number rescales the figure about its own base and nothing else has to
+ * know.
  */
-const CHARACTER_SIZE = 0.9
+const CHARACTER_SIZE = 0.82
 
 /**
  * The scale that takes the sheets' own figure onto the static one, scaled down.
  *
- * 72 rows of sheet ink become 161 * 0.9 = 145 tall, so the factor is 145 / 72 = 2.012, and
- * 78 columns become 157 against a target of 174 * 0.9 = 157. Height and width agree to
- * within a pixel and the factor is uniform, so the pixel art keeps its proportions and its
- * hard nearest-neighbour edges.
+ * 72 rows of sheet ink become 161 * 0.82 = 132 tall, so the factor is 132 / 72 = 1.834, and
+ * 78 columns become 143 against a target of 174 * 0.82 = 143. Height and width agree and the
+ * factor is uniform, so the pixel art keeps its proportions and its hard nearest-neighbour
+ * edges.
  */
 export const CHARACTER_SCALE =
   (CHARACTER_STATIC_INK.h * CHARACTER_SIZE) / (CHARACTER_SHEET_INK.y1 - CHARACTER_SHEET_INK.y0)
@@ -92,24 +102,42 @@ export const CHARACTER_CELL_Y =
   CHARACTER_STATIC_INK.y + CHARACTER_STATIC_INK.h - CHARACTER_SHEET_INK.y1 * CHARACTER_SCALE
 
 /**
- * The order the two sheets play in, as [sheet, frame] pairs.
+ * How long the opening pose is held, in frames at CHARACTER_FPS.
  *
- * The first sheet plays straight through. The last one plays forward and then back the
- * way it came -- 0..15 and then 14..1 -- which is a boomerang: it arrives back at the pose
- * it started from, so the loop can close without the figure snapping. Running it in reverse
- * is what makes the cycle read as one movement instead of two clips with a cut between them.
- * Frame 15 is not repeated at the turn and frame 1 steps into frame 0, so every step is a
+ * Sheet A's first frame, not an arbitrary one. Measured off the supplied artwork rather than
+ * chosen by eye: it is 1332 pixels from sheet B's frame 0, where the nearest of the other
+ * fifteen sheet A frames is 1750 and the furthest is 2176. So holding it hands the cycle off
+ * at its closest approach and the transition into the loop is the least noticeable join in
+ * the whole sequence -- and it is the pose the rest pose should be anyway, being the one the
+ * sheet departs from. verify-main-menu.mjs re-derives this every run, so the choice cannot
+ * quietly stop being the best one if the artwork is ever replaced.
+ *
+ * Twenty-four frames is three seconds at eight per second. The opening used to be given
+ * sixteen steps of sheet A to play through, so the figure was never actually still; this
+ * holds instead of stepping, for half a second longer than that pass took.
+ */
+export const CHARACTER_HOLD_FRAMES = 24
+
+/**
+ * The order the sheets play in, as [sheet, frame] pairs.
+ *
+ * The opening is sheet A's frame 0, repeated, so it is genuinely a still rather than sixteen
+ * near-identical frames of fidgeting. Then sheet B plays forward and back the way it came --
+ * 0..15 and then 14..1 -- which is a boomerang: it arrives back at the pose it started from,
+ * so the loop can close without the figure snapping. Running it in reverse is what makes the
+ * cycle read as one movement instead of two clips with a cut between them. Frame 15 is not
+ * repeated at the turn and frame 1 steps into frame 0, so every step through the cycle is a
  * single frame either way and nothing sits still for two counts.
  */
 export const CHARACTER_SEQUENCE: readonly (readonly [number, number])[] = [
-  ...Array.from({ length: CHARACTER_FRAMES }, (_, i): [number, number] => [0, i]),
+  ...Array.from({ length: CHARACTER_HOLD_FRAMES }, (): [number, number] => [0, 0]),
   ...Array.from({ length: CHARACTER_FRAMES }, (_, i): [number, number] => [1, i]),
   ...Array.from({ length: CHARACTER_FRAMES - 2 }, (_, i): [number, number] => [1, CHARACTER_FRAMES - 2 - i]),
 ]
 
 /**
- * Frames per second. Slow on purpose: the sequence is 46 steps, so at eight the loop takes
- * a shade under six seconds, which is a settled breathing rather than a fidget.
+ * Frames per second. Slow on purpose: the sequence is 54 steps, so at eight the loop takes
+ * nearly seven seconds, which is a settled breathing rather than a fidget.
  */
 export const CHARACTER_FPS = 8
 
@@ -168,13 +196,17 @@ const CAMPFIRE_SUPPLIED_FIRE = { x0: 680, w: 139, centreX: 749.5, baseY: 552 }
  * How much bigger the flame is drawn than the sheet's own pixels.
  *
  * The sheet's ink is 104 wide and about 74 tall, while the fire in the supplied
- * `main_menu_campfire.png` is 139 by 96: at the sheet's own size the fire read as a spark
- * beside the seated figure rather than the fire it is meant to be. This is the factor that
- * takes one onto the other, taken on width and cross-checked on height -- 104 * 1.32 = 137
- * against 139, and 74 * 1.32 = 98 against 96. It is uniform, so the flame keeps its
- * proportions, and it is drawn nearest-neighbour so the scaled pixel art keeps hard edges.
+ * `main_menu_campfire.png` is 139 by 96. Taking one onto the other puts the factor at 1.34 on
+ * width and 1.30 on height, and 1.32 sat between the two, keeping the flame registered to
+ * the supplied artwork.
+ *
+ * It is now deliberately over: 104 * 1.46 = 152 and 74 * 1.46 = 108, eleven and twelve per
+ * cent past the supplied fire. With the figure drawn smaller beside it, the fire has to carry
+ * more of the frame to read as the thing the knight is sitting at rather than a detail of the
+ * foreground. Uniform, so the flame keeps its proportions, and drawn nearest-neighbour so the
+ * scaled pixel art keeps hard edges.
  */
-export const CAMPFIRE_FLAME_SCALE = 1.32
+export const CAMPFIRE_FLAME_SCALE = 1.46
 
 /**
  * Where the cell goes, anchored on the fire's centre column and its base row rather than its

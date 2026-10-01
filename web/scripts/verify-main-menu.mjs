@@ -48,8 +48,8 @@ const CAMPFIRE_STRIP = { width: 1024, height: 128, frames: 8, cell: 128 }
  * base row 552. See CAMPFIRE_SUPPLIED_FIRE below, which re-measures that rather than
  * trusting it.
  */
-const CAMPFIRE_FLAME_SCALE = 1.32
-const CAMPFIRE_CELL = { x: 665.02, y: 420 }
+const CAMPFIRE_FLAME_SCALE = 1.46
+const CAMPFIRE_CELL = { x: 656.06, y: 406 }
 /** The ink inside one flame cell, measured from the file's alpha channel. */
 const CAMPFIRE_CELL_INK = { x0: 12, w: 104, y1: 99 }
 /** Where the supplied campfire canvas puts the fire: its solid core, glow excluded. */
@@ -84,10 +84,20 @@ const codeOnly = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n
 const MENU_CHARACTER_FILES = ['character_idle_a.png', 'character_idle_b.png']
 /** Frames per sheet, and the cell size, both measured from the files. */
 const CHARACTER_FRAMES = 16
+/** The cell size, and the rate the sequence plays at. */
+const CHARACTER_CELL = 96
+const CHARACTER_FPS = 8
+/**
+ * How long the opening pose is held before the cycle starts.
+ *
+ * Kept here as well as in both engines so the loop-length arithmetic below is checked against
+ * a number this file owns, rather than read out of the source it is meant to verify.
+ */
+const CHARACTER_HOLD_FRAMES = 24
 /** The sheets' ink box, and the static character's, so the scale is re-derived here. */
 const CHARACTER_SHEET_INK = { x0: 8, y0: 11, x1: 85, y1: 82 }
 /** How much smaller than the static figure the animation is drawn. */
-const CHARACTER_SIZE = 0.9
+const CHARACTER_SIZE = 0.82
 const CHARACTER_STATIC_INK = { x: 826, y: 386, w: 174, h: 161 }
 
 const ANDROID_ASSET = join(repoRoot, 'app/src/main/assets/bg', MENU_BG)
@@ -1508,13 +1518,45 @@ console.log('\n9. the character is animated, and sits where the static one was')
     `${(h * scale).toFixed(1)} tall against the static ${CHARACTER_STATIC_INK.h}`,
   )
 
+  // Why the opening holds sheet A's *first* frame, measured rather than asserted. A held
+  // pose hands the cycle off to one particular frame of sheet B, so the hold is only as good
+  // as that join -- and it turns out not to be arbitrary. Counting differing pixels between
+  // each of sheet A's sixteen frames and sheet B's frame 0:
+  const cellPixels = (sheet, index) => {
+    let n = 0
+    for (let y = 0; y < CHARACTER_CELL; y++) {
+      for (let x = 0; x < CHARACTER_CELL; x++) {
+        const [r1, g1, b1, a1] = sheets[0].px(index * CHARACTER_CELL + x, y)
+        const [r2, g2, b2, a2] = sheets[1].px(x, y)
+        if (r1 !== r2 || g1 !== g2 || b1 !== b2 || a1 !== a2) n++
+      }
+    }
+    return n
+  }
+  const joinCosts = Array.from({ length: CHARACTER_FRAMES }, (_, i) => cellPixels(sheets[0], i))
+  const cheapest = joinCosts.indexOf(Math.min(...joinCosts))
+  check(
+    'sheet A frame 0 is the closest of its sixteen frames to the frame the cycle starts on',
+    cheapest === 0,
+    `frame 0 is ${joinCosts[0]}px from sheet B frame 0, the nearest of ${Math.min(...joinCosts)}..${Math.max(...joinCosts)}px across all sixteen`,
+  )
+  check(
+    'and it is clearly the best of them, so holding it really is the quietest join',
+    joinCosts[0] < Math.min(...joinCosts.slice(1)) * 0.9,
+    `${joinCosts[0]}px against ${Math.min(...joinCosts.slice(1))}px for the next best`,
+  )
+
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
   await page.goto(`${base}/`, { waitUntil: 'networkidle' })
   await page.waitForSelector('.main-menu-ready')
 
   const aSeen = new Set()
   const bSeen = new Set()
-  for (let i = 0; i < 260; i++) {
+  // One whole loop plus slack. The sequence is 54 frames at eight a second, so six and
+  // three quarter seconds, and the sample has to outlast that or it cannot claim the cycle
+  // closes.
+  const samples = Math.ceil(((CHARACTER_HOLD_FRAMES + CHARACTER_FRAMES * 2 - 2) / CHARACTER_FPS) * 1000 / 25) + 24
+  for (let i = 0; i < samples; i++) {
     const f = await page.evaluate(() => {
       const a = document.querySelector('[data-testid="main_menu_character_strip_0"]')
       const b = document.querySelector('[data-testid="main_menu_character_strip_1"]')
@@ -1528,8 +1570,22 @@ console.log('\n9. the character is animated, and sits where the static one was')
     await page.waitForTimeout(25)
   }
   const count = (set) => [...set].filter(Boolean).length
-  check('sheet A plays all sixteen frames', count(aSeen) === CHARACTER_FRAMES, `${count(aSeen)} of ${CHARACTER_FRAMES}`)
+  // The opening is a still, not an animation. Sheet A is deliberately not played: the point
+  // of the change was to leave the figure genuinely motionless before the cycle starts, and
+  // a harness that insisted all sixteen frames appeared would be insisting on the opposite.
+  check('sheet A is held on a single frame rather than played', count(aSeen) === 1, `${count(aSeen)} distinct frames: ${[...aSeen].join(', ')}`)
+  check('and the frame it holds is frame 0', aSeen.has('0'), [...aSeen].join(', '))
   check('and sheet B plays all sixteen after it', count(bSeen) === CHARACTER_FRAMES, `${count(bSeen)} of ${CHARACTER_FRAMES}`)
+  check(
+    'the hold is long enough to read as the figure settling',
+    CHARACTER_HOLD_FRAMES / CHARACTER_FPS >= 2.5,
+    `${CHARACTER_HOLD_FRAMES} frames at ${CHARACTER_FPS} fps is ${(CHARACTER_HOLD_FRAMES / CHARACTER_FPS).toFixed(2)}s`,
+  )
+  check(
+    'the hold is longer than the animated pass it replaced',
+    CHARACTER_HOLD_FRAMES > CHARACTER_FRAMES,
+    `${CHARACTER_HOLD_FRAMES} frames held against ${CHARACTER_FRAMES} played`,
+  )
 
   // Registration, including a viewport wider than 16:9 -- the direction a CSS-only
   // contain box gets wrong.
@@ -1572,8 +1628,8 @@ console.log('\n9. the character is animated, and sits where the static one was')
   check('Android plays both sheets, sixteen frames each, at the same rate', /CHARACTER_FRAMES = 16/.test(ktFire) && /CHARACTER_FPS = 8/.test(ktFire), '16 frames at 8 fps')
   check(
     'Android derives the same scale from the same two measurements',
-    /CHARACTER_STATIC_H \* CHARACTER_SIZE\)\.toFloat\(\)/.test(ktFire) && /CHARACTER_SIZE = 0\.9f/.test(ktFire),
-    '161 * 0.9 / 71',
+    /CHARACTER_STATIC_H \* CHARACTER_SIZE\)\.toFloat\(\)/.test(ktFire) && /CHARACTER_SIZE = 0\.82f/.test(ktFire),
+    '161 * 0.82 / 71',
   )
   check(
     'Android anchors the figure on its centre column and base row too',
@@ -1882,9 +1938,9 @@ console.log('\n10. Android mirrors the same menu')
   )
   check(
     'Android draws the flame at the same size as the web',
-    /CAMPFIRE_FLAME_SCALE = 1\.32f/.test(ktFire) &&
+    /CAMPFIRE_FLAME_SCALE = 1\.46f/.test(ktFire) &&
       /CAMPFIRE_FLAME_CELL \* CAMPFIRE_FLAME_SCALE\)\.dp/.test(ktFire),
-    'scale 1.32 on the cell and the strip',
+    'scale 1.46 on the cell and the strip',
   )
   check('Android draws the flame inside the shared canvas box, so it scales with the backdrop', /MenuFire\(\s*Modifier\s*\.offset\(x = fireCanvas\.offsetX, y = fireCanvas\.offsetY\)/.test(ktFire), 'MenuFire on the canvas surface')
   check(

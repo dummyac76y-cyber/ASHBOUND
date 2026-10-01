@@ -108,8 +108,13 @@ const val MAIN_MENU_OVERLAY_FILE = "main_menu_overlay.png"
  * Each sheet is 1536x96, sixteen 96x96 frames. Both are anchored the way a seated figure
  * should be -- every frame's ink bottoms out on the same row (y=82) while only the upper
  * body moves -- so the character cannot slide and nothing here has to correct for drift
- * the artwork does not have. Sheet A holds seven distinct poses, the last for nine frames;
- * sheet B is a smooth fifteen-frame cycle.
+ * the artwork does not have.
+ *
+ * Only sheet B plays. Sheet A is held on its first frame for three seconds and then the
+ * cycle begins, which leaves the figure settled at rest rather than shifting continuously:
+ * a knight waiting by a fire sits still, and the motion that reads as life comes from the
+ * loop that follows. See CHARACTER_HOLD_FRAMES for why sheet A's first frame is the one
+ * worth holding.
  *
  * They are drawn scaled. The sheets carry roughly a 78x72 figure against the static
  * character's 174x161, so drawing them one-to-one would make the character about half the
@@ -135,13 +140,19 @@ private const val CHARACTER_CELL = 96
 /**
  * How much smaller than the static figure the animation is drawn. The figure was sitting at
  * the full size of the static composition, which read as looming over the fire rather than
- * sitting beside it. Every other number below is still derived from the artwork.
+ * sitting beside it. Eighty-two per cent leaves the knight clearly a bystander to the fire
+ * rather than the subject of the frame, and this is the last of the three size passes the
+ * scene has taken -- the artwork only has so far to go before the figure stops reading as
+ * detailed pixel art rather than a smudge.
+ *
+ * Every other number below is still derived from the artwork, so changing this one rescales
+ * the figure about its own base and nothing else has to know.
  */
-private const val CHARACTER_SIZE = 0.9f
+private const val CHARACTER_SIZE = 0.82f
 
 /**
- * 72 rows of sheet ink become 161 * 0.9 = 145 tall, and 78 columns become 157 against a
- * target of 174 * 0.9 = 157: one uniform factor, so the pixel art keeps its proportions
+ * 72 rows of sheet ink become 161 * 0.82 = 132 tall, and 78 columns become 143 against a
+ * target of 174 * 0.82 = 143: one uniform factor, so the pixel art keeps its proportions
  * and its hard nearest-neighbour edges.
  */
 private const val CHARACTER_SCALE =
@@ -159,21 +170,39 @@ private const val CHARACTER_CELL_Y =
     CHARACTER_STATIC_Y + CHARACTER_STATIC_H - CHARACTER_SHEET_INK_Y1 * CHARACTER_SCALE
 
 /**
- * The order the two sheets play in, as [sheet, frame] pairs.
+ * How long the opening pose is held, in frames at CHARACTER_FPS.
  *
- * The first sheet plays straight through. The last one plays forward and then back the way
- * it came -- 0..15 and then 14..1 -- which is a boomerang: it arrives back at the pose it
- * started from, so the loop closes without the figure snapping. Frame 15 is not repeated at
- * the turn and frame 1 steps into frame 0, so every step is a single frame either way.
+ * Sheet A's first frame, not an arbitrary one. Measured off the supplied artwork rather than
+ * chosen by eye: it is 1332 pixels from sheet B's frame 0, where the nearest of the other
+ * fifteen sheet A frames is 1750 and the furthest is 2176. Holding it hands the cycle off at
+ * its closest approach, so the transition into the loop is the least noticeable join in the
+ * whole sequence -- and it is the pose the rest pose should be anyway, being the one the
+ * sheet departs from. verify-main-menu.mjs re-derives this every run, so the choice cannot
+ * quietly stop being the best one if the artwork is ever replaced.
+ *
+ * Twenty-four frames is three seconds at eight per second. The opening used to be given
+ * sixteen steps of sheet A to play through, so the figure was never actually still; this
+ * holds instead of stepping, for half a second longer than that pass took.
+ */
+private const val CHARACTER_HOLD_FRAMES = 24
+
+/**
+ * The order the sheets play in, as [sheet, frame] pairs.
+ *
+ * The opening is sheet A's frame 0, repeated, so it is genuinely a still rather than sixteen
+ * near-identical frames of fidgeting. Then sheet B plays forward and back the way it came --
+ * 0..15 and then 14..1 -- which is a boomerang: it arrives back at the pose it started from,
+ * so the loop can close without the figure snapping. Frame 15 is not repeated at the turn and
+ * frame 1 steps into frame 0, so every step through the cycle is a single frame either way.
  */
 private val CHARACTER_SEQUENCE: List<Pair<Int, Int>> =
-    List(CHARACTER_FRAMES) { 0 to it } +
+    List(CHARACTER_HOLD_FRAMES) { 0 to 0 } +
         List(CHARACTER_FRAMES) { 1 to it } +
         List(CHARACTER_FRAMES - 2) { 1 to (CHARACTER_FRAMES - 2 - it) }
 
 /**
- * Frames per second, matching the web. The sequence is 46 steps, so at eight the loop takes
- * a shade under six seconds: a settled breathing rather than a fidget.
+ * Frames per second, matching the web. The sequence is 54 steps, so at eight the loop takes
+ * nearly seven seconds: a settled breathing rather than a fidget.
  */
 private const val CHARACTER_FPS = 8
 
@@ -209,12 +238,16 @@ private const val CAMPFIRE_SUPPLIED_BASE_Y = 552f
 
 /**
  * How much bigger the flame is drawn than the sheet's own pixels. The sheet's ink is 104
- * wide and about 74 tall against the supplied fire's 139 by 96: at the sheet's own size the
- * fire read as a spark beside the seated figure rather than the fire it is meant to be.
- * 104 * 1.32 = 137 against 139, and 74 * 1.32 = 98 against 96. Uniform, so the flame keeps
- * its proportions, and FilterQuality.None keeps the scaled edges hard.
+ * wide and about 74 tall against the supplied fire's 139 by 96, which puts the matching
+ * factor at 1.34 on width and 1.30 on height.
+ *
+ * It is now deliberately over: 104 * 1.46 = 152 and 74 * 1.46 = 108, eleven and twelve per
+ * cent past the supplied fire. With the figure drawn smaller beside it, the fire has to carry
+ * more of the frame to read as the thing the knight is sitting at rather than a detail of the
+ * foreground. Uniform, so the flame keeps its proportions, and FilterQuality.None keeps the
+ * scaled edges hard.
  */
-private const val CAMPFIRE_FLAME_SCALE = 1.32f
+private const val CAMPFIRE_FLAME_SCALE = 1.46f
 
 /**
  * Anchored on the fire's centre column and its base row rather than its top left, so
