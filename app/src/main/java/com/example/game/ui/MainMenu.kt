@@ -38,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.scaleX
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
@@ -73,10 +74,11 @@ import kotlin.math.sin
  * background, so nothing is positioned by hand: each canvas is drawn across the same box
  * with `ContentScale.Fit` and the artwork lands where it was drawn.
  *
- * The backdrop is the exception: it is drawn with `ContentScale.Crop` so it fills the frame
- * with no letterbox bars. `Fit` there is what left the black bands on any screen that is
- * not 16:9. The composition box itself stays `Fit`, so cropping the picture can never take
- * a control off screen. Mirrors web/src/ui/MainMenu.ts.
+ * Everything is drawn with `ContentScale.Fit`, so the background is always shown whole, at
+ * its own size, scaled by a single factor, and nothing is ever cropped or stretched. The
+ * composition box the plates, character and fire are registered to is the same rectangle
+ * the backdrop's `Fit` occupies, so they register at any screen shape. Mirrors
+ * web/src/ui/MainMenu.ts.
  */
 
 /** The backdrop artwork. Kept in step with the web engine's copy. */
@@ -157,8 +159,8 @@ const val MAIN_MENU_CAMPFIRE_FLAME_FILE = "campfire_flame.png"
 
 private const val CAMPFIRE_FLAME_FRAMES = 8
 private const val CAMPFIRE_FLAME_CELL = 128
-private const val CAMPFIRE_FLAME_CELL_X = 686
-private const val CAMPFIRE_FLAME_CELL_Y = 455
+private const val CAMPFIRE_FLAME_CELL_X = 685.5f
+private const val CAMPFIRE_FLAME_CELL_Y = 453f
 
 /**
  * Frames per second, matching the web. Slow on purpose: at twelve the eight-frame loop
@@ -360,8 +362,17 @@ fun MenuFire(surface: Modifier, flame: ImageBitmap?) {
 /**
  * The animated character: a one-cell window with each sheet sliding behind it.
  *
- * Both sheets are composed even though only one plays at a time, so switching between them
- * never shows a window with nothing in it.
+ * Both sheets are composed even though only one is visible at a time, so switching between
+ * them never shows a window with nothing in it. The inactive one is made transparent rather
+ * than dropped from the tree: drawing only the active sheet would leave a frame with no
+ * figure in it on the frame the switch happens, and it would also mean the sheet's own
+ * measurement pass depended on which one happened to be playing.
+ *
+ * The window is mirrored. The supplied sheets face away from the fire, while the seated
+ * figure in the background sits to the right of it and looks back into the flames;
+ * matching the two alpha masks settles it at 0.93 agreement mirrored against 0.59
+ * unflipped. The mirror is on the window rather than the strip, because the strip carries
+ * all sixteen frames at once and mirroring that would also reverse the order they play in.
  */
 @Composable
 fun MenuCharacter(surface: Modifier, sheets: List<ImageBitmap?>) {
@@ -392,6 +403,8 @@ fun MenuCharacter(surface: Modifier, sheets: List<ImageBitmap?>) {
                         )
                         .size(cellDp)
                         .clipToBounds()
+                        .scaleX(-1f)
+                        .alpha(if (index == sheetIndex) 1f else 0f)
                         .testTag("main_menu_character_$index"),
                 ) {
                     Image(
@@ -480,9 +493,11 @@ fun MainMenu(modifier: Modifier = Modifier, onAction: (MainMenuAction) -> Unit) 
                     bitmap = image,
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
-                    // Crop, so the picture fills the frame and no bars show. This scales by
-                    // one factor in both directions, so it crops rather than stretches.
-                    contentScale = ContentScale.Crop,
+                    // Fit, so the background is always shown whole, at its own size, with one
+                    // uniform scale. Crop was tried and reverted: it does fill the frame, but
+                    // it cuts the edges off a composition whose controls are painted into its
+                    // own left and right thirds.
+                    contentScale = ContentScale.Fit,
                 )
             }
         }

@@ -86,11 +86,20 @@ export const CHARACTER_FPS = 8
  * base below (rows 66..98). So this replaces the old static fire outright rather than
  * stacking a flame on top of one that was still there.
  *
- * The cell sits at canvas (686, 455). That is where the ink lands on the fire the static
- * artwork put there -- the ink centres on the old fire's centre x and its base lands on
- * the old fire's base -- so the fire stays on the same spot in the scene. The cell is
- * positioned in canvas percentages, which means it is scaled by exactly the one factor
- * the backdrop is, at any viewport, and cannot drift away from it.
+ * The cell is placed from the supplied `main_menu_campfire.png`, which is a 1280x720
+ * canvas the same size as the background with nothing in it but the fire, so it carries
+ * the position the artwork itself asks for. Its solid core -- alpha at or above 128, so the
+ * soft glow around it is excluded -- occupies x 680..818 and sits on base row 552. The
+ * flame cell's own ink starts at column 12, is 104 wide and always ends on row 99, so
+ * lining the two up gives a cell at (685.5, 453): the ink then centres on x 749.5 and its
+ * base lands on row 552, which is where the supplied fire's base already is. The cell is
+ * positioned in canvas percentages, so it is scaled by exactly the one factor the backdrop
+ * is, at any viewport, and cannot drift away from it.
+ *
+ * The sheet is drawn at its own size rather than scaled onto the supplied fire, because the
+ * two are different drawings: the supplied canvas' fire is 139x96 and this cell's ink is
+ * 104x79. Stretching one onto the other would distort the pixel art, so the animation keeps
+ * its own proportions and takes only its position from the supplied file.
  */
 export const MAIN_MENU_CAMPFIRE_FLAME_FILE = 'campfire_flame.png'
 
@@ -124,8 +133,9 @@ const MARGIN_PX = 8
 const PLATE_OUTSET_PX = 4
 
 /** Where the cell's top-left goes on the 1280x720 canvas. See the note above. */
-export const CAMPFIRE_FLAME_CELL_X = 686
-export const CAMPFIRE_FLAME_CELL_Y = 455
+/** Where the cell goes so the flame lands on the fire `main_menu_campfire.png` drew. */
+export const CAMPFIRE_FLAME_CELL_X = 685.5
+export const CAMPFIRE_FLAME_CELL_Y = 453
 
 /**
  * The supplied button artwork.
@@ -276,6 +286,7 @@ export class MainMenu {
       return strip
     })
 
+    // The window carries the mirror: see the stylesheet for why it is not on the strip.
     this.character = el('div', 'main-menu-character')
     this.character.setAttribute('aria-hidden', 'true')
     this.character.append(characterWindow)
@@ -666,13 +677,10 @@ export class MainMenu {
   private syncCanvasBoxes(): void {
     const rect = this.root.getBoundingClientRect()
     if (rect.width <= 0 || rect.height <= 0) return
-    // The backdrop is drawn with `cover` so the picture fills the frame edge to edge and
-    // no bars show. This box is deliberately `contain`, not `cover`: the artwork is a
-    // composed image with the controls painted into its own left and right thirds, so under
-    // `cover` a tall or narrow viewport would crop the four entries off-screen entirely.
-    // Keeping the box at `contain` means every control stays inside the frame and tappable
-    // at any viewport shape, which matters more than the picture lining up behind them on
-    // the aspect ratios where the two differ.
+    // `contain`, matching the backdrop: the background is always shown whole, at its own
+    // size, at one uniform scale, and this box is the rectangle that occupies. Because the
+    // two agree exactly, everything positioned against this box registers with the
+    // artwork at any viewport, and no control can ever be cropped away.
     const scale = Math.min(rect.width / CANVAS_WIDTH, rect.height / CANVAS_HEIGHT)
     const width = CANVAS_WIDTH * scale
     const height = CANVAS_HEIGHT * scale

@@ -40,8 +40,19 @@ const MENU_OVERLAY = 'main_menu_overlay.png'
 const MENU_CAMPFIRE = 'campfire_flame.png'
 /** The strip's own geometry, measured from the supplied file rather than assumed. */
 const CAMPFIRE_STRIP = { width: 1024, height: 128, frames: 8, cell: 128 }
-/** Where the cell goes on the canvas, and where its ink then lands. */
-const CAMPFIRE_CELL = { x: 686, y: 455 }
+/**
+ * Where the cell goes, and where its ink then lands.
+ *
+ * Derived from the supplied `main_menu_campfire.png`, which is a 1280x720 canvas the same
+ * size as the background carrying nothing but the fire: its solid core is x 680..818 on
+ * base row 552. See CAMPFIRE_SUPPLIED_FIRE below, which re-measures that rather than
+ * trusting it.
+ */
+const CAMPFIRE_CELL = { x: 685.5, y: 453 }
+/** The ink inside one flame cell, measured from the file's alpha channel. */
+const CAMPFIRE_CELL_INK = { x0: 12, w: 104, y1: 99 }
+/** Where the supplied campfire canvas puts the fire: its solid core, glow excluded. */
+const CAMPFIRE_SUPPLIED_FIRE = { x0: 680, w: 139, baseY: 552 }
 /** The ink inside one cell, measured from the file's alpha channel. */
 const CAMPFIRE_INK = { x0: 12, x1: 115, y0: 21, y1: 99 }
 
@@ -265,7 +276,7 @@ console.log('\n2. the menu is what the page shows, and the artwork decodes untou
   if (res) {
     check('the browser decodes it at its original size, so nothing was resampled on the way in', res.natural.width === 1280 && res.natural.height === 720, `${res.natural.width}x${res.natural.height}`)
     check('the menu is actually visible once the artwork is ready', !(await page.evaluate(() => getComputedStyle(document.querySelector('.main-menu')).visibility === 'hidden')), 'not left hidden behind the pre-load state')
-    check('it is displayed with `cover`, which scales by one factor and so fills the frame without ever stretching it', res.objectFit === 'cover', `object-fit: ${res.objectFit}`)
+    check('it is displayed with `contain`, which scales by one factor and so shows the whole background at its own size without ever stretching or cropping it', res.objectFit === 'contain', `object-fit: ${res.objectFit}`)
     check('it is not rotated, scaled or moved by a transform', res.transform === 'none' || res.transform === 'matrix(1, 0, 0, 1, 0, 0)', `transform: ${res.transform}`)
     check('it is not recoloured by a filter', res.filter === 'none', `filter: ${res.filter}`)
     check('it is not dimmed by opacity', res.opacity === '1', `opacity ${res.opacity}`)
@@ -851,9 +862,8 @@ console.log('\n4. the menu shows only the menu')
     `${furniture.renders} frames drawn`,
   )
 
-  // Gating the simulation is not the same as gating the drawing. This also proves the
-  // letterbox is gone: the backdrop element now spans the whole frame and is drawn with
-  // `cover`, so the picture fills it and there is nothing left for bars to show through.
+  // Gating the simulation is not the same as gating the drawing: a still scene is still
+  // visible through the bands a `contain` backdrop leaves on a non-16:9 viewport.
   await page.setViewportSize({ width: 1100, height: 900 })
   await page.waitForTimeout(150)
   const bands = await page.evaluate(() => {
@@ -870,16 +880,15 @@ console.log('\n4. the menu shows only the menu')
     }
   })
   check(
-    'the backdrop element spans the whole frame, and `cover` fills it',
+    'the backdrop element still spans the whole frame, so `contain` letterboxes inside it instead of shrinking the artwork',
     bands.backdrop.w >= bands.viewport.w - 0.5 &&
       bands.backdrop.h >= bands.viewport.h - 0.5 &&
       bands.backdrop.left <= 0.5 &&
-      bands.backdrop.top <= 0.5 &&
-      bands.fit === 'cover',
-    `${bands.backdrop.w.toFixed(0)}x${bands.backdrop.h.toFixed(0)} against ${bands.viewport.w}x${bands.viewport.h}, object-fit ${bands.fit}`,
+      bands.backdrop.top <= 0.5,
+    `${bands.backdrop.w.toFixed(0)}x${bands.backdrop.h.toFixed(0)} against ${bands.viewport.w}x${bands.viewport.h}`,
   )
   check(
-    'so there are no letterbox bars left to show the world through',
+    'the menu paints an opaque background, so its letterbox bands are its own',
     bands.background !== 'rgba(0, 0, 0, 0)',
     `background ${bands.background}`,
   )
@@ -1498,6 +1507,177 @@ console.log('\n9. the character is animated, and sits where the static one was')
   check('Android loads the sheets from the same folder as the plates', /"bg\/menu_buttons\/\$file"/.test(ktFire), 'assets/bg/menu_buttons/<file>')
 }
 
+// ---------------------------------------------------------------------------------
+console.log('\n9b. the artwork is oriented and placed the way the supplied files say')
+// ---------------------------------------------------------------------------------
+// Two things that are impossible to eyeball from the source and easy to get backwards:
+// which way the seated figure faces, and where the fire belongs. Both are settled here by
+// measuring the files, so a wrong constant fails instead of hiding. The supplied 1280x720
+// overlays decide, because they are the artwork the animation has to line up with.
+{
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
+  await page.goto(`${base}/`, { waitUntil: 'networkidle' })
+  await page.waitForSelector('.main-menu-ready')
+
+  const measured = await page.evaluate(
+    async ([characterUrls, staticFireUrl, stripUrl, cell, frames]) => {
+      const load = (src) =>
+        new Promise((res, rej) => {
+          const img = new Image()
+          img.onload = () => res(img)
+          img.onerror = () => rej(new Error('could not load ' + src))
+          img.src = src
+        })
+      const alphaOf = (img) => {
+        const c = document.createElement('canvas')
+        c.width = img.width
+        c.height = img.height
+        const ctx = c.getContext('2d', { willReadFrequently: true })
+        ctx.drawImage(img, 0, 0)
+        return ctx.getImageData(0, 0, img.width, img.height).data
+      }
+      /** Where the ink is inside a region, as [x, y, w, h] in that region's coordinates. */
+      const boxIn = (img, ox, oy, ow, oh, threshold = 1) => {
+        const d = alphaOf(img)
+        let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1
+        for (let y = 0; y < oh; y++)
+          for (let x = 0; x < ow; x++)
+            if (d[((oy + y) * img.width + ox + x) * 4 + 3] >= threshold) {
+              if (x < x0) x0 = x
+              if (x > x1) x1 = x
+              if (y < y0) y0 = y
+              if (y > y1) y1 = y
+            }
+        return [x0, y0, x1 - x0 + 1, y1 - y0 + 1]
+      }
+      /** The same ink, resampled to W x H so two different drawings can be compared. */
+      const maskOf = (img, x0, y0, w, h, W, H, threshold = 1) => {
+        const d = alphaOf(img)
+        const out = []
+        for (let y = 0; y < H; y++) {
+          const row = []
+          for (let x = 0; x < W; x++) {
+            const sx = Math.min(img.width - 1, Math.max(0, x0 + Math.floor((x * w) / W)))
+            const sy = Math.min(img.height - 1, Math.max(0, y0 + Math.floor((y * h) / H)))
+            row.push(d[(sy * img.width + sx) * 4 + 3] >= threshold ? 1 : 0)
+          }
+          out.push(row)
+        }
+        return out
+      }
+      const iou = (a, b) => {
+        let inter = 0, uni = 0
+        for (let y = 0; y < a.length; y++)
+          for (let x = 0; x < a[0].length; x++) {
+            if (a[y][x] && b[y][x]) inter++
+            if (a[y][x] || b[y][x]) uni++
+          }
+        return uni === 0 ? 0 : inter / uni
+      }
+      const flip = (m) => m.map((r) => [...r].reverse())
+
+      // Which way the seated figure faces, against the static one in the overlay.
+      const overlay = await load('/bg/main_menu_overlay.png')
+      const oi = boxIn(overlay, 0, 0, overlay.width, overlay.height)
+      const W = 56
+      const H = 52
+      const reference = maskOf(overlay, oi[0], oi[1], oi[2], oi[3], W, H)
+      const facing = []
+      for (const url of characterUrls) {
+        const img = await load(url)
+        const ink = boxIn(img, 0, 0, img.height, img.height)
+        const m = maskOf(img, ink[0], ink[1], ink[2], ink[3], W, H)
+        facing.push({
+          file: url.split('/').pop(),
+          asIs: iou(reference, m),
+          mirrored: iou(reference, flip(m)),
+        })
+      }
+
+      // Where the supplied fire sits, and where one flame cell's ink would land.
+      const staticFire = await load(staticFireUrl)
+      const core = boxIn(staticFire, 0, 0, staticFire.width, staticFire.height, 128)
+      const strip = await load(stripUrl)
+      const perFrame = []
+      for (let f = 0; f < frames; f++) perFrame.push(boxIn(strip, f * cell, 0, cell, cell))
+      const ux = perFrame.map((b) => b[0])
+      const uy = perFrame.map((b) => b[1])
+      const union = [
+        Math.min(...ux),
+        Math.min(...uy),
+        Math.max(...ux.map((x, i) => x + perFrame[i][2])) - Math.min(...ux),
+        Math.max(...uy.map((y, i) => y + perFrame[i][3])) - Math.min(...uy),
+      ]
+      const refFire = maskOf(staticFire, core[0], core[1], core[2], core[3], 48, 48, 128)
+      const fm = maskOf(strip, union[0], union[1], union[2], union[3], 48, 48)
+      return {
+        facing,
+        staticFire: { core, bottom: core[1] + core[3] - 1, centreX: core[0] + core[2] / 2 },
+        flame: { union, centreX: union[0] + union[2] / 2, baseY: union[1] + union[3] - 1 },
+        fireIoU: { asIs: iou(refFire, fm), mirrored: iou(refFire, flip(fm)) },
+      }
+    },
+    [
+      MENU_CHARACTER_FILES.map((f) => `/bg/menu_buttons/${f}`),
+      '/bg/main_menu_campfire.png',
+      `/bg/menu_buttons/${MENU_CAMPFIRE}`,
+      CAMPFIRE_STRIP.cell,
+      CAMPFIRE_STRIP.frames,
+    ],
+  )
+
+  // --- which way the seated figure faces ---------------------------------------
+  for (const f of measured.facing) {
+    check(
+      `${f.file} mirrored agrees with the seated figure in the supplied overlay`,
+      f.mirrored > f.asIs * 1.3,
+      `agreement ${f.mirrored.toFixed(3)} mirrored against ${f.asIs.toFixed(3)} as supplied`,
+    )
+  }
+  const css9b = readFileSync(MENU_CSS, 'utf8')
+  check(
+    'so the character is drawn mirrored, on both engines',
+    /\.main-menu-character-window[^{]*\{[\s\S]{0,900}transform:\s*scaleX\(-1\)/.test(css9b) &&
+      /scaleX\(-1f\)/.test(codeOnly(ktMenu)),
+    'scaleX(-1) on the character window, web and Android',
+  )
+  check(
+    'and the mirror is on the window rather than the strip, so the sixteen frames still play in order',
+    !/\.main-menu-character-strip[^{]*\{[\s\S]{0,900}scaleX/.test(css9b),
+    'no mirror on .main-menu-character-strip',
+  )
+
+  // --- where the fire belongs --------------------------------------------------
+  const wantCellX = measured.staticFire.centreX - measured.flame.centreX
+  const wantCellY = measured.staticFire.bottom - measured.flame.baseY
+  check(
+    'the flame cell is placed where the supplied campfire canvas puts the fire',
+    Math.abs(CAMPFIRE_CELL.x - wantCellX) < 0.5 && Math.abs(CAMPFIRE_CELL.y - wantCellY) < 0.5,
+    `cell (${CAMPFIRE_CELL.x}, ${CAMPFIRE_CELL.y}) against (${wantCellX.toFixed(1)}, ${wantCellY.toFixed(1)}) measured off the supplied canvas`,
+  )
+  check(
+    'the supplied fire sits where the constants say it does',
+    measured.staticFire.core[0] === CAMPFIRE_SUPPLIED_FIRE.x0 &&
+      measured.staticFire.bottom === CAMPFIRE_SUPPLIED_FIRE.baseY,
+    `core x ${measured.staticFire.core[0]}, base row ${measured.staticFire.bottom}`,
+  )
+  check(
+    'the flame sheet is not mirrored -- it already faces the way the artwork does',
+    measured.fireIoU.asIs > measured.fireIoU.mirrored * 1.3,
+    `agreement ${measured.fireIoU.asIs.toFixed(3)} as supplied against ${measured.fireIoU.mirrored.toFixed(3)} mirrored`,
+  )
+
+  // --- both character sheets, but only one at a time --------------------------
+  check(
+    'Android shows one character sheet at a time, rather than drawing both on top of each other',
+    /alpha\(if \(index == sheetIndex\) 1f else 0f\)/.test(codeOnly(ktMenu)),
+    'alpha driven by sheetIndex',
+  )
+  await page.close()
+}
+
+// ---------------------------------------------------------------------------------
+
 console.log('\n10. Android mirrors the same menu')
 // ---------------------------------------------------------------------------------
 {
@@ -1507,11 +1687,14 @@ console.log('\n10. Android mirrors the same menu')
   const overlaySupplied = existsSync(ANDROID_OVERLAY) && existsSync(ANDROID_CAMPFIRE)
 
   check('both engines load the background by the same synced filename', menuTs.includes('main_menu.jpg') && ktMenu.includes('"main_menu.jpg"'), `bg/main_menu.jpg`)
-  check('web fills the frame with it, proportionally and without stretching', /object-fit:\s*cover/.test(css))
   check(
-    'and Android crops the same way, since Compose has no object-fit',
-    /contentScale = ContentScale\.Crop/.test(codeOnly(ktMenu)),
-    'ContentScale.Crop on the backdrop',
+    'web keeps the background at its own size, whole, without stretching or cropping it',
+    /\.main-menu-backdrop[^{]*\{[\s\S]{0,600}object-fit:\s*contain/.test(css),
+  )
+  check(
+    'and Android fits it the same way, since Compose has no object-fit',
+    /rememberMenuBackground\(\)\?\.let[\s\S]{0,400}ContentScale\.Fit/.test(codeOnly(ktMenu)),
+    'ContentScale.Fit on the backdrop',
   )
   check(
     'the web stylesheet puts no transition or animation on the static art layers',
@@ -1550,14 +1733,13 @@ console.log('\n10. Android mirrors the same menu')
     // sprite strips drawn a cell at a time rather than fitted to the canvas.
     const fits = (ktMenu.match(/ContentScale\.Fit/g) || []).length
     check('the plate canvases are still fitted to the canvas', fits >= 1, `${fits} uses of ContentScale.Fit`)
-    // Only the backdrop crops. If the composition box cropped as well, the credits control
-    // hard against the right edge would be taken off screen on a portrait phone -- which is
-    // the whole reason the box stays `Fit` while the picture becomes `Crop`.
+    // Nothing crops. `cover` was tried and reverted: it fills the frame but cuts the edges
+    // off the composition, and the menu controls are painted into the picture's own left and
+    // right thirds, so cropping would take entries off screen on a portrait phone.
     check(
-      'the only cropping layer is the backdrop itself',
-      (codeOnly(ktMenu).match(/ContentScale\.Crop/g) || []).length === 1 &&
-        !/canvasBox[\s\S]{0,400}ContentScale\.Crop/.test(codeOnly(ktMenu)),
-      `${(codeOnly(ktMenu).match(/ContentScale\.Crop/g) || []).length} uses of ContentScale.Crop, none on the canvas box`,
+      'no layer crops the supplied artwork',
+      !/ContentScale\.Crop/.test(codeOnly(ktMenu)) && !/object-fit:\s*cover/.test(css),
+      'no ContentScale.Crop on Android, no object-fit: cover on the web',
     )
   } else {
     pending('Android art layer parity is not checked yet', 'the art canvases have not been supplied')
@@ -1593,7 +1775,11 @@ console.log('\n10. Android mirrors the same menu')
       /CAMPFIRE_FLAME_FPS = 8/.test(codeOnly(readFileSync(MENU_TS, 'utf8'))),
     '8 frames at 8 fps, both engines',
   )
-  check('Android places the cell where the web does', /CAMPFIRE_FLAME_CELL_X = 686/.test(ktFire) && /CAMPFIRE_FLAME_CELL_Y = 455/.test(ktFire), 'cell at (686, 455)')
+  check(
+    'Android places the cell where the web does',
+    /CAMPFIRE_FLAME_CELL_X = 685\.5f/.test(ktFire) && /CAMPFIRE_FLAME_CELL_Y = 453f/.test(ktFire),
+    'cell at (685.5, 453)',
+  )
   check('Android draws the flame inside the shared canvas box, so it scales with the backdrop', /MenuFire\(\s*Modifier\s*\.offset\(x = fireCanvas\.offsetX, y = fireCanvas\.offsetY\)/.test(ktFire), 'MenuFire on the canvas surface')
   check('Android clips to one cell and slides the strip behind it', /clipToBounds\(\)/.test(ktFire) && /offset\(x = \(-frame \* CAMPFIRE_FLAME_CELL\)\.dp\)/.test(ktFire), 'clipToBounds + per-frame offset')
   check('Android keeps the pixel art unsmoothed and unscaled', /FilterQuality\.None/.test(ktFire) && /CAMPFIRE_FLAME_CELL \* CAMPFIRE_FLAME_FRAMES/.test(ktFire), 'FilterQuality.None, strip sized in whole cells')
