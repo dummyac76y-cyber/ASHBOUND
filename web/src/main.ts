@@ -13,6 +13,7 @@ import { SpriteAnimationSystem } from './game/SpriteAnimationSystem'
 import { AnimationInspectorDialog } from './ui/AnimationInspectorDialog'
 import { GameHud } from './ui/GameHud'
 import { MainMenu } from './ui/MainMenu'
+import { installUiFont } from './ui/uiFont'
 import { KEY_HINTS, VirtualControls } from './ui/VirtualControls'
 import './style.css'
 
@@ -77,6 +78,16 @@ async function boot(): Promise<void> {
   const ctx: CanvasRenderingContext2D = ctxOrNull
 
   const animations = new SpriteAnimationSystem(SPRITE_BASE)
+
+  // The supplied UI font, installed before anything is drawn so the menu's first paint is
+  // already in the right face. Awaited rather than fired because the whole point is to avoid
+  // a flash of the fallback; it resolves either way, so an absent file costs nothing.
+  if (!(await installUiFont())) {
+    // Not fatal -- the fallback stack keeps the layout stable and the game is playable -- but
+    // worth saying out loud, because a font that silently does not load is otherwise almost
+    // impossible to notice.
+    console.warn('[uiFont] Pixelta did not load; falling back to the monospace stack')
+  }
 
   // --- Audio -----------------------------------------------------------------
   //

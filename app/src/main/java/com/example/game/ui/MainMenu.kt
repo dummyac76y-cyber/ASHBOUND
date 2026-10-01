@@ -26,6 +26,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -49,12 +50,14 @@ import com.example.game.audio.CAMPFIRE
 import com.example.game.audio.AudioEngine
 import com.example.game.audio.MAIN_MENU_AMBIENCE
 import com.example.game.audio.MAIN_MENU_MUSIC
+import com.example.ui.theme.Pixelta
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.LocalTextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -781,15 +784,23 @@ private fun MenuTitle(surface: Modifier) {
             .width(334.dp)
             .testTag("main_menu_title"),
     ) {
+        // The supplied face, set per Text because the title block is outside MenuPanel and so
+        // outside the CompositionLocalProvider that covers the sub-screens.
         Text(
             "ASHBOUND",
             color = Parchment,
+            fontFamily = Pixelta,
             fontSize = 34.sp,
             fontWeight = FontWeight.Black,
             letterSpacing = 4.sp,
         )
         Spacer(Modifier.height(2.dp))
-        Text("A knight without a kingdom", color = ParchmentDim, fontSize = 11.sp)
+        Text(
+            "A knight without a kingdom",
+            color = ParchmentDim,
+            fontFamily = Pixelta,
+            fontSize = 11.sp,
+        )
     }
 }
 
@@ -963,15 +974,24 @@ private fun MenuPanel(heading: String, content: @Composable () -> Unit) {
                 .border(2.dp, BorderDark)
                 .padding(24.dp),
         ) {
-            Text(
-                heading,
-                color = Parchment,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 3.sp,
-            )
-            Spacer(Modifier.height(20.dp))
-            content()
+            // The supplied face for every sub-screen: the heading, the buttons and the
+            // settings rows. Provided once around the content rather than repeated on each
+            // Text, so a new row cannot forget it and cannot disagree with the web, which
+            // sets the same family once on the panel. The title block sits outside this
+            // element and carries its own.
+            CompositionLocalProvider(
+                LocalTextStyle provides LocalTextStyle.current.copy(fontFamily = Pixelta)
+            ) {
+                Text(
+                    heading,
+                    color = Parchment,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 3.sp,
+                )
+                Spacer(Modifier.height(20.dp))
+                content()
+            }
         }
     }
 }

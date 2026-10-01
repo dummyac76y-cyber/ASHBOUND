@@ -45,3 +45,16 @@ export function assetUrl(path: string): string {
 export function hasAsset(path: string): boolean {
   return Object.hasOwn(FINGERPRINTS, `./${path.replace(/^\//, '')}`)
 }
+
+/**
+ * The path the UI font lives at, as one string for both engines to agree on.
+ *
+ * Declared here rather than in the stylesheet because the stylesheet cannot reach the
+ * fingerprint manifest: a plain `url(/fonts/Pixelta.ttf)` is a fixed URL, so swapping the
+ * bytes behind the font leaves the request identical and every cache keeps serving the old
+ * file. Everything else in the game resolves through `assetUrl` for the same reason.
+ */
+export const UI_FONT_FILE = 'fonts/Pixelta.ttf'
+
+/** The font's family name as declared inside the file, which is what a browser matches on. */
+export const UI_FONT_FAMILY = 'Pixelta'

@@ -1,4 +1,5 @@
 {
+  "./audio/ambience/campfire.ogg": "f6366382",
   "./audio/ambience/main_menu_ambience.ogg": "a75d0d98",
   "./audio/music/main_menu_music.ogg": "1fba5575",
   "./bg/arena_bg.png": "e33e8ab8",
@@ -14,6 +15,7 @@
   "./bg/menu_buttons/quit.png": "b477f3f0",
   "./bg/menu_buttons/settings.png": "382e03d0",
   "./bg/menu_buttons/start_game.png": "d32bc712",
+  "./fonts/Pixelta.ttf": "49f41947",
   "./sprites/attack.png": "c6220c80",
   "./sprites/block.png": "80de4728",
   "./sprites/exiled_knight_portrait.png": "810a94ed",

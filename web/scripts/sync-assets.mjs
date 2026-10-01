@@ -54,7 +54,12 @@ async function syncDir(from, to, copiedPaths = []) {
     const dst = join(to, entry.name)
     if (entry.isDirectory()) {
       copied += await syncDir(src, dst, copiedPaths)
-    } else if (/\.(png|jpe?g|gif|webp|mp3|ogg|wav)$/i.test(entry.name)) {
+      // `.ttf` and `.woff2` are here because the UI font is a supplied asset like any other:
+      // it lives in app/src/main/assets/fonts/ so that one copy serves both engines, and the
+      // web build can only reference it if it is copied into public/ first. Without this the
+      // @font-face URL 404s and the browser silently falls back to a system font, which is
+      // exactly the drift this script exists to prevent for images.
+    } else if (/\.(png|jpe?g|gif|webp|mp3|ogg|wav|ttf|woff2)$/i.test(entry.name)) {
       await mkdir(dirname(dst), { recursive: true })
       await cp(src, dst)
       // Record the public-relative path so it can be fingerprinted below.

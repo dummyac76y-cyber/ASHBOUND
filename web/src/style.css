@@ -2,6 +2,13 @@
    Colour values mirror the Compose UI in app/src/main/java/com/example/game/ui. */
 
 :root {
+  /* Pixelta, the supplied UI face. The family name is set from script by
+     src/ui/uiFont.ts, which also installs the @font-face rule, because the URL has to go
+     through assetUrl() for the fingerprint. The fallback half is monospace on purpose: a
+     pixel font is fixed width, so a proportional fallback would reflow the menu column when
+     the file lands. See installUiFont for the full reasoning. */
+  --ui-font-family: ui-monospace, 'Courier New', monospace;
+
   --bg: #0c0e14;
   --panel: rgba(16, 18, 28, 0.85);
   --panel-solid: #161822;
@@ -674,6 +681,10 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 14px;
+  /* The supplied face for every sub-screen: headings, the buttons, the settings rows and
+     their values. Declared once on the panel so a new row cannot forget it, and set here
+     rather than per rule because the title block sits outside this element and has its own. */
+  font-family: var(--ui-font-family);
   /* `width`, not `min-width`: a min-width lets the widest child -- the title -- set the
      panel's width, which is how the button column once grew far enough to cover the
      campfire. `max-width` then stops it escaping the column on narrow screens. */
@@ -699,6 +710,7 @@ body {
 
 .menu-title {
   margin: 0;
+  font-family: var(--ui-font-family);
   /* Sized to fit the column rather than to fill the screen. The supplied art puts the
      campfire at x 680 and the character at x 826, so the menu column has to stay left
      of 680 at this viewport. */
@@ -714,6 +726,7 @@ body {
 
 .menu-heading {
   margin: 0;
+  font-family: var(--ui-font-family);
   font-size: 22px;
   font-weight: 700;
   letter-spacing: 0.14em;
@@ -723,6 +736,7 @@ body {
 
 .menu-subtitle {
   margin: 0;
+  font-family: var(--ui-font-family);
   max-width: 42ch;
   font-size: 14px;
   line-height: 1.5;
