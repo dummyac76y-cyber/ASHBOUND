@@ -136,6 +136,39 @@ export class AudioSystem {
   private readonly repeating = new Map<string, ReturnType<typeof setTimeout>>()
 
   /**
+   * The one-shots currently sounding, by clip id.
+   *
+   * Held so `stop()` can silence them. This exists because a one-shot is not otherwise
+   * reachable: `play` starts a source and drops the reference on the floor, so the engine has
+   * no handle on it and cannot stop it early. That is harmless for a sword clang, which is over
+   * in a fraction of a second, and wrong for the menu ambience -- a 6.15s one-shot that lands
+   * just before the player presses START keeps playing for most of its length, on the title
+   * screen's timeline, underneath the first walk of the game. `stop()` cancels the ambience's
+   * *timer*, which stops the next gust, but not the gust already sounding.
+   *
+   * Keyed by clip id so `stop(id)` can silence one clip without cutting off the others. Each
+   * entry is dropped as its sources end, so a long session does not grow this without bound; a
+   * source already finished by the time `stop` runs is simply no longer here.
+   */
+  private readonly activeOneShots = new Map<string, Set<AudioBufferSourceNode>>()
+
+  /** Stops and forgets the one-shots of one clip, or of every clip when given no id. */
+  private stopOneShots(id?: string): void {
+    const keys = id ? [id] : [...this.activeOneShots.keys()]
+    for (const key of keys) {
+      for (const source of [...(this.activeOneShots.get(key) ?? [])]) {
+        try {
+          source.stop()
+          source.disconnect()
+        } catch {
+          // Already ended. Removing it below is still correct.
+        }
+      }
+      this.activeOneShots.delete(key)
+    }
+  }
+
+  /**
    * Where the random gap comes from.
    *
    * Injected rather than calling `Math.random()` inline so a test can hand in a fixed
@@ -276,6 +309,26 @@ export class AudioSystem {
     trim.connect(this.gains?.[entry.category] ?? context.destination)
     source.start()
     this.played.add(id)
+    // Kept so `stop()` can silence this one-shot. Dropped on `ended`, which is also the only
+    // way to know a one-shot has finished -- there is no timer to clear, since `source.start()`
+    // with no argument plays it straight through.
+    //
+    // The per-id set has to be created rather than merely read: `get(id)?.add(source)` is
+    // silently a no-op on a clip that has not played yet, which is every clip the first time
+    // it sounds, and it fails exactly where it matters most -- the ambience landing just
+    // before the player presses START.
+    const live = this.activeOneShots.get(id) ?? new Set<AudioBufferSourceNode>()
+    live.add(source)
+    this.activeOneShots.set(id, live)
+    source.addEventListener('ended', () => {
+      live.delete(source)
+      if (live.size === 0) this.activeOneShots.delete(id)
+      try {
+        source.disconnect()
+      } catch {
+        // Already torn down by `stop`.
+      }
+    })
     return true
   }
 
@@ -415,6 +468,13 @@ export class AudioSystem {
     if (id) this.wanted.delete(id)
     else this.wanted.clear()
 
+    // Cancelling the ambience's timer only stops the *next* gust. The one sounding right now
+    // is a bare source the engine was not holding, and it outlives the menu by however much of
+    // its 6.15s is left -- long enough for the title screen's wind to be clearly audible in the
+    // opening seconds of the game, which is the complaint this fixes. Silenced here rather than
+    // left to finish, because "the menu stopped" should mean the menu is inaudible.
+    this.stopOneShots(id)
+
     for (const [key, timer] of [...this.repeating]) {
       if (id && key !== id) continue
       clearTimeout(timer)
@@ -478,6 +538,10 @@ export class AudioSystem {
         this.repeating.delete(key)
         this.wanted.add(key)
       }
+      // `applyGains` above only scales what is connected, so a one-shot already sounding is
+      // unaffected by the flag: parking the timers stops the next gust but leaves this one
+      // audible through a switch the player has just turned off. Silenced explicitly.
+      this.stopOneShots()
     } else if (!this.suspended) {
       // Replay through start(), which already knows the difference between a loop and a
       // repeating clip, rather than re-deciding it here.

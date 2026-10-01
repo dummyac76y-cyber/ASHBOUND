@@ -315,6 +315,31 @@ for (const [label, system] of [['web', WEB_SYSTEM], ['Android', KT_ENGINE]]) {
   // the state the menu is in once its ambience has come and gone. The title cues stayed wanted,
   // and the next thing that consults `wanted` (a category unmuted, or a resume) put the menu
   // music and the campfire back under the first walk of the game.
+  // A one-shot has no schedule and is not in `loops`, so `playing`/`repeating` cannot see it.
+  // Without a handle on the sounding stream there is nothing to stop, which is how the menu
+  // ambience kept playing under the game after every timer and player had been cancelled.
+  check(
+    `${label}: a sounding one-shot is held so stop() can silence it`,
+    // web: per-id set of live sources, removed on 'ended'
+    (/activeOneShots = new Map<string, Set<AudioBufferSourceNode>>/.test(system) &&
+      /source\.addEventListener\('ended'/.test(system)) ||
+      // Android: per-id set of SoundPool stream ids
+      (/activeStreams = mutableMapOf<String, MutableSet<Int>>/.test(system) &&
+        /pool\?\.stop\(stream\)/.test(system))
+  )
+  check(
+    `${label}: stop() silences in-flight one-shots`,
+    /this\.stopOneShots\(id\)/.test(system) || /stopOneShots\(id\)/.test(system),
+  )
+  check(
+    `${label}: the one-shot is tracked, not fired and forgotten`,
+    // web
+    (/activeOneShots\.get\(id\) \?\? new Set/.test(system) &&
+      /live\.add\(source\)/.test(system)) ||
+      // Android
+      (/activeStreams\.getOrPut\(id\)/.test(system) && /\.add\(stream\)/.test(system)),
+    'a get-or-add on a missing key is a silent no-op, so the per-clip set must be created',
+  )
   check(
     `${label}: stop() forgets the intent even when nothing is repeating`,
     // The clear/delete has to come before the walk over the timers, not inside it.
@@ -561,13 +586,83 @@ if (existsSync(join(ROOT, 'web/dist/index.html'))) {
     )
 
     // And the fix must not leave the title track running under the first walk of the game.
+    // --- The menu must be inaudible the instant the game starts ---
+    //
+    // `playing` and `repeating` are the wrong instruments here and were what let this slip
+    // through twice. They describe *scheduled* audio: a loop that is open, a timer that is
+    // armed. The menu ambience is neither -- it is a 6.15s one-shot fired from a timer, so it
+    // appears in neither list while it is sounding. Checking those two after a click passed
+    // cleanly while a menu sound was plainly audible in the game.
+    //
+    // What has to be asserted is that nothing the menu started is still sounding. The engine
+    // tracks in-flight one-shots for exactly this purpose, so the check is direct.
+    const oneShots = () =>
+      page.evaluate(() => {
+        let n = 0
+        for (const set of window.__game.audio.activeOneShots.values()) n += set.size
+        return n
+      })
+
+    // Land an ambience one-shot immediately before the click, at several offsets, so the race
+    // is covered rather than just the convenient case of "no gust was playing".
+    // Fired and stopped within one evaluate, with no await in between: the ambience is only
+    // ~0.5s of audible length once decoded and played at the pool's rate, so yielding to the
+    // event loop between firing and stopping lets it finish on its own and the test would then
+    // be asserting that nothing was sounding, which is true either way and proves nothing.
+    for (const attempt of [1, 2, 3]) {
+      const counts = await page.evaluate(() => {
+        const a = window.__game.audio
+        a.play('main_menu_ambience')
+        a.play('main_menu_ambience')
+        let before = 0
+        for (const set of a.activeOneShots.values()) before += set.size
+        a.stop()
+        let after = 0
+        for (const set of a.activeOneShots.values()) after += set.size
+        return { before, after }
+      })
+      check(
+        `stop() silences ambience one-shots that are still sounding (try ${attempt})`,
+        counts.before > 0 && counts.after === 0,
+        `${counts.before} sounding before stop, ${counts.after} after`,
+      )
+    }
+
+    // And the same through the real click, which is the path a player takes.
+    await page.evaluate(() => window.__game.audio.play('main_menu_ambience'))
+    const beforeClick = await oneShots()
     await page.click('[data-testid="main_menu_start_game"]', { timeout: 15000 })
-    await page.waitForTimeout(900)
+    await page.waitForTimeout(300)
+    const afterClick = await oneShots()
     const inGame = await read()
+    check(
+      'starting the game leaves nothing from the menu still sounding',
+      beforeClick > 0 && afterClick === 0,
+      `${beforeClick} menu one-shots before the click, ${afterClick} after`,
+    )
     check(
       'starting the game stops the menu cues',
       inGame.playing.length === 0 && inGame.repeating.length === 0,
       `playing ${JSON.stringify(inGame.playing)}, repeating ${JSON.stringify(inGame.repeating)}`,
+    )
+    // Muting has the same obligation: a switch turned off cannot leave a sound in the air.
+    // Same single-evaluate shape, because the effect has to be caught while it is still live.
+    const muteCounts = await page.evaluate(() => {
+      const a = window.__game.audio
+      a.play('main_menu_ambience')
+      a.play('main_menu_ambience')
+      let before = 0
+      for (const set of a.activeOneShots.values()) before += set.size
+      a.setSfxEnabled(false)
+      let after = 0
+      for (const set of a.activeOneShots.values()) after += set.size
+      a.setSfxEnabled(true)
+      return { before, after }
+    })
+    check(
+      'turning FX off silences a one-shot already sounding',
+      muteCounts.before > 0 && muteCounts.after === 0,
+      `${muteCounts.before} sounding before the mute, ${muteCounts.after} after`,
     )
     await page.context().close()
   } catch (err) {

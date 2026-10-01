@@ -209,6 +209,37 @@ class AudioEngine(private val context: Context) {
     private var pool: SoundPool? = null
 
     /**
+     * The one-shot streams currently sounding, by clip id.
+     *
+     * Held so [stop] can silence them. [SoundPool.play] hands back a stream id and the call
+     * site had nowhere to put it, so a sounding one-shot had no handle at all and could not be
+     * stopped early. That is harmless for a sword clang and wrong for the menu ambience: it is
+     * a 6.15s one-shot, and one that lands just before the player presses START keeps sounding
+     * for most of its length underneath the first walk of the game. Stopping the ambience's
+     * *timer* only prevents the next gust, never the one already playing.
+     *
+     * Entries are removed when their clip is stopped or muted rather than on completion, since
+     * a finished stream id is no longer valid to stop and the pool recycles the number.
+     */
+    private val activeStreams = mutableMapOf<String, MutableSet<Int>>()
+
+    /**
+     * Stops the one-shot streams of one clip, or of every clip when given no id.
+     *
+     * Safe to call for a stream that has already finished or been recycled: stopping an unknown
+     * stream id is a no-op rather than an error, so a stale entry cannot throw.
+     */
+    private fun stopOneShots(id: String?) {
+        val keys = if (id != null) listOf(id) else activeStreams.keys.toList()
+        for (key in keys) {
+            val streams = activeStreams.remove(key) ?: continue
+            for (stream in streams) {
+                runCatching { pool?.stop(stream) }
+            }
+        }
+    }
+
+    /**
      * Loads every clip that exists.
      *
      * A missing file is the normal case and is logged once, not thrown: this is called while
@@ -284,7 +315,10 @@ class AudioEngine(private val context: Context) {
         lastPlayed[id] = now
 
         val volume = (entry.volume * sfxVolume).coerceIn(0f, 1f)
-        pool?.play(soundId, volume, volume, 1, 0, 1f)
+        // The stream id is kept so `stop()` can silence this one-shot. Discarded, a sounding
+        // ambience had no handle and outlived the menu by however much of its length was left.
+        val stream = pool?.play(soundId, volume, volume, 1, 0, 1f) ?: return false
+        activeStreams.getOrPut(id) { mutableSetOf() }.add(stream)
         played.add(id)
         return true
     }
@@ -434,6 +468,9 @@ class AudioEngine(private val context: Context) {
     fun stop(id: String? = null) {
         val h = handler()
         if (id != null) wanted.remove(id) else wanted.clear()
+        // Cancels the ambience's next gust; this silences the one sounding right now, which is
+        // otherwise inaudible to us and keeps playing under the game.
+        stopOneShots(id)
         for ((key, runnable) in repeating.toList()) {
             if (id != null && key != id) continue
             h?.removeCallbacks(runnable)
@@ -498,6 +535,10 @@ class AudioEngine(private val context: Context) {
                 // the mute, so losing it here would mean unmuting could not bring it back.
                 wanted.add(key)
             }
+            // The pool volume is sampled at play, so a stream already sounding is unaffected by
+            // the flag: cancelling the timers above stops the next gust but leaves this one
+            // audible through a switch the player has just turned off. Silenced explicitly.
+            stopOneShots(null)
         } else if (!suspended) {
             // Replay through start(), which already knows the difference between a loop and a
             // repeating clip, rather than re-deciding it here.
