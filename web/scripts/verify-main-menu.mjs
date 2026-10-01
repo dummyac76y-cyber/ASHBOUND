@@ -338,22 +338,24 @@ console.log('\n2. the menu is what the page shows, and the artwork decodes untou
         noTransform: nodes.every((n) => ['none', 'matrix(1, 0, 0, 1, 0, 0)'].includes(cs(n).transform)),
       }
     })
-    // elementsFromPoint returns front-to-back, so a smaller index is nearer the viewer.
-    // What matters is that the UI is in front of everything, the backdrop behind
-    // everything, and the two art canvases between them. The canvases' order relative to
-    // each other is deliberately not asserted: their ink boxes are six pixels apart and
-    // share no pixel, so whichever way they fall is invisible, and pinning it down would
-    // only make the test brittle.
+    // The required stack, back to front:
+    //
+    //   main menu background -> character -> campfire -> main menu buttons
+    //
+    // elementsFromPoint returns front-to-back, so a smaller index is nearer the viewer and
+    // the required order appears as ui < campfire < character < backdrop.
+    //
+    // The character/campfire relationship was originally left unasserted on the grounds
+    // that their ink boxes are six pixels apart and share none, so the order is invisible
+    // today. It is specified regardless, and now measured: "invisible" means a change
+    // would go unnoticed by eye, not that it does not matter.
     check(
-      'the UI is in front of both art canvases and the backdrop is behind both',
-      order.ui < order.character &&
-        order.ui < order.campfire &&
-        order.backdrop > order.character &&
-        order.backdrop > order.campfire,
-      `front-to-back: ui ${order.ui}, character ${order.character}, campfire ${order.campfire}, backdrop ${order.backdrop}`,
+      'the stack is background, then character, then campfire, then the buttons',
+      order.ui < order.campfire && order.campfire < order.character && order.character < order.backdrop,
+      `front-to-back: ui ${order.ui}, campfire ${order.campfire}, character ${order.character}, backdrop ${order.backdrop}`,
     )
     check(
-      'the art layers are ordered among themselves by document order, not by a z-index',
+      'that order comes from document order rather than from a hand-tuned z-index',
       order.artZ.every((z) => z === 'auto'),
       `z-index ${order.artZ.join(' / ')}`,
     )

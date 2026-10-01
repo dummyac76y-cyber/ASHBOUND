@@ -42,6 +42,8 @@ import androidx.compose.ui.unit.sp
  *
  * Three things stack here and it matters that they stay three things:
  *
+ * Back to front, which is the required stack:
+ *
  *   1. `main_menu`         the supplied background artwork
  *   2. `main_menu_overlay`  the character, on its own transparent canvas
  *   3. `main_menu_campfire` the campfire, on its own transparent canvas
@@ -67,10 +69,11 @@ const val MAIN_MENU_OVERLAY_FILE = "main_menu_overlay.png"
 /**
  * The campfire, as its own transparent 1280x720 canvas like the character.
  *
- * Its visible ink sits at x 680..819, immediately left of the character's x 826..999,
- * so the two share no pixel: they stand side by side rather than one in front of the
- * other. It is still drawn after the character so a flame would read in front should
- * either canvas ever be revised to touch. Today that ordering is invisible.
+ * Its visible ink sits at x 680..819, immediately left of the character's x 826..999, so
+ * the two share no pixel today. The order between them is not incidental, though: the
+ * stack is background -> character -> campfire -> buttons, so the campfire draws in
+ * front of the character. That ordering is currently invisible; it is stated here so a
+ * future revision of either canvas lands on the intended stack.
  */
 const val MAIN_MENU_CAMPFIRE_FILE = "main_menu_campfire.png"
 

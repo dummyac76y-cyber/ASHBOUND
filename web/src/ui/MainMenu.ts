@@ -5,6 +5,8 @@ import { assetUrl } from '../assetUrl'
  *
  * Three things stack here and it matters that they stay three things:
  *
+ * Back to front, which is the required stack:
+ *
  *   1. `.main-menu-backdrop`  the supplied background artwork
  *   2. `.main-menu-overlay`   the character, on its own transparent canvas
  *   3. `.main-menu-campfire`  the campfire, on its own transparent canvas
@@ -40,11 +42,12 @@ export const MAIN_MENU_OVERLAY_URL = assetUrl(`bg/${MAIN_MENU_OVERLAY_FILE}`)
 /**
  * The campfire, as its own transparent 1280x720 canvas like the character.
  *
- * Its visible ink sits at x 680..819, immediately left of the character's x 826..999,
- * so the two share no pixel at all: they stand side by side rather than one in front of
- * the other. The campfire is still drawn after the character, so that a flame reads in
- * front should either canvas ever be revised to touch. Today that ordering is
- * invisible, which is worth knowing rather than assuming.
+ * Its visible ink sits at x 680..819, immediately left of the character's x 826..999, so
+ * the two share no pixel today and stand side by side. The order between them is not
+ * incidental, though: the stack is background -> character -> campfire -> buttons, so the
+ * campfire draws in front of the character. That ordering is currently invisible; it is
+ * stated here so a future revision of either canvas lands on the intended stack rather
+ * than on whatever happens to be measured.
  */
 export const MAIN_MENU_CAMPFIRE_FILE = 'main_menu_campfire.png'
 
@@ -159,9 +162,9 @@ export class MainMenu {
 
     this.root = el('div', 'main-menu')
     this.root.dataset.testid = 'main_menu'
-    // Paint order: backdrop, the two transparent art canvases, then the UI. The order
-    // of the two canvases between themselves is currently invisible -- their ink does
-    // not touch -- but is fixed here anyway so it cannot drift.
+    // The stack, back to front: background, character, campfire, buttons. Appended in
+    // exactly this order so paint order follows from document order and nothing has to
+    // be kept in sync by hand-tuned z-index values.
     this.root.append(this.backdrop, this.overlay, this.campfire, this.ui)
 
     this.show('main')
