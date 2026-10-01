@@ -144,15 +144,20 @@ async function boot(): Promise<void> {
   }
   setStarted(started)
 
-  const menu = new MainMenu({
-    onStart: () => setStarted(true),
-    // A browser tab cannot close itself: `window.close` is ignored on a page that did
-    // not open it. So web QUIT returns to the title rather than offering a button that
-    // silently does nothing. Android really does exit, in GameScreen.
-    onQuit: () => setStarted(false),
-  })
-  app.append(menu.root)
-  void menu.whenReady().then(() => menu.reveal())
+  // In debug mode the menu is never built, not merely hidden. The harness measures
+  // world pixels, and a mounted title screen would be one more thing between it and the
+  // scene it is checking.
+  if (!debugMode) {
+    const menu = new MainMenu({
+      onStart: () => setStarted(true),
+      // A browser tab cannot close itself: `window.close` is ignored on a page that did
+      // not open it. So web QUIT returns to the title rather than offering a button that
+      // silently does nothing. Android really does exit, in GameScreen.
+      onQuit: () => setStarted(false),
+    })
+    app.append(menu.root)
+    void menu.whenReady().then(() => menu.reveal())
+  }
 
   // --- Sizing: letterbox the 640x360 logical viewport into the canvas ---
   let dpr = 1

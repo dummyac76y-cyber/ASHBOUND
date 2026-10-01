@@ -21,6 +21,7 @@
     "verify:npc-assets": "esbuild scripts/verify-npc-assets.mjs --bundle --platform=node --format=esm --outfile=node_modules/.cache/verify-npc-assets.mjs --log-level=error && node node_modules/.cache/verify-npc-assets.mjs",
     "verify:attack": "node scripts/verify-attack.mjs",
     "verify:parity": "node scripts/verify-parity.mjs",
+    "verify:main-menu": "node scripts/verify-main-menu.mjs",
     "test": "esbuild src/game/logic.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/logic.test.mjs --log-level=error && node node_modules/.cache/logic.test.mjs"
   },
   "devDependencies": {

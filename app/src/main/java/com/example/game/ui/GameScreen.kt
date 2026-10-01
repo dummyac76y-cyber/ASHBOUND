@@ -19,10 +19,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.activity.ComponentActivity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import com.example.game.engine.GameWorld
 import kotlin.math.min
+import kotlin.system.exitProcess
 
 /**
  * Main game screen composable.
@@ -36,6 +38,11 @@ fun GameScreen(modifier: Modifier = Modifier) {
 
     // Dialog state for tuning/inspecting animations
     var showInspector by remember { mutableStateOf(false) }
+
+    // Whether the world is running. The main menu gates it: the simulation is held
+    // rather than started-and-paused, so nothing moves behind the menu and the scene
+    // the player walks into is the one they were just looking at.
+    var started by remember { mutableStateOf(false) }
 
     // FPS calculation state
     var fps by remember { mutableIntStateOf(60) }
@@ -51,7 +58,7 @@ fun GameScreen(modifier: Modifier = Modifier) {
             withFrameNanos { frameTimeNanos ->
                 if (lastFrameTimeNanos != 0L) {
                     val dt = ((frameTimeNanos - lastFrameTimeNanos) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
-                    gameWorld.update(dt)
+                    if (started) gameWorld.update(dt)
 
                     // FPS calculation
                     frameCounter++
@@ -111,38 +118,54 @@ fun GameScreen(modifier: Modifier = Modifier) {
             }
         }
 
-        // Heads-up display
-        GameHud(
-            player = gameWorld.player,
-            animationSystem = gameWorld.animationSystem,
-            fps = fps,
-            onOpenInspector = { showInspector = true },
-            onResetPosition = {
-                gameWorld.respawn()
-            }
-        )
+        // --- Heads-up display and touch controls, only once play has begun ---
+        // They belong to the world, so they appear and disappear with it rather than
+        // sitting on top of the menu.
+        if (started) {
+            GameHud(
+                player = gameWorld.player,
+                animationSystem = gameWorld.animationSystem,
+                fps = fps,
+                onOpenInspector = { showInspector = true },
+                onResetPosition = {
+                    gameWorld.respawn()
+                }
+            )
 
-        // Decoupled touch controls on top
-        VirtualControls(
-            onMove = { horizontal ->
-                gameWorld.player.setMovementInput(horizontal)
-            },
-            onAttack = {
-                gameWorld.player.onAttack()
-            },
-            onHeavyAttack = {
-                gameWorld.player.onHeavyAttack()
-            },
-            onBlockChange = { isBlocking ->
-                gameWorld.player.setBlockActive(isBlocking)
-            },
-            onDash = {
-                gameWorld.player.onDash()
-            },
-            onJump = {
-                gameWorld.player.onJump()
-            }
-        )
+            // Decoupled touch controls on top
+            VirtualControls(
+                onMove = { horizontal ->
+                    gameWorld.player.setMovementInput(horizontal)
+                },
+                onAttack = {
+                    gameWorld.player.onAttack()
+                },
+                onHeavyAttack = {
+                    gameWorld.player.onHeavyAttack()
+                },
+                onBlockChange = { isBlocking ->
+                    gameWorld.player.setBlockActive(isBlocking)
+                },
+                onDash = {
+                    gameWorld.player.onDash()
+                },
+                onJump = {
+                    gameWorld.player.onJump()
+                }
+            )
+        }
+
+        // --- The main menu ---
+        if (!started) {
+            MainMenu(
+                onAction = { action ->
+                    when (action) {
+                        is MainMenuAction.Start -> started = true
+                        is MainMenuAction.Quit -> context.quitApp()
+                    }
+                },
+            )
+        }
 
         // Animation Inspector Modal Dialog
         if (showInspector) {
@@ -152,4 +175,26 @@ fun GameScreen(modifier: Modifier = Modifier) {
             )
         }
     }
+}
+
+/**
+ * Leaves the app for real.
+ *
+ * `finish()` is the correct call: it unwinds the activity properly, so Android can
+ * reclaim its window and any Compose state is disposed as usual. `exitProcess` is only
+ * a backstop for the case where there is no activity to finish -- which should not
+ * happen in normal use, but a QUIT button that does nothing is worse than a blunt one.
+ */
+private fun android.content.Context.quitApp() {
+    var finished = false
+    var current: android.content.Context? = this
+    while (current != null) {
+        if (current is ComponentActivity) {
+            current.finish()
+            finished = true
+            break
+        }
+        current = current.baseContext?.takeIf { it !== current }
+    }
+    if (!finished) exitProcess(0)
 }

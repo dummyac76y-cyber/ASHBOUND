@@ -120,6 +120,12 @@ export class MainMenu {
     this.buildSettingsScreen()
     this.buildQuitScreen(handlers)
 
+    // Every screen is mounted up front and switched with `hidden`, rather than built on
+    // demand. Each screen is a fixed piece of markup, so there is nothing to save by
+    // deferring it -- and having them all present means switching screens cannot fail
+    // halfway and leave the menu with no way back.
+    for (const screen of this.screens.values()) this.ui.append(screen)
+
     this.root = el('div', 'main-menu')
     this.root.dataset.testid = 'main_menu'
     this.root.append(this.backdrop, this.overlay, this.ui)
@@ -135,7 +141,7 @@ export class MainMenu {
   /** The four entries, plus the title. */
   private buildMainScreen(handlers: MainMenuHandlers): void {
     const screen = el('div', 'menu-panel menu-panel-main')
-    screen.dataset.testid = 'main_menu_main'
+    screen.dataset.testid = 'main_menu_screen_main'
     screen.append(el('h1', 'menu-title', 'ASHBOUND'))
     screen.append(el('p', 'menu-subtitle', 'A knight without a kingdom'))
 
@@ -170,7 +176,7 @@ export class MainMenu {
    */
   private buildLoadScreen(): void {
     const screen = el('div', 'menu-panel menu-panel-wide')
-    screen.dataset.testid = 'main_menu_load'
+    screen.dataset.testid = 'main_menu_screen_load'
     screen.append(el('h2', 'menu-heading', 'LOAD GAME'))
     screen.append(el('div', 'menu-empty', 'No saved games'))
     screen.append(
@@ -186,7 +192,7 @@ export class MainMenu {
 
   private buildSettingsScreen(): void {
     const screen = el('div', 'menu-panel menu-panel-wide')
-    screen.dataset.testid = 'main_menu_settings'
+    screen.dataset.testid = 'main_menu_screen_settings'
     screen.append(el('h2', 'menu-heading', 'SETTINGS'))
 
     const rows = el('div', 'menu-rows')
@@ -216,7 +222,7 @@ export class MainMenu {
    */
   private buildQuitScreen(handlers: MainMenuHandlers): void {
     const screen = el('div', 'menu-panel')
-    screen.dataset.testid = 'main_menu_quit'
+    screen.dataset.testid = 'main_menu_screen_quit'
     screen.append(el('h2', 'menu-heading', 'THANKS FOR PLAYING'))
     screen.append(
       el('p', 'menu-subtitle', 'A browser tab cannot close itself, so this is where leaving ends up. On Android, QUIT closes the app.'),
