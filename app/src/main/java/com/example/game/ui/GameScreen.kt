@@ -89,7 +89,11 @@ fun GameScreen(modifier: Modifier = Modifier) {
                 .fillMaxSize()
                 .testTag("game_canvas")
         ) {
-            if (currentTick >= 0) { // Ensures recomposition on each tick
+            // The world is not drawn while the menu is up, not merely left un-updated. The
+            // menu's backdrop is ContentScale.Fit, so on a screen that is not 16:9 it
+            // letterboxes, and a scene that is merely paused is still visible through the
+            // bands. Gating update() alone is not enough.
+            if (started && currentTick >= 0) { // Ensures recomposition on each tick
                 drawIntoCanvas { composeCanvas ->
                     val nativeCanvas = composeCanvas.nativeCanvas
 

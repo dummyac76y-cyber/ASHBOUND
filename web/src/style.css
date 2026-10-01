@@ -578,6 +578,10 @@ body {
   inset: 0;
   z-index: 20;
   overflow: hidden;
+  /* The backdrop is `contain`, so on a viewport that is not 16:9 it leaves transparent
+     bands above and below. This fills them, so those bands are the menu's own background
+     rather than whatever is underneath. */
+  background: var(--bg);
   /* Held hidden until the artwork has decoded, so it is never shown half-drawn. */
   visibility: hidden;
 }
@@ -838,6 +842,20 @@ button.menu-setting:hover {
   pointer-events: none;
 }
 
+/* ---------- Hidden in-game furniture ----------
+   The menu hides the HUD, the touch controls and the key hints by setting the `hidden`
+   attribute. On its own that does nothing here: `.hud` sets `display: flex` and
+   `.key-hints` is switched to `display: flex` inside a hover media query, and an author
+   rule always beats the user-agent rule for `[hidden]`. These selectors are more specific
+   than the rules they override, so the attribute takes effect. Without them the HUD stays
+   on screen behind the menu. */
+
+.hud[hidden],
+.controls[hidden],
+.key-hints[hidden] {
+  display: none;
+}
+
 /* ---------- Supplied button artwork ----------
    Each entry is a 1280x720 canvas holding one pre-composed plate, already positioned
    against the background -- the same arrangement as the character and the campfire. The
@@ -875,7 +893,15 @@ button.menu-setting:hover {
   pointer-events: none;
 }
 
-/* Transparent hit area over a plate. The visible button is the artwork beneath it. */
+/*
+ * Transparent hit area over a plate. The visible button is the artwork beneath it.
+ *
+ * This element must contribute nothing to what the player sees: no background, no
+ * border, and -- critically -- no outline. An earlier version set `outline` on the base
+ * rule rather than on :focus-visible, which drew a permanent cream rectangle around every
+ * button and read as a debug hitbox over the supplied art. Anything drawn here is drawn
+ * over artwork that was composed to look a particular way.
+ */
 .menu-art-hit {
   position: absolute;
   padding: 0;
@@ -883,20 +909,14 @@ button.menu-setting:hover {
   background: transparent;
   cursor: pointer;
   pointer-events: auto;
-  /* The focus ring has to be visible against artwork that may be any colour, so it is
-     drawn as an outline offset outside the hit area rather than inset into it. */
+  outline: none;
+}
+
+/* Keyboard focus still needs a ring, or the control is unreachable without a mouse. It is
+   drawn only while focused, offset outside the hit area so it cannot cover the plate. */
+.menu-art-hit:focus-visible {
   outline: 3px solid rgba(255, 224, 160, 0.9);
   outline-offset: 2px;
-}
-
-.menu-art-hit:focus-visible {
-  outline-color: #ffe0a0;
-}
-
-.menu-art-hit:hover {
-  /* A light wash, enough to register as a hover without recolouring supplied art into
-     something it was not drawn as. */
-  background: rgba(255, 236, 190, 0.1);
 }
 
 /* The title, aligned to the plates' own left edge and sitting above the first plate,

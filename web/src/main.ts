@@ -123,7 +123,8 @@ async function boot(): Promise<void> {
     inspector = null
   }
 
-  app.append(hud.root, controls.root, keyHints())
+  const keyHintsEl = keyHints()
+  app.append(hud.root, controls.root, keyHintsEl)
   loading.remove()
 
   // --- The main menu gates the world ---
@@ -132,22 +133,33 @@ async function boot(): Promise<void> {
   // nothing behind the menu moves, so the scene the player walks into is the one they
   // were just looking at. `?debug=1` skips the menu entirely so the pixel-level
   // verification harness measures the world, not a title screen.
-  const debugMode = new URLSearchParams(location.search).has('debug')
-  let started = debugMode
+  const params = new URLSearchParams(location.search)
+  const debugMode = params.has('debug')
+  // `?debug=1&menu=1` shows the menu while keeping the test hooks, so the harness can
+  // measure the menu and the world in the same page.
+  const showMenu = !debugMode || params.has('menu')
+  let started = debugMode && !showMenu
 
+  /**
+   * The in-game furniture is hidden with the `hidden` attribute.
+   *
+   * That only works because the stylesheet honours it: `.hud` sets `display: flex`, and
+   * an author rule beats the user-agent rule for `[hidden]`, so setting the attribute was
+   * silently doing nothing and the HUD stayed on screen behind the menu. `.hud[hidden]`
+   * and friends exist for exactly this reason.
+   */
   function setStarted(next: boolean): void {
     started = next
-    // The in-game furniture belongs to the world, so it appears and disappears with it
-    // rather than sitting on top of the menu.
     hud.root.hidden = !started
     controls.root.hidden = !started
+    keyHintsEl.hidden = !started
   }
   setStarted(started)
 
-  // In debug mode the menu is never built, not merely hidden. The harness measures
+  // In debug mode the menu is not built at all, not merely hidden. The harness measures
   // world pixels, and a mounted title screen would be one more thing between it and the
   // scene it is checking.
-  if (!debugMode) {
+  if (showMenu) {
     const menu = new MainMenu({
       onStart: () => setStarted(true),
       // A browser tab cannot close itself: `window.close` is ignored on a page that did
@@ -171,6 +183,9 @@ async function boot(): Promise<void> {
   }
   new ResizeObserver(resize).observe(canvas)
   resize()
+
+  /** How many frames of the world have been drawn. The menu harness asserts this. */
+  let worldRenders = 0
 
   // --- FPS readout ---
   let fps = 60
@@ -200,16 +215,23 @@ async function boot(): Promise<void> {
       ctx.fillStyle = '#0c0e14'
       ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-      ctx.save()
-      ctx.translate(offsetX, offsetY)
-      ctx.scale(scale, scale)
-      ctx.beginPath()
-      ctx.rect(0, 0, GameWorld.LOGICAL_WIDTH, GameWorld.LOGICAL_HEIGHT)
-      ctx.clip()
-      world.render(ctx)
-      ctx.restore()
+      // The world is not drawn while the menu is up, not merely left un-updated. The
+      // backdrop is `contain`, so on a viewport that is not 16:9 it leaves transparent
+      // bands at the top and bottom, and anything drawn on the canvas shows through
+      // them. Gating the simulation alone is not enough: a still scene is still visible.
+      if (started) {
+        ctx.save()
+        ctx.translate(offsetX, offsetY)
+        ctx.scale(scale, scale)
+        ctx.beginPath()
+        ctx.rect(0, 0, GameWorld.LOGICAL_WIDTH, GameWorld.LOGICAL_HEIGHT)
+        ctx.clip()
+        world.render(ctx)
+        ctx.restore()
+        worldRenders++
+      }
 
-      hud.update(fps)
+      if (started) hud.update(fps)
     } else {
       lastFrameTime = now
       lastFpsCalc = now
@@ -260,6 +282,20 @@ async function boot(): Promise<void> {
         /** Pins the camera so the floor line can be checked at several offsets. */
         setCamera(x: number): void {
           world.cameraX = x
+        },
+        /**
+         * How many frames of the world have been drawn since load.
+         *
+         * The menu harness asserts this stays at zero while the menu is up: gating the
+         * simulation is not the same as gating the drawing, and a paused scene is still
+         * visible through the letterbox bands a `contain` backdrop leaves.
+         */
+        worldRenderCount(): number {
+          return worldRenders
+        },
+        /** Whether gameplay is currently running. */
+        isStarted(): boolean {
+          return started
         },
         /**
          * Jumps straight to a scene, with no transition, so each environment can be

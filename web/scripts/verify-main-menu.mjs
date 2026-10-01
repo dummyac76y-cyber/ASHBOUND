@@ -720,7 +720,193 @@ console.log('\n3. the four menu entries, and what each one does')
 }
 
 // ---------------------------------------------------------------------------------
-console.log('\n4. the simulation is held until START GAME, and runs after it')
+console.log('\n4. the menu shows only the menu')
+// ---------------------------------------------------------------------------------
+{
+  // `?debug=1&menu=1` keeps the test hooks while showing the menu, so the harness can ask
+  // the page what it is drawing rather than inferring it from a screenshot.
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
+  await page.goto(`${base}/?debug=1&menu=1`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(200)
+
+  // --- Problem 1: no debug outlines around the hit areas ---------------------
+  const decoration = await page.evaluate(() =>
+    [...document.querySelectorAll('.menu-art-hit')].map((n) => {
+      const cs = getComputedStyle(n)
+      return {
+        id: n.dataset.testid,
+        outlineStyle: cs.outlineStyle,
+        outlineWidth: parseFloat(cs.outlineWidth) || 0,
+        borderWidths: [cs.borderTopWidth, cs.borderRightWidth, cs.borderBottomWidth, cs.borderLeftWidth].map((w) =>
+          parseFloat(w) || 0,
+        ),
+        background: cs.backgroundColor,
+        boxShadow: cs.boxShadow,
+      }
+    }),
+  )
+  // `outline-width` computes to a non-zero value even when `outline-style: none`, because
+  // the two are independent properties -- only the style decides whether a frame is
+  // painted. So the style is what gets asserted, alongside the borders.
+  const framed = decoration.filter((d) => d.outlineStyle !== 'none' || d.borderWidths.some((w) => w > 0))
+  check(
+    'no button draws an outline or border of its own',
+    framed.length === 0,
+    framed.length ? framed.map((f) => `${f.id} outline:${f.outlineStyle}`).join(', ') : `${decoration.length} hit areas, all frameless`,
+  )
+  check(
+    'and the focus ring is not shown unless focused',
+    decoration.every((d) => d.outlineStyle === 'none'),
+    decoration.map((d) => d.outlineStyle).join(', '),
+  )
+  const tinted = decoration.filter((d) => d.background !== 'rgba(0, 0, 0, 0)')
+  check('and none paints a background over the artwork', tinted.length === 0, tinted.map((t) => t.id).join(', ') || 'all transparent')
+  const shadowed = decoration.filter((d) => d.boxShadow !== 'none')
+  check('nor a drop shadow that would read as a second plate', shadowed.length === 0, shadowed.map((s) => s.id).join(', ') || 'none')
+
+  // The plates themselves must be the only thing there.
+  const plates = await page.evaluate(() =>
+    [...document.querySelectorAll('.menu-art-button')].map((n) => ({
+      natural: { w: n.naturalWidth, h: n.naturalHeight },
+      rendered: { w: n.getBoundingClientRect().width, h: n.getBoundingClientRect().height },
+    })),
+  )
+  check(
+    'each entry is a real image, scaled proportionally',
+    plates.every((p) => p.natural.w > 0 && p.natural.h > 0 && Math.abs(p.natural.w / p.natural.h - p.rendered.w / p.rendered.h) < 0.001),
+    plates.map((p) => `${p.natural.w}x${p.natural.h} -> ${p.rendered.w.toFixed(0)}x${p.rendered.h.toFixed(0)}`).join(', '),
+  )
+
+  // --- Problem 3: no gameplay furniture behind the menu ----------------------
+  const furniture = await page.evaluate(() => {
+    const state = (sel) => {
+      const n = document.querySelector(sel)
+      if (!n) return null
+      return { hidden: n.hidden, display: getComputedStyle(n).display, visible: n.offsetParent !== null }
+    }
+    return {
+      hud: state('.hud'),
+      controls: state('.controls'),
+      keyHints: state('.key-hints'),
+      renders: window.__game?.worldRenderCount?.() ?? null,
+      started: window.__game?.isStarted?.() ?? null,
+    }
+  })
+  check('the HUD is not displayed while the menu is up', furniture.hud && furniture.hud.display === 'none', `hud display ${furniture.hud?.display}, hidden ${furniture.hud?.hidden}`)
+  check('the touch controls are not displayed either', furniture.controls && furniture.controls.display === 'none', `controls display ${furniture.controls?.display}, hidden ${furniture.controls?.hidden}`)
+  check('and the key hints are gone', furniture.keyHints && furniture.keyHints.display === 'none', `key-hints display ${furniture.keyHints?.display}, hidden ${furniture.keyHints?.hidden}`)
+  check('the simulation has not started', furniture.started === false, `started ${furniture.started}`)
+  check(
+    'and the world is not being drawn at all',
+    furniture.renders === 0,
+    `${furniture.renders} frames drawn`,
+  )
+
+  // Gating the simulation is not the same as gating the drawing: a still scene is still
+  // visible through the bands a `contain` backdrop leaves on a non-16:9 viewport.
+  await page.setViewportSize({ width: 1100, height: 900 })
+  await page.waitForTimeout(150)
+  const bands = await page.evaluate(() => {
+    const m = document.querySelector('.main-menu')
+    const cs = getComputedStyle(m)
+    const r = m.getBoundingClientRect()
+    return { background: cs.backgroundColor, height: r.height, viewport: window.innerHeight, renders: window.__game.worldRenderCount() }
+  })
+  check(
+    'the menu paints an opaque background, so its letterbox bands are its own',
+    bands.background !== 'rgba(0, 0, 0, 0)',
+    `background ${bands.background}`,
+  )
+  check('and still no world frames after a resize', bands.renders === 0, `${bands.renders} frames drawn`)
+
+  // --- START GAME restores gameplay -----------------------------------------
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await page.waitForTimeout(100)
+  await page.click('[data-testid="main_menu_start_game"]')
+  await page.waitForTimeout(250)
+  const after = await page.evaluate(() => ({
+    menu: Boolean(document.querySelector('.main-menu')),
+    hud: getComputedStyle(document.querySelector('.hud')).display,
+    controls: getComputedStyle(document.querySelector('.controls')).display,
+    renders: window.__game.worldRenderCount(),
+  }))
+  check('START GAME removes the menu', !after.menu, 'no menu')
+  check('and the HUD comes back', after.hud !== 'none', `hud display ${after.hud}`)
+  check('and so do the touch controls', after.controls !== 'none', `controls display ${after.controls}`)
+  check('and the world starts drawing', after.renders > 0, `${after.renders} frames drawn`)
+
+  await page.close()
+}
+
+// ---------------------------------------------------------------------------------
+console.log('\n5. the composition scales as one piece, at ordinary viewports')
+// ---------------------------------------------------------------------------------
+{
+  // A `contain` backdrop on a viewport of another shape letterboxes. The plates are
+  // canvases registered to that backdrop, so they have to letterbox with it -- and stay
+  // inside the frame and undistorted -- without needing fullscreen.
+  for (const [w, h] of [
+    [1280, 720],
+    [1440, 900],
+    [1024, 768],
+    [1920, 1080],
+    [800, 600],
+  ]) {
+    const page = await browser.newPage({ viewport: { width: w, height: h } })
+    await page.goto(`${base}/`, { waitUntil: 'networkidle' })
+    await page.waitForTimeout(150)
+    const r = await page.evaluate(() => {
+      const backdrop = document.querySelector('.main-menu-backdrop')
+      const br = backdrop.getBoundingClientRect()
+      const out = { art: [], fit: [] }
+      for (const img of document.querySelectorAll('.menu-art-button')) {
+        const b = img.getBoundingClientRect()
+        out.art.push({ sameBox: Math.abs(b.width - br.width) < 0.5 && Math.abs(b.height - br.height) < 0.5 })
+        const hit = document.querySelector(`[data-testid="${img.dataset.testid.replace('_art_', '_')}"]`)
+        const hr = hit ? hit.getBoundingClientRect() : null
+        if (hr) out.fit.push(hr.left >= -0.5 && hr.top >= -0.5 && hr.right <= window.innerWidth + 0.5 && hr.bottom <= window.innerHeight + 0.5)
+      }
+      // The four entries, by id. Selecting them positionally instead would miscount: the
+      // credits control also sits in the upper half of the canvas.
+      const ids = ['start_game', 'load_game', 'settings', 'quit']
+      const entries = ids
+        .map((id) => {
+          const n = document.querySelector(`[data-testid="main_menu_${id}"]`)
+          return n ? { id, ...n.getBoundingClientRect().toJSON() } : null
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.top - b.top)
+      out.stack = entries.length === 4
+      out.stackOrder = entries.map((e) => e.id).join(',')
+      for (let i = 1; i < entries.length; i++) {
+        // Each entry must clear the one above it, so they read as a stack not a pile.
+        if (entries[i].top < entries[i - 1].bottom) out.stack = false
+        out.gap = i === 1 ? entries[i].top - entries[i - 1].bottom : out.gap
+      }
+      out.viewport = { w: window.innerWidth, h: window.innerHeight }
+      return out
+    })
+    check(
+      `at ${w}x${h} every plate shares the backdrop's box`,
+      r.art.length === 5 && r.art.every((a) => a.sameBox),
+      `${r.art.filter((a) => a.sameBox).length}/${r.art.length} plates`,
+    )
+    check(
+      `at ${w}x${h} every button stays inside the frame, no fullscreen needed`,
+      r.fit.length === 5 && r.fit.every(Boolean),
+      `${r.fit.filter(Boolean).length}/${r.fit.length} inside`,
+    )
+    check(
+      `at ${w}x${h} the four entries stack in order without overlapping`,
+      r.stack && r.stackOrder === 'start_game,load_game,settings,quit',
+      `${r.stackOrder}${r.stack ? '' : ' (overlapping or out of order)'}`,
+    )
+    await page.close()
+  }
+}
+
+// ---------------------------------------------------------------------------------
+console.log('\n6. the simulation is held until START GAME, and runs after it')
 // ---------------------------------------------------------------------------------
 {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
@@ -736,7 +922,7 @@ console.log('\n4. the simulation is held until START GAME, and runs after it')
 }
 
 // ---------------------------------------------------------------------------------
-console.log('\n5. Android mirrors the same menu')
+console.log('\n7. Android mirrors the same menu')
 // ---------------------------------------------------------------------------------
 {
   const ktMenu = readFileSync(KT_MENU, 'utf8')
@@ -812,6 +998,11 @@ console.log('\n5. Android mirrors the same menu')
   check('while the web returns to the title instead of trying to close the tab', !codeOnly(menuTs).includes('window.close') && !codeOnly(mainTs).includes('window.close'), 'no window.close call anywhere in the web build')
 
   check('both engines gate the simulation behind the menu', /started\) world\.update/.test(mainTs) && /if \(started\) gameWorld\.update/.test(ktScreen), 'update only once started')
+  check(
+    'and both stop drawing the world, not merely updating it',
+    /if \(started\) \{\s*ctx\.save/.test(mainTs) && /if \(started && currentTick >= 0\)/.test(ktScreen),
+    'render skipped while the menu is up',
+  )
   check('and both hide the in-game furniture until it is dismissed', /controls\.root\.hidden = !started/.test(mainTs) && /if \(started\) \{/.test(ktScreen), 'HUD and controls gated')
   check('both start with the world held still behind the menu', /let started = debugMode/.test(mainTs) && /var started by remember \{ mutableStateOf\(false\) \}/.test(ktScreen), 'web honours ?debug=1, Android starts gated')
 }
