@@ -618,16 +618,24 @@ body {
   pointer-events: none;
 }
 
-/* Layer 3 -- everything readable or clickable. */
+/* Layer 3 -- everything readable or clickable.
+   Pinned to the left rather than centred. The overlay's visible art occupies roughly
+   x 826..1000 of the 1280-wide canvas -- right of centre and below it -- so a centred
+   panel of any useful width would sit on top of the character and hide part of it.
+   A left column also leaves the composition reading the way it was drawn: menu on the
+   left, character on the right. */
 .main-menu-ui {
   position: relative;
+  /* Above both art layers, which are positioned with z-index auto and so paint in
+     document order beneath it. */
   z-index: 1;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   height: 100%;
   padding: 24px;
+  padding-left: clamp(28px, 9vw, 130px);
 }
 
 /* Cozy medieval pixel-art chrome: hard borders, no rounded corners, no gradients. */
@@ -636,7 +644,7 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 14px;
-  min-width: min(420px, 88vw);
+  min-width: min(400px, calc(100vw - 56px));
   padding: 32px 28px;
   border: 2px solid rgba(24, 18, 12, 0.85);
   background: rgba(18, 15, 12, 0.78);
@@ -647,7 +655,7 @@ body {
 }
 
 .menu-panel-wide {
-  min-width: min(560px, 92vw);
+  min-width: min(520px, calc(100vw - 56px));
 }
 
 .menu-panel[hidden] {
@@ -740,7 +748,7 @@ body {
   flex-direction: column;
   gap: 8px;
   width: 100%;
-  max-width: 420px;
+  max-width: 400px;
 }
 
 .menu-setting {

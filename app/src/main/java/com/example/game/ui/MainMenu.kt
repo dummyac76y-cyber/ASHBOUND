@@ -157,11 +157,15 @@ fun MainMenu(modifier: Modifier = Modifier, onAction: (MainMenuAction) -> Unit) 
 private fun MenuUi(onAction: (MainMenuAction) -> Unit) {
     var screen by remember { mutableStateOf(MenuScreen.MAIN) }
 
+    // Pinned to the left, not centred, to match the web build. The overlay's visible art
+    // occupies roughly x 826..1000 of the 1280-wide canvas -- right of centre -- so a
+    // centred panel of any useful width would hide part of the character.
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .padding(start = 40.dp)
             .testTag("main_menu_ui"),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        horizontalAlignment = Alignment.Start,
         verticalArrangement = Arrangement.Center,
     ) {
         when (screen) {
@@ -227,13 +231,15 @@ private fun MenuUi(onAction: (MainMenuAction) -> Unit) {
 @Composable
 private fun MenuTitle(onPick: (MenuScreen) -> Unit) {
     Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.testTag("main_menu_title"),
+        horizontalAlignment = Alignment.Start,
+        modifier = Modifier
+            .fillMaxWidth(0.62f)
+            .testTag("main_menu_title"),
     ) {
         Text(
             "ASHBOUND",
             color = Parchment,
-            fontSize = 56.sp,
+            fontSize = 44.sp,
             fontWeight = FontWeight.Black,
             letterSpacing = 9.sp,
         )
@@ -259,10 +265,11 @@ private fun MenuPanel(heading: String, content: @Composable () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .testTag("main_menu_panel")
-            .padding(28.dp)
+            .fillMaxWidth(0.86f)
+            .padding(24.dp)
             .background(PanelColor)
             .border(2.dp, BorderDark)
-            .padding(26.dp),
+            .padding(24.dp),
     ) {
         Text(
             heading,
@@ -326,7 +333,7 @@ private fun MenuButton(label: String, onClick: () -> Unit) {
     Button(
         onClick = onClick,
         modifier = Modifier
-            .fillMaxWidth(0.7f)
+            .fillMaxWidth()
             .height(52.dp)
             .testTag("main_menu_$label"),
         shape = RoundedCornerShape(0.dp),

@@ -284,25 +284,44 @@ console.log('\n2. the menu is what the page shows, and the artwork decodes untou
     check('not animated', overlay.animation === 'none', `animation ${overlay.animation}`)
     check('and it cannot steal clicks from the buttons beneath it', overlay.pointerEvents === 'none', `pointer-events ${overlay.pointerEvents}`)
 
-    // Paint order by document order: every art layer is pointer-events:none, so
-    // elementsFromPoint deliberately skips them and cannot answer this.
+    // Real paint order, measured rather than assumed.
+    //
+    // Both art layers are pointer-events:none so they cannot steal clicks from the
+    // buttons, and elementsFromPoint skips such nodes entirely -- it cannot answer this
+    // as shipped. Hit-testing them is only a measurement trick, so pointer-events is
+    // switched on, the stack is read, and it is switched back.
     const order = await page.evaluate(() => {
       const b = document.querySelector('.main-menu-backdrop')
       const o = document.querySelector('.main-menu-overlay')
       const u = document.querySelector('.main-menu-ui')
       if (!b || !o || !u) return null
-      const before = (x, y) => Boolean(x.compareDocumentPosition(y) & Node.DOCUMENT_POSITION_FOLLOWING)
+      const prev = [b, o, u].map((n) => n.style.pointerEvents)
+      for (const n of [b, o, u]) n.style.pointerEvents = 'auto'
+      // The centre of the UI panel: inside all three layers at once.
+      const r = u.getBoundingClientRect()
+      const stack = document.elementsFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+      for (let i = 0; i < 3; i++) [b, o, u][i].style.pointerEvents = prev[i]
       const cs = (n) => getComputedStyle(n)
       return {
-        backdropFirst: before(b, o) && before(b, u),
-        overlaySecond: before(o, u),
-        noZIndex: [b, o, u].every((n) => cs(n).zIndex === 'auto'),
+        // elementsFromPoint returns front-to-back, so a higher index means further back.
+        ui: stack.indexOf(u),
+        overlay: stack.indexOf(o),
+        backdrop: stack.indexOf(b),
+        artZ: { backdrop: cs(b).zIndex, overlay: cs(o).zIndex },
         noTransform: [b, o, u].every((n) => ['none', 'matrix(1, 0, 0, 1, 0, 0)'].includes(cs(n).transform)),
       }
     })
-    check('the overlay is painted after the backdrop and before the UI', order.backdropFirst && order.overlaySecond, 'document order backdrop -> overlay -> ui')
-    check('no layer pulls itself out of that order with a z-index', order.noZIndex, 'z-index auto on all three')
-    check('nor with a transform', order.noTransform, 'no transform on any layer')
+    check(
+      'the overlay paints between the backdrop and the UI',
+      order.backdrop > order.overlay && order.overlay > order.ui,
+      `front-to-back: ui ${order.ui}, overlay ${order.overlay}, backdrop ${order.backdrop}`,
+    )
+    check(
+      'and the two art layers are ordered by document order, not by a z-index',
+      order.artZ.backdrop === 'auto' && order.artZ.overlay === 'auto',
+      `z-index ${order.artZ.backdrop} / ${order.artZ.overlay}`,
+    )
+    check('nor is any layer reordered by a transform', order.noTransform, 'no transform on any layer')
 
     // Where the art actually puts ink, read from the alpha channel. A 1280x720 canvas
     // that is 98% transparent still has one specific block of visible pixels, and that
