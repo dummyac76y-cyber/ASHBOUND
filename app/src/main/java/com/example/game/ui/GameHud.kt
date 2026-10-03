@@ -141,10 +141,6 @@ fun GameHud(
                     text = animationSystem.currentAction.name,
                     color = when (animationSystem.currentAction) {
                         PlayerAction.IDLE -> Color(0xFF7DE392)
-                        // Same green as IDLE: the fidget *is* idle, and a second colour in the
-                        // state readout would imply it is a distinct state the game is in rather
-                        // than idle doing something incidental.
-                        PlayerAction.IDLE_VARIANT -> Color(0xFF7DE392)
                         PlayerAction.WALK -> Color(0xFF64B5F6)
                         PlayerAction.ATTACK, PlayerAction.HEAVY_ATTACK -> Color(0xFFFF5252)
                         PlayerAction.BLOCK -> Color(0xFFFFD54F)

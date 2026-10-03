@@ -23,14 +23,7 @@ export class PlayerController {
     readonly animationSystem: SpriteAnimationSystem,
     public x = 200,
     public groundY = 260,
-    /**
-     * Injected rather than calling `Math.random()` inline so a test can pin the sequence and
-     * assert exactly when the fidget fires. Defaults to the real thing in production.
-     */
-    private readonly random: () => number = Math.random,
-  ) {
-    this.idleFidgetDelay = this.rollIdleFidgetDelay()
-  }
+  ) {}
 
   // Spatial dimensions
   readonly width = 44
@@ -71,23 +64,6 @@ export class PlayerController {
   private dashTimer = 0
   /** Attacks whose hit window has already fired, so one swing hits at most once. */
   private readonly hitWindowConsumed = new Set<PlayerAction>()
-
-  /**
-   * Seconds of standing still left before the idle fidget plays, and how long to wait after.
-   *
-   * The fidget is the point of the new sheet, and standing perfectly still forever is what
-   * makes a character read as a machine. It has to be *random* rather than every N seconds:
-   * a metronome is instantly recognisable as a timer, and a player watching for it learns to
-   * move on the beat, which looks worse than never having it. The range below is wide enough
-   * that two fidgets in a row never look metronomic, and short enough that a player idling in
-   * one spot sees it several times rather than never.
-   */
-  private idleFidgetDelay = 0
-
-  /** Roughly 2.5-6.5s of standing still between fidgets. */
-  private rollIdleFidgetDelay(): number {
-    return 2.5 + this.random() * 4
-  }
 
   // Input buffer
   private inputMoveX = 0
@@ -236,14 +212,14 @@ export class PlayerController {
 
     // Advance animation system clock, then resolve the animation state machine.
     this.animationSystem.update(dt)
-    this.updateAnimationState(dt)
+    this.updateAnimationState()
   }
 
   /**
    * Determines which animation should be active based on physics and action states.
    * Crucially: avoids restarting animation every frame when remaining in the same state.
    */
-  private updateAnimationState(dt: number): void {
+  private updateAnimationState(): void {
     if (this.hp <= 0) {
       this.animationSystem.playAction(PlayerAction.DEATH)
       return
@@ -263,65 +239,21 @@ export class PlayerController {
     }
 
     if (this.isBlocking) {
-      this.leaveIdle()
       this.animationSystem.playAction(PlayerAction.BLOCK)
       return
     }
 
     if (!this.isGrounded) {
-      this.leaveIdle()
       this.animationSystem.playAction(PlayerAction.JUMP)
       return
     }
 
     if (Math.abs(this.vx) > 10 || Math.abs(this.inputMoveX) > 0.08) {
-      this.leaveIdle()
       this.animationSystem.playAction(PlayerAction.WALK)
       return
     }
 
-    // Standing still. Either the fidget is playing, or this is the idle pose with the fidget
-    // counting down towards it.
-    this.updateIdle(dt)
-  }
-
-  /**
-   * Restarts the fidget clock whenever the player does anything at all.
-   *
-   * Without this the countdown carries a value left over from the last idle period, so a player
-   * who walks for a moment and stops fires the fidget almost immediately -- which reads as the
-   * animation being a reaction to stopping rather than to having stood still. Every route out
-   * of idle goes through here.
-   */
-  private leaveIdle(): void {
-    this.idleFidgetDelay = this.rollIdleFidgetDelay()
-  }
-
-  /**
-   * The idle pose, and the occasional fidget on top of it.
-   *
-   * The fidget is not in the "let it finish uninterrupted" list above, and that is deliberate:
-   * it must never make the player wait to move or to swing. Walking away or attacking cuts it
-   * off mid-gesture, which is fine and unremarkable -- it is incidental animation, and an
-   * animation that can interrupt the controls reads as the controls being unreliable.
-   */
-  private updateIdle(dt: number): void {
-    if (this.animationSystem.currentAction === PlayerAction.IDLE_VARIANT) {
-      // Still playing: hold it. Replaying IDLE here would cut the fidget off on its first
-      // frame, and `playAction` refuses a same-action restart, so this must return rather than
-      // fall through.
-      if (!this.animationSystem.isFinished) return
-      this.leaveIdle()
-      this.animationSystem.playAction(PlayerAction.IDLE, true)
-      return
-    }
-
-    this.idleFidgetDelay -= dt
-    if (this.idleFidgetDelay <= 0) {
-      this.idleFidgetDelay = this.rollIdleFidgetDelay()
-      this.animationSystem.playAction(PlayerAction.IDLE_VARIANT, true)
-      return
-    }
+    // Stopped: smoothly return to IDLE
     this.animationSystem.playAction(PlayerAction.IDLE)
   }
 

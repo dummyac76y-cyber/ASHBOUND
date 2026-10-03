@@ -4,15 +4,6 @@
  */
 export enum PlayerAction {
   IDLE = 'IDLE',
-  /**
-   * The occasional fidget while standing still.
-   *
-   * Not a locomotion state: it is the idle pose with something extra on top, and it must give
-   * way the instant the player moves or acts. Separate from IDLE rather than an extra IDLE
-   * variant because it has its own sheet, and a variant of a sheet the player sees every
-   * other second cannot be expressed as more frames of that sheet.
-   */
-  IDLE_VARIANT = 'IDLE_VARIANT',
   WALK = 'WALK',
   ATTACK = 'ATTACK',
   HEAVY_ATTACK = 'HEAVY_ATTACK',
@@ -29,8 +20,6 @@ export function displayName(action: PlayerAction): string {
   switch (action) {
     case PlayerAction.IDLE:
       return 'Idle'
-    case PlayerAction.IDLE_VARIANT:
-      return 'Idle Variant'
     case PlayerAction.WALK:
       return 'Walk'
     case PlayerAction.ATTACK:

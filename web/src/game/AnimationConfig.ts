@@ -50,20 +50,6 @@ export interface AnimationConfig {
    * the body, which is the frame of contact.
    */
   hitFrames: readonly [number, number] | null
-  /**
-   * Plays the sheet forwards and then backwards, ending on the frame it started from.
-   *
-   * For a one-shot whose last frame is not the rest pose. A sheet drawn as an out-and-back
-   * gesture -- leaning, settling, glancing -- reads correctly forwards and then sits on its
-   * final frame, which is not where the character was before it started. Snapping back to the
-   * idle pose at that point is a visible pop on the one animation whose entire job is to look
-   * incidental. Returning along the same frames is what makes it settle instead.
-   *
-   * The endpoints are not doubled: the turnaround frame is held, not repeated, so the motion
-   * pauses for exactly one frame at the extreme the way a hand reverses, and a 8-frame sheet
-   * takes 15 frames to come back rather than 16.
-   */
-  pingPong: boolean
 }
 
 /**
@@ -101,7 +87,6 @@ export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
       cellSize?: number
       displayScale?: number
       hitFrames?: readonly [number, number]
-      pingPong?: boolean
     } = {},
   ): AnimationConfig => ({
     action,
@@ -115,7 +100,6 @@ export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
     cellSize: opts.cellSize ?? null,
     displayScale: opts.displayScale ?? 1,
     hitFrames: opts.hitFrames ?? null,
-    pingPong: opts.pingPong ?? false,
   })
 
   return new Map<PlayerAction, AnimationConfig>([
@@ -131,19 +115,6 @@ export function createDefaultConfigs(): Map<PlayerAction, AnimationConfig> {
     // scaled down a little further than that correction alone, so the walk cycle
     // reads as lower and lighter than standing still. This is one of two sheets
     // deliberately off the common size; see verify-attack.mjs.
-    // idle_variant.png is 8 frames of the 128px strip, played at random while the player stands
-    // still. It is ping-ponged because its last frame is not the rest pose -- it is measured to
-    // draw the character taller (111px median against idle's 97), so it is standing up out of
-    // whatever it was doing, and stopping there would leave it stuck half way up until the next
-    // action interrupted it.
-    //
-    // displayScale is idle's 1.063 scaled by the ratio of the two median heights, 97/111, so
-    // this sheet's character occupies the same on-screen box as idle's. Using its own numbers
-    // rather than copying idle's is what stops the character popping in size on a random
-    // animation; verified against rendered pixels by scripts/verify-attack.mjs.
-    [PlayerAction.IDLE_VARIANT, config(PlayerAction.IDLE_VARIANT, 'idle_variant.png', 8, 12, false, 0, {
-      displayScale: 0.929, pingPong: true,
-    })],
     [PlayerAction.WALK, config(PlayerAction.WALK, 'walk.png', 12, 12, true, 1, { displayScale: 1.05 })],
     // jump.png is 8 frames. The character compresses as it takes off rather than
     // rising inside the cell, so the whole sheet shares one foot row and the

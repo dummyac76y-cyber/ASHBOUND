@@ -7,16 +7,6 @@ package com.example.game.animation
  */
 enum class PlayerAction(val displayName: String) {
     IDLE("Idle"),
-
-    /**
-     * The occasional fidget while standing still.
-     *
-     * Not a locomotion state: it is the idle pose with something extra on top, and it must give
-     * way the instant the player moves or acts. Separate from IDLE rather than an extra IDLE
-     * variant because it has its own sheet, and a variant of a sheet the player sees every
-     * other second cannot be expressed as more frames of that sheet.
-     */
-    IDLE_VARIANT("Idle Variant"),
     WALK("Walk"),
     ATTACK("Attack"),
     HEAVY_ATTACK("Heavy Attack"),

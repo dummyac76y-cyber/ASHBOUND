@@ -148,22 +148,6 @@ class SpriteAnimationSystem(
         if (config.loop) {
             currentFrameIndex = if (totalFrames > 0) rawFrame % totalFrames else 0
             isFinished = false
-        } else if (config.pingPong) {
-            // Forwards to the last frame, then back down to the first, holding the turnaround
-            // frame rather than playing it twice. So 0,1..7,6..0 over 2*(7)+1 = 15 frames,
-            // ending on the frame it began on -- which is the whole point, since a one-shot that
-            // ends anywhere else leaves the character parked in the middle of a gesture until
-            // something interrupts it, and popping back to the rest pose is the very artefact
-            // this avoids.
-            val span = (totalFrames - 1).coerceAtLeast(0)
-            val last = span * 2
-            if (rawFrame >= last) {
-                currentFrameIndex = 0
-                isFinished = true
-            } else {
-                currentFrameIndex = if (rawFrame <= span) rawFrame else last - rawFrame
-                isFinished = false
-            }
         } else {
             if (rawFrame >= totalFrames - 1) {
                 currentFrameIndex = (totalFrames - 1).coerceAtLeast(0)
