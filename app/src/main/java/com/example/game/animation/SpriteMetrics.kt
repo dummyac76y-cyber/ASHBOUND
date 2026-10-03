@@ -31,6 +31,12 @@ object SpriteMetrics {
      */
     private val FOOT_ROWS_BY_SHEET: Map<String, List<Int>> = mapOf(
         "idle.png" to listOf(111, 111, 111, 111, 111, 111),
+        // idle_variant.png is 8 frames of the 128px strip, and unlike idle it does NOT hold one
+        // row: it drifts 115..117 as the character rises through the gesture. A single constant
+        // would leave the late frames up to 2 source rows off the floor, which is about 0.19
+        // logical px at this sheet's display scale -- enough to read as the character sliding as
+        // it settles.
+        "idle_variant.png" to listOf(115, 115, 116, 116, 117, 117, 117, 117),
         "walk.png" to listOf(111, 111, 110, 110, 110, 111, 110, 111, 112, 112, 112, 112),
         "jump.png" to listOf(115, 115, 115, 115, 115, 115, 115, 115),
         // The block sheet is 8 frames of the 128px strip and holds one foot row

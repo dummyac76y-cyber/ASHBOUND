@@ -17,7 +17,7 @@ import {
 import { PlayerController, rectsIntersect } from './PlayerController.ts'
 import { NPC_ART_FACES_RIGHT, NPC_CLIPS, NPC_IDLE_WALK_SHEET } from './npcAssets.ts'
 import { PlayerAction } from './PlayerAction.ts'
-import type { SpriteAnimationSystem } from './SpriteAnimationSystem.ts'
+import { SpriteAnimationSystem } from './SpriteAnimationSystem.ts'
 import { createDefaultConfigs, type AnimationConfig } from './AnimationConfig.ts'
 import { SpriteSheet } from './SpriteSheet.ts'
 import { DEFAULT_FOOT_ROW, FOOT_ROWS_BY_SHEET, footOffsetForRow } from './spriteMetrics.ts'
@@ -1366,7 +1366,14 @@ check('idle state active', anim.currentAction === PlayerAction.IDLE)
   }
   check('idle holds the plane for 10s with zero drift', worst < 1e-6, `worst deviation ${worst}`)
   check('idle does not drift horizontally', Math.abs(player.x - SPAWN_X) < 1e-6, `got ${player.x}`)
-  check('still IDLE after 10s', anim.currentAction === PlayerAction.IDLE, `got ${anim.currentAction}`)
+  // The fidget is now expected during a 10s idle, so the exact action is not asserted here:
+  // this block is about the body not drifting, and IDLE_VARIANT is idle too. Asserting IDLE
+  // exactly would assert the absence of the feature rather than the presence of the physics.
+  check(
+    'still an idle pose after 10s',
+    anim.currentAction === PlayerAction.IDLE || anim.currentAction === PlayerAction.IDLE_VARIANT,
+    `got ${anim.currentAction}`,
+  )
 }
 
 resetWorld()
@@ -1565,6 +1572,158 @@ console.log('HITBOX bottom sits on the plane')
   player.onJump()
   world.update(1 / 60)
   check('hitbox bottom rises off the plane in the air', player.hitbox.bottom < FLOOR_Y - 1, `got ${player.hitbox.bottom}`)
+}
+
+// ---------------------------------------------------------------------------
+// IDLE VARIANT: the random fidget, and the ping-pong that settles it
+// ---------------------------------------------------------------------------
+
+console.log('IDLE VARIANT config')
+{
+  const cfg = createDefaultConfigs().get(PlayerAction.IDLE_VARIANT)
+  check('the fidget has a config', cfg !== undefined)
+  check('it is a one-shot, not a loop', cfg?.loop === false)
+  check('it plays forwards then backwards', cfg?.pingPong === true)
+  check('it uses the supplied 8-frame sheet', cfg?.sourceFileName === 'idle_variant.png' && cfg?.frameCount === 8)
+  // The character must not change size on a random animation, which is the one moment a player
+  // is guaranteed to be looking straight at it.
+  const idle = createDefaultConfigs().get(PlayerAction.IDLE)
+  check(
+    'it carries its own foot rows, because they drift across the sheet',
+    (cfg?.footRows.length ?? 0) === 8 && new Set(cfg?.footRows).size > 1,
+    `rows ${JSON.stringify(cfg?.footRows)}`,
+  )
+  check(
+    'the foot rows sit where the sheet draws them, not idle\'s constant',
+    cfg?.footRows[0] === 115 && cfg?.footRows[7] === 117,
+    `first ${cfg?.footRows[0]}, last ${cfg?.footRows[7]}`,
+  )
+  check('it is scaled to render at idle\'s size', cfg !== undefined && idle !== undefined && cfg.displayScale !== idle.displayScale)
+  check(
+    'priority is idle-level, so any action can cut it off',
+    cfg?.priority === idle?.priority,
+    `variant ${cfg?.priority} vs idle ${idle?.priority}`,
+  )
+}
+
+console.log('IDLE VARIANT plays forwards then back')
+{
+  // Driven through the real update() rather than the stub, because the frame sequence is the
+  // thing under test and the stub's update() is a no-op.
+  const cfg = createDefaultConfigs().get(PlayerAction.IDLE_VARIANT)!
+  // The real SpriteAnimationSystem, with the sheet supplied directly rather than loaded over
+  // the network: only update() is under test, and driving the genuine one is the point.
+  const system = new SpriteAnimationSystem(
+    '/sprites',
+    new Map([[PlayerAction.IDLE_VARIANT, cfg]]),
+    async () => ({ width: 1024, height: 128 } as unknown as HTMLImageElement),
+  )
+  await system.reloadAll()
+  // update() advances whichever action is current, and the system starts on IDLE -- which has
+  // no sheet here, since only the variant was registered, so update() would return early and
+  // every frame would read 0.
+  system.playAction(PlayerAction.IDLE_VARIANT)
+  check('it opens on the first frame', system.currentFrameIndex === 0, `got ${system.currentFrameIndex}`)
+
+  // Driven by elapsed time set to exact frame midpoints rather than by accumulating dt.
+  // `rawFrame = trunc(elapsed * fps)` on a float that has been added to 40 times lands either
+  // side of a boundary often enough to repeat a frame, which is a property of the clock rather
+  // than of the ping-pong, and would make this assert the wrong thing.
+  const frameAt = (n: number): { frame: number; finished: boolean } => {
+    system.elapsedTimeSeconds = (n + 0.5) / cfg.fps
+    system.update(0)
+    return { frame: system.currentFrameIndex, finished: system.isFinished }
+  }
+  const seen: number[] = []
+  for (let n = 0; n < 20; n++) seen.push(frameAt(n).frame)
+  const firstFifteen = seen.slice(0, 15)
+  check(
+    'it runs 0..7 then back down to 0, holding the turnaround frame once',
+    JSON.stringify(firstFifteen) === JSON.stringify([0, 1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1, 0]),
+    `got ${JSON.stringify(firstFifteen)}`,
+  )
+  check('it ends on the frame it started from', seen[14] === 0, `got ${seen[14]}`)
+  check('and then reports itself finished', frameAt(14).finished)
+  check(
+    'it parks on the rest frame once finished',
+    seen.slice(15).every((f) => f === 0),
+    JSON.stringify(seen.slice(15)),
+  )
+  check(
+    'the turnaround frame is held once, not played twice',
+    // Scoped to the animation itself: after it ends the engine parks on frame 0, so counting
+    // across the whole sample would count the parking as repeated frames.
+    firstFifteen.filter((f) => f === 7).length === 1 && firstFifteen.filter((f) => f === 0).length === 2,
+    `frame 7 x${firstFifteen.filter((f) => f === 7).length}, frame 0 x${firstFifteen.filter((f) => f === 0).length}`,
+  )
+  check(
+    'the whole out-and-back takes 2*(frames-1)+1 ticks',
+    !frameAt(13).finished && frameAt(14).finished,
+    'expected to still be running at tick 13 and finished at 14',
+  )
+}
+
+console.log('IDLE VARIANT fires at random while standing still')
+{
+  // A fixed random sequence, so "random" is asserted rather than merely exercised.
+  const rolls = [0.5, 0, 1]
+  let i = 0
+  const fidget = new PlayerController(anim, SPAWN_X, FLOOR_Y, () => rolls[i++] ?? 0.5)
+  fidget.resetPlayer(SPAWN_X, FLOOR_Y)
+  // First delay is 2.5 + 0.5*4 = 4.5s.
+  check('it starts on the idle pose', fidget.animationSystem.currentAction === PlayerAction.IDLE)
+  fidget.update(4.4, 0, 640, FLOOR_Y)
+  check('it does not fire early', fidget.animationSystem.currentAction === PlayerAction.IDLE)
+  fidget.update(0.2, 0, 640, FLOOR_Y)
+  check('it fires once the delay has elapsed', fidget.animationSystem.currentAction === PlayerAction.IDLE_VARIANT)
+}
+
+console.log('IDLE VARIANT gives way immediately')
+{
+  const fidget = new PlayerController(anim, SPAWN_X, FLOOR_Y, () => 0)
+  fidget.resetPlayer(SPAWN_X, FLOOR_Y)
+  fidget.update(3, 0, 640, FLOOR_Y)
+  check('the fidget is playing', fidget.animationSystem.currentAction === PlayerAction.IDLE_VARIANT)
+  // Moving must cut it off: an animation that can interrupt the controls reads as the
+  // controls being unreliable.
+  fidget.setMovementInput(1)
+  fidget.update(1 / 60, 0, 640, FLOOR_Y)
+  check('walking cuts it off mid-gesture', fidget.animationSystem.currentAction === PlayerAction.WALK)
+
+  const atk = new PlayerController(anim, SPAWN_X, FLOOR_Y, () => 0)
+  atk.resetPlayer(SPAWN_X, FLOOR_Y)
+  atk.update(3, 0, 640, FLOOR_Y)
+  check('the fidget is playing again', atk.animationSystem.currentAction === PlayerAction.IDLE_VARIANT)
+  atk.onAttack()
+  check('attacking cuts it off too', atk.animationSystem.currentAction === PlayerAction.ATTACK)
+}
+
+console.log('IDLE VARIANT does not fire while busy')
+{
+  const fidget = new PlayerController(anim, SPAWN_X, FLOOR_Y, () => 0)
+  fidget.resetPlayer(SPAWN_X, FLOOR_Y)
+  // Airborne for longer than the delay: standing on the ground is part of the trigger.
+  fidget.onJump()
+  for (let i = 0; i < 240; i++) fidget.update(1 / 60, 0, 640, FLOOR_Y)
+  const landed = fidget.animationSystem.currentAction
+  check('it does not fidget in mid-air', landed !== PlayerAction.IDLE_VARIANT || fidget.isGrounded)
+  // Walking for longer than the delay.
+  const walker = new PlayerController(anim, SPAWN_X, FLOOR_Y, () => 0)
+  walker.resetPlayer(SPAWN_X, FLOOR_Y)
+  walker.setMovementInput(1)
+  for (let i = 0; i < 240; i++) walker.update(1 / 60, 0, 640, FLOOR_Y)
+  check('it does not fidget while walking', walker.animationSystem.currentAction === PlayerAction.WALK)
+}
+
+console.log('IDLE VARIANT returns to idle when it ends')
+{
+  const fidget = new PlayerController(anim, SPAWN_X, FLOOR_Y, () => 0)
+  fidget.resetPlayer(SPAWN_X, FLOOR_Y)
+  fidget.update(3, 0, 640, FLOOR_Y)
+  check('the fidget is playing', fidget.animationSystem.currentAction === PlayerAction.IDLE_VARIANT)
+  anim.finish()
+  fidget.update(1 / 60, 0, 640, FLOOR_Y)
+  check('it hands back to the idle pose when it finishes', fidget.animationSystem.currentAction === PlayerAction.IDLE)
 }
 
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) FAILED.`)

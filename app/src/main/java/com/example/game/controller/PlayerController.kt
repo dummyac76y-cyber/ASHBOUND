@@ -4,6 +4,7 @@ import android.graphics.RectF
 import com.example.game.animation.PlayerAction
 import com.example.game.animation.SpriteAnimationSystem
 import kotlin.math.abs
+import kotlin.random.Random
 
 /**
  * Controller connecting player physics, state machine, and SpriteAnimationSystem.
@@ -12,8 +13,18 @@ import kotlin.math.abs
 class PlayerController(
     val animationSystem: SpriteAnimationSystem,
     var x: Float = 200f,
-    var groundY: Float = 260f
+    var groundY: Float = 260f,
+    /**
+     * Injected rather than reaching for a global [Random] inline, so a test can pin the
+     * sequence and assert exactly when the fidget fires. Defaults to the shared instance in
+     * production, whose value does not matter for this.
+     */
+    private val random: Random = Random.Default
 ) {
+    init {
+        idleFidgetDelay = rollIdleFidgetDelay()
+    }
+
     // Spatial dimensions
     val width: Float = 44f
     val height: Float = 70f
@@ -49,6 +60,21 @@ class PlayerController(
         get() = inputMoveX
 
     private var dashTimer: Float = 0f
+
+    /**
+     * Seconds of standing still left before the idle fidget plays, and how long to wait after.
+     *
+     * The fidget is the point of the new sheet, and standing perfectly still forever is what
+     * makes a character read as a machine. It has to be *random* rather than every N seconds: a
+     * metronome is instantly recognisable as a timer, and a player watching for it learns to move
+     * on the beat, which looks worse than never having it. The range below is wide enough that
+     * two fidgets in a row never look metronomic, and short enough that a player idling in one
+     * spot sees it several times rather than never.
+     */
+    private var idleFidgetDelay: Float = 0f
+
+    /** Roughly 2.5-6.5s of standing still between fidgets. */
+    private fun rollIdleFidgetDelay(): Float = 2.5f + random.nextFloat() * 4f
 
     /** Attacks whose hit window has already fired, so one swing hits at most once. */
     private val hitWindowConsumed: MutableSet<PlayerAction> = mutableSetOf()
@@ -212,14 +238,14 @@ class PlayerController(
         animationSystem.update(dt)
 
         // Update animation state machine
-        updateAnimationState()
+        updateAnimationState(dt)
     }
 
     /**
      * Determines which animation should be active based on physics and action states.
      * Crucially: avoids restarting animation every frame when remaining in the same state.
      */
-    private fun updateAnimationState() {
+    private fun updateAnimationState(dt: Float) {
         if (hp <= 0) {
             animationSystem.playAction(PlayerAction.DEATH)
             return
@@ -237,23 +263,67 @@ class PlayerController(
 
         // Blocking stance
         if (isBlocking) {
+            leaveIdle()
             animationSystem.playAction(PlayerAction.BLOCK)
             return
         }
 
         // In air / jumping
         if (!isGrounded) {
+            leaveIdle()
             animationSystem.playAction(PlayerAction.JUMP)
             return
         }
 
         // Moving left or right
         if (abs(vx) > 10f || abs(inputMoveX) > 0.08f) {
+            leaveIdle()
             animationSystem.playAction(PlayerAction.WALK)
             return
         }
 
-        // Stopped: smoothly return to IDLE
+        // Standing still. Either the fidget is playing, or this is the idle pose with the
+        // fidget counting down towards it.
+        updateIdle(dt)
+    }
+
+    /**
+     * Restarts the fidget clock whenever the player does anything at all.
+     *
+     * Without this the countdown carries a value left over from the last idle period, so a player
+     * who walks for a moment and stops fires the fidget almost immediately -- which reads as the
+     * animation being a reaction to stopping rather than to having stood still. Every route out
+     * of idle goes through here.
+     */
+    private fun leaveIdle() {
+        idleFidgetDelay = rollIdleFidgetDelay()
+    }
+
+    /**
+     * The idle pose, and the occasional fidget on top of it.
+     *
+     * The fidget is not in the "let it finish uninterrupted" list above, and that is deliberate:
+     * it must never make the player wait to move or to swing. Walking away or attacking cuts it
+     * off mid-gesture, which is fine and unremarkable -- it is incidental animation, and an
+     * animation that can interrupt the controls reads as the controls being unreliable.
+     */
+    private fun updateIdle(dt: Float) {
+        if (animationSystem.currentAction == PlayerAction.IDLE_VARIANT) {
+            // Still playing: hold it. Replaying IDLE here would cut the fidget off on its first
+            // frame, and playAction refuses a same-action restart, so this must return rather
+            // than fall through.
+            if (!animationSystem.isFinished) return
+            leaveIdle()
+            animationSystem.playAction(PlayerAction.IDLE, restartIfSame = true)
+            return
+        }
+
+        idleFidgetDelay -= dt
+        if (idleFidgetDelay <= 0f) {
+            idleFidgetDelay = rollIdleFidgetDelay()
+            animationSystem.playAction(PlayerAction.IDLE_VARIANT, restartIfSame = true)
+            return
+        }
         animationSystem.playAction(PlayerAction.IDLE)
     }
 

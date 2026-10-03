@@ -4,6 +4,9 @@ import type { SpriteAnimationSystem } from '../game/SpriteAnimationSystem'
 
 const STATE_COLORS: Record<PlayerAction, string> = {
   [PlayerAction.IDLE]: '#7de392',
+  // Same green as IDLE: the fidget *is* idle, and a second colour in the state readout would
+  // imply it is a distinct state the game is in rather than idle doing something incidental.
+  [PlayerAction.IDLE_VARIANT]: '#7de392',
   [PlayerAction.WALK]: '#64b5f6',
   [PlayerAction.ATTACK]: '#ff5252',
   [PlayerAction.HEAVY_ATTACK]: '#ff5252',

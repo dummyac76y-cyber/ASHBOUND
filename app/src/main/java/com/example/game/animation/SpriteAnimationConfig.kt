@@ -37,7 +37,21 @@ data class AnimationConfig(
     val columns: Int? = null,
     val cellSize: Int? = null,
     val displayScale: Float = 1f,
-    val hitFrames: List<Int>? = null
+    val hitFrames: List<Int>? = null,
+    /**
+     * Plays the sheet forwards and then backwards, ending on the frame it started from.
+     *
+     * For a one-shot whose last frame is not the rest pose. A sheet drawn as an out-and-back
+     * gesture -- leaning, settling, glancing -- reads correctly forwards and then sits on its
+     * final frame, which is not where the character was before it started. Snapping back to the
+     * idle pose at that point is a visible pop on the one animation whose entire job is to look
+     * incidental. Returning along the same frames is what makes it settle instead.
+     *
+     * The endpoints are not doubled: the turnaround frame is held, not repeated, so the motion
+     * pauses for exactly one frame at the extreme the way a hand reverses, and an 8-frame sheet
+     * takes 15 frames to come back rather than 16.
+     */
+    val pingPong: Boolean = false
 )
 
 object DefaultAnimationConfigs {
@@ -59,6 +73,27 @@ object DefaultAnimationConfigs {
             // sheet did, so it is scaled up to keep rendering at the size every
             // other sheet is calibrated against.
             displayScale = 1.063f
+        ),
+        // idle_variant.png is 8 frames of the 128px strip, played at random while the player
+        // stands still. It is ping-ponged because its last frame is not the rest pose -- it is
+        // measured to draw the character taller (111px median against idle's 97), so it is
+        // standing up out of whatever it was doing, and stopping there would leave it stuck half
+        // way up until the next action interrupted it.
+        //
+        // displayScale is idle's 1.063 scaled by the ratio of the two median heights, 97/111, so
+        // this sheet's character occupies the same on-screen box as idle's. Using its own numbers
+        // rather than copying idle's is what stops the character popping in size on a random
+        // animation; verified against rendered pixels by scripts/verify-attack.mjs.
+        PlayerAction.IDLE_VARIANT to AnimationConfig(
+            action = PlayerAction.IDLE_VARIANT,
+            sourceFileName = "idle_variant.png",
+            frameCount = 8,
+            fps = 12,
+            loop = false,
+            priority = 0,
+            canBeCancelledByMovement = true,
+            displayScale = 0.929f,
+            pingPong = true
         ),
         PlayerAction.WALK to AnimationConfig(
             action = PlayerAction.WALK,

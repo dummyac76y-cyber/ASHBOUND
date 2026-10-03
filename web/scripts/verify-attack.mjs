@@ -208,6 +208,10 @@ if (reference) {
     'attack.png': 84.5,
     'block.png': 84.5,
     'heavy_attack.png': 95.0,
+    // The idle fidget, pinned to the same size as idle. It is the sheet a player is guaranteed
+    // to be staring straight at whenever it happens, and it plays on a random timer, so any size
+    // difference would read as the character swelling rather than as a scale error being fixed.
+    'idle_variant.png': 84.5,
   }
   const TOLERANCE = 2
   for (const m of measured) {

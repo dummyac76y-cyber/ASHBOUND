@@ -166,6 +166,21 @@ export class SpriteAnimationSystem {
     if (config.loop) {
       this.currentFrameIndex = totalFrames > 0 ? rawFrame % totalFrames : 0
       this.isFinished = false
+    } else if (config.pingPong) {
+      // Forwards to the last frame, then back down to the first, holding the turnaround frame
+      // rather than playing it twice. So 0,1..7,6..0 over 2*(7)+1 = 15 frames, ending on the
+      // frame it began on -- which is the whole point, since a one-shot that ends anywhere
+      // else leaves the character parked in the middle of a gesture until something interrupts
+      // it, and popping back to the rest pose is the very artefact this avoids.
+      const span = Math.max(0, totalFrames - 1)
+      const last = span * 2
+      if (rawFrame >= last) {
+        this.currentFrameIndex = 0
+        this.isFinished = true
+      } else {
+        this.currentFrameIndex = rawFrame <= span ? rawFrame : last - rawFrame
+        this.isFinished = false
+      }
     } else if (rawFrame >= totalFrames - 1) {
       this.currentFrameIndex = Math.max(0, totalFrames - 1)
       this.isFinished = true
